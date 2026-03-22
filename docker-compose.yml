@@ -1,0 +1,51 @@
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-review-db
+    environment:
+      POSTGRES_DB: ai_review
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-review-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ai_review
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres123
+      JWT_SECRET: Y2hhbmdlLXRoaXMtdG8tYS1zZWN1cmUtcmFuZG9tLWtleS1pbi1wcm9kdWN0aW9uLWF0LWxlYXN0LTI1Ni1iaXRz
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - upload_files:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ai-review-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  upload_files:
