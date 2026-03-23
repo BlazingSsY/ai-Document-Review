@@ -1,18 +1,15 @@
 package com.aireview.dto;
 
 import lombok.Data;
-
 import java.time.LocalDateTime;
 
 @Data
-public class RuleDTO {
-
+public class RuleLibraryDTO {
     private Long id;
-    private String ruleName;
-    private String fileType;
-    private String content;
+    private String name;
+    private String description;
     private Long creatorId;
-    private Long libraryId;
+    private int ruleCount;
+    private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
-    private Boolean isValid;
 }

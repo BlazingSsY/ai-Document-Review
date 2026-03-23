@@ -5,9 +5,11 @@ import com.aireview.dto.PageResponse;
 import com.aireview.dto.ScenarioCreateRequest;
 import com.aireview.dto.ScenarioDTO;
 import com.aireview.service.ScenarioService;
+import com.aireview.util.SecurityUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,17 +22,18 @@ public class ScenarioController {
     private final ScenarioService scenarioService;
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<ScenarioDTO> createScenario(@Valid @RequestBody ScenarioCreateRequest request,
                                                     Authentication authentication) {
         try {
-            Long userId = (Long) authentication.getPrincipal();
+            Long userId = SecurityUtils.getUserId(authentication);
             ScenarioDTO scenario = scenarioService.createScenario(request, userId);
-            return ApiResponse.success("Scenario created", scenario);
+            return ApiResponse.success("场景创建成功", scenario);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         } catch (Exception e) {
             log.error("Failed to create scenario", e);
-            return ApiResponse.error("Failed to create scenario: " + e.getMessage());
+            return ApiResponse.error("创建场景失败: " + e.getMessage());
         }
     }
 
@@ -43,7 +46,7 @@ public class ScenarioController {
             return ApiResponse.notFound(e.getMessage());
         } catch (Exception e) {
             log.error("Failed to get scenario", e);
-            return ApiResponse.error("Failed to get scenario: " + e.getMessage());
+            return ApiResponse.error("获取场景失败: " + e.getMessage());
         }
     }
 
@@ -53,42 +56,44 @@ public class ScenarioController {
             @RequestParam(defaultValue = "10") int size,
             Authentication authentication) {
         try {
-            Long userId = (Long) authentication.getPrincipal();
+            Long userId = SecurityUtils.getUserId(authentication);
             PageResponse<ScenarioDTO> result = scenarioService.listScenarios(page, size, userId);
             return ApiResponse.success(result);
         } catch (Exception e) {
             log.error("Failed to list scenarios", e);
-            return ApiResponse.error("Failed to list scenarios: " + e.getMessage());
+            return ApiResponse.error("获取场景列表失败: " + e.getMessage());
         }
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<ScenarioDTO> updateScenario(@PathVariable Long id,
                                                     @Valid @RequestBody ScenarioCreateRequest request,
                                                     Authentication authentication) {
         try {
-            Long userId = (Long) authentication.getPrincipal();
+            Long userId = SecurityUtils.getUserId(authentication);
             ScenarioDTO scenario = scenarioService.updateScenario(id, request, userId);
-            return ApiResponse.success("Scenario updated", scenario);
+            return ApiResponse.success("场景更新成功", scenario);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         } catch (Exception e) {
             log.error("Failed to update scenario", e);
-            return ApiResponse.error("Failed to update scenario: " + e.getMessage());
+            return ApiResponse.error("更新场景失败: " + e.getMessage());
         }
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<Void> deleteScenario(@PathVariable Long id, Authentication authentication) {
         try {
-            Long userId = (Long) authentication.getPrincipal();
+            Long userId = SecurityUtils.getUserId(authentication);
             scenarioService.deleteScenario(id, userId);
-            return ApiResponse.success("Scenario deleted", null);
+            return ApiResponse.success("场景删除成功", null);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         } catch (Exception e) {
             log.error("Failed to delete scenario", e);
-            return ApiResponse.error("Failed to delete scenario: " + e.getMessage());
+            return ApiResponse.error("删除场景失败: " + e.getMessage());
         }
     }
 }

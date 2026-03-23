@@ -16,7 +16,7 @@ import {
   FileTextOutlined,
   CheckCircleOutlined,
   SyncOutlined,
-  CloseCircleOutlined,
+  AppstoreOutlined,
   PlusOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -146,7 +146,7 @@ function DashboardPage() {
 
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col xs={12} sm={6}>
-          <Card className="stat-card">
+          <Card className="stat-card stat-card-blue">
             <Statistic
               title="审查总数"
               value={stats.total}
@@ -155,7 +155,7 @@ function DashboardPage() {
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card className="stat-card">
+          <Card className="stat-card stat-card-green">
             <Statistic
               title="已完成"
               value={stats.completed}
@@ -164,16 +164,16 @@ function DashboardPage() {
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card className="stat-card">
+          <Card className="stat-card stat-card-purple">
             <Statistic
               title="进行中"
               value={stats.processing}
-              prefix={<SyncOutlined spin style={{ color: '#1677ff' }} />}
+              prefix={<SyncOutlined spin style={{ color: '#722ed1' }} />}
             />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card className="stat-card">
+          <Card className="stat-card stat-card-orange">
             <Statistic
               title="今日审查"
               value={stats.todayCount}
@@ -237,7 +237,7 @@ function DashboardPage() {
             onClick={() => navigate('/scenarios')}
             style={{ textAlign: 'center', cursor: 'pointer' }}
           >
-            <CloseCircleOutlined style={{ fontSize: 32, color: '#722ed1', marginBottom: 8 }} />
+            <AppstoreOutlined style={{ fontSize: 32, color: '#722ed1', marginBottom: 8 }} />
             <div style={{ fontWeight: 500 }}>管理审查场景</div>
             <div style={{ color: '#8c8c8c', fontSize: 13 }}>创建和配置审查场景</div>
           </Card>

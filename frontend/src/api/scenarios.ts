@@ -24,7 +24,10 @@ export interface ScenarioListParams {
 }
 
 export function getScenarioList(params: ScenarioListParams) {
-  return request.get<ApiResponse<PaginatedResult<Scenario>>>('/scenarios', { params });
+  const { pageSize, ...rest } = params;
+  return request.get<ApiResponse<PaginatedResult<Scenario>>>('/scenarios', {
+    params: { ...rest, size: pageSize },
+  });
 }
 
 export function getScenarioDetail(id: number) {

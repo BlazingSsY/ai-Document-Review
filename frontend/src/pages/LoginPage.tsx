@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Form, Input, Button, Typography, message, Divider } from 'antd';
 import { UserOutlined, LockOutlined, MailOutlined, RobotOutlined } from '@ant-design/icons';
-import { login, register } from '../api/auth';
+import { login, register, getUserProfile } from '../api/auth';
 import useAuthStore from '../store/authStore';
 
 const { Title, Text, Link } = Typography;
@@ -27,13 +27,18 @@ function LoginPage() {
       } else {
         res = await login({ email: values.email, password: values.password });
       }
-      const { accessToken: token, refreshToken } = res.data.data;
-      const userInfo = { id: 1, email: values.email, name: values.email.split('@')[0], role: 'user' };
+      const { accessToken: token } = res.data.data;
+      // Temporarily store token so getUserProfile can use it
+      localStorage.setItem('token', token);
+
+      // Fetch real user info from server
+      const profileRes = await getUserProfile();
+      const userInfo = profileRes.data.data;
       setAuth(token, userInfo);
       message.success(isRegister ? '注册成功' : '登录成功');
       navigate('/dashboard');
     } catch {
-      // Error handled by interceptor
+      localStorage.removeItem('token');
     } finally {
       setLoading(false);
     }
@@ -46,9 +51,14 @@ function LoginPage() {
 
   return (
     <div className="login-container">
+      <div className="login-bg-shape login-bg-shape-1" />
+      <div className="login-bg-shape login-bg-shape-2" />
+      <div className="login-bg-shape login-bg-shape-3" />
       <Card className="login-card" bordered={false}>
         <div style={{ textAlign: 'center', marginBottom: 8 }}>
-          <RobotOutlined style={{ fontSize: 40, color: '#1677ff' }} />
+          <div className="login-logo">
+            <RobotOutlined style={{ fontSize: 36, color: '#fff' }} />
+          </div>
         </div>
         <Title level={3} className="login-title">
           AI 智能文件审查系统
@@ -75,11 +85,10 @@ function LoginPage() {
           <Form.Item
             name="email"
             rules={[
-              { required: true, message: '请输入邮箱地址' },
-              { type: 'email', message: '请输入有效的邮箱地址' },
+              { required: true, message: '请输入邮箱地址/用户名' },
             ]}
           >
-            <Input prefix={<MailOutlined />} placeholder="邮箱地址" />
+            <Input prefix={<MailOutlined />} placeholder="邮箱地址 / 用户名" />
           </Form.Item>
           <Form.Item
             name="password"
@@ -127,6 +136,7 @@ function LoginPage() {
           </Link>
         </div>
       </Card>
+      <div className="login-footer">Powered by AI Review System</div>
     </div>
   );
 }

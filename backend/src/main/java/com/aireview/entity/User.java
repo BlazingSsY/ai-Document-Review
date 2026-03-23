@@ -16,6 +16,10 @@ public class User {
 
     private String passwordHash;
 
+    private String name;
+
+    private String role;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 }

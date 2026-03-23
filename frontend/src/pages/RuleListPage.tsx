@@ -1,74 +1,120 @@
 import { useState, useEffect } from 'react';
 import {
-  Card,
-  Table,
-  Button,
-  Modal,
-  Form,
-  Input,
-  Space,
-  Typography,
-  message,
-  Popconfirm,
+  Card, Table, Button, Modal, Form, Input, Space, Typography, Tag,
+  message, Popconfirm, Breadcrumb, Empty,
 } from 'antd';
-import { PlusOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons';
+import {
+  PlusOutlined, EyeOutlined, DeleteOutlined, FolderOutlined,
+  ArrowLeftOutlined, FileTextOutlined,
+} from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getRuleList, uploadRule, deleteRule, getRuleDetail, Rule } from '../api/rules';
+import {
+  getRuleList, uploadRule, deleteRule, getRuleDetail, Rule, RuleLibrary,
+  getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
+} from '../api/rules';
 import RuleUploader from '../components/RuleUploader';
 import { PAGE_SIZE } from '../utils/constants';
+import useAuthStore from '../store/authStore';
 
-const { Title, Paragraph } = Typography;
+const { Title, Paragraph, Text } = Typography;
+const { TextArea } = Input;
 
 function RuleListPage() {
+  const user = useAuthStore((s) => s.user);
+  const canManage = user?.role === 'supervisor' || user?.role === 'admin';
+
+  // Library state
+  const [libraries, setLibraries] = useState<RuleLibrary[]>([]);
+  const [libLoading, setLibLoading] = useState(false);
+  const [libTotal, setLibTotal] = useState(0);
+  const [libPage, setLibPage] = useState(1);
+  const [createLibModalOpen, setCreateLibModalOpen] = useState(false);
+  const [creatingLib, setCreatingLib] = useState(false);
+  const [libForm] = Form.useForm();
+
+  // Current library (null = show library list)
+  const [currentLibrary, setCurrentLibrary] = useState<RuleLibrary | null>(null);
+
+  // Rules state (within a library)
   const [rules, setRules] = useState<Rule[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+  const [ruleLoading, setRuleLoading] = useState(false);
+  const [ruleTotal, setRuleTotal] = useState(0);
+  const [rulePage, setRulePage] = useState(1);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewRule, setPreviewRule] = useState<Rule | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [form] = Form.useForm();
+  const [uploadForm] = Form.useForm();
 
-  const fetchRules = async () => {
-    setLoading(true);
+  // Fetch libraries
+  const fetchLibraries = async () => {
+    setLibLoading(true);
     try {
-      const res = await getRuleList({ page, pageSize: PAGE_SIZE });
+      const res = await getRuleLibraryList({ page: libPage, pageSize: PAGE_SIZE });
+      setLibraries(res.data.data.records);
+      setLibTotal(res.data.data.total);
+    } catch { /* handled */ }
+    finally { setLibLoading(false); }
+  };
+
+  // Fetch rules for current library
+  const fetchRules = async () => {
+    if (!currentLibrary) return;
+    setRuleLoading(true);
+    try {
+      const res = await getRuleList({ page: rulePage, pageSize: PAGE_SIZE, libraryId: currentLibrary.id });
       setRules(res.data.data.records);
-      setTotal(res.data.data.total);
-    } catch {
-      // handled
-    } finally {
-      setLoading(false);
-    }
+      setRuleTotal(res.data.data.total);
+    } catch { /* handled */ }
+    finally { setRuleLoading(false); }
   };
 
   useEffect(() => {
-    fetchRules();
-  }, [page]);
+    if (!currentLibrary) fetchLibraries();
+  }, [libPage, currentLibrary]);
 
-  const handleUpload = async (values: { name: string }) => {
-    if (!uploadFile) {
-      message.warning('请选择规则文件');
-      return;
-    }
+  useEffect(() => {
+    if (currentLibrary) fetchRules();
+  }, [rulePage, currentLibrary]);
+
+  // Library operations
+  const handleCreateLibrary = async (values: { name: string; description: string }) => {
+    setCreatingLib(true);
+    try {
+      await createRuleLibrary(values);
+      message.success('规则库创建成功');
+      setCreateLibModalOpen(false);
+      libForm.resetFields();
+      fetchLibraries();
+    } catch { /* handled */ }
+    finally { setCreatingLib(false); }
+  };
+
+  const handleDeleteLibrary = async (id: number) => {
+    try {
+      await deleteRuleLibrary(id);
+      message.success('规则库已删除');
+      fetchLibraries();
+    } catch { /* handled */ }
+  };
+
+  // Rule operations
+  const handleUpload = async () => {
+    if (!uploadFile || !currentLibrary) { message.warning('请选择规则文件'); return; }
     setUploading(true);
     try {
       const formData = new FormData();
       formData.append('file', uploadFile);
-      formData.append('name', values.name);
+      formData.append('libraryId', String(currentLibrary.id));
       await uploadRule(formData);
       message.success('规则上传成功');
       setUploadModalOpen(false);
       setUploadFile(null);
-      form.resetFields();
+      uploadForm.resetFields();
       fetchRules();
-    } catch {
-      // handled
-    } finally {
-      setUploading(false);
-    }
+    } catch { /* handled */ }
+    finally { setUploading(false); }
   };
 
   const handlePreview = async (id: number) => {
@@ -76,162 +122,209 @@ function RuleListPage() {
       const res = await getRuleDetail(id);
       setPreviewRule(res.data.data);
       setPreviewModalOpen(true);
-    } catch {
-      // handled
-    }
+    } catch { /* handled */ }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDeleteRule = async (id: number) => {
     try {
       await deleteRule(id);
       message.success('规则已删除');
       fetchRules();
-    } catch {
-      // handled
-    }
+    } catch { /* handled */ }
   };
 
-  const columns: ColumnsType<Rule> = [
+  const enterLibrary = (lib: RuleLibrary) => {
+    setCurrentLibrary(lib);
+    setRulePage(1);
+    setRules([]);
+  };
+
+  const backToLibraries = () => {
+    setCurrentLibrary(null);
+    setRulePage(1);
+  };
+
+  // Library list columns
+  const libColumns: ColumnsType<RuleLibrary> = [
     {
-      title: '规则名称',
-      dataIndex: 'name',
-      key: 'name',
-      width: 200,
+      title: '规则库名称', dataIndex: 'name', key: 'name', width: 200,
+      render: (name: string, record) => (
+        <a onClick={() => enterLibrary(record)} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <FolderOutlined style={{ color: '#faad14', fontSize: 18 }} />
+          <Text strong>{name}</Text>
+        </a>
+      ),
+    },
+    { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true, width: 300 },
+    {
+      title: '规则数量', dataIndex: 'ruleCount', key: 'ruleCount', width: 100,
+      render: (count: number) => <Tag color="blue">{count} 条</Tag>,
     },
     {
-      title: '文件名',
-      dataIndex: 'fileName',
-      key: 'fileName',
-      width: 200,
-      ellipsis: true,
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-      width: 180,
+      title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 180,
       render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
     },
     {
-      title: '更新时间',
-      dataIndex: 'updatedAt',
-      key: 'updatedAt',
-      width: 180,
-      render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 150,
+      title: '操作', key: 'action', width: 150,
       render: (_, record) => (
         <Space>
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => handlePreview(record.id)}
-          >
-            预览
-          </Button>
-          <Popconfirm
-            title="确定要删除此规则吗？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
+          <Button type="link" size="small" onClick={() => enterLibrary(record)}>进入</Button>
+          {canManage && (
+            <Popconfirm title="删除规则库将同时删除其中所有规则，确定吗？"
+              onConfirm={() => handleDeleteLibrary(record.id)} okText="确定" cancelText="取消">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
   ];
 
+  // Rule list columns
+  const ruleColumns: ColumnsType<Rule> = [
+    {
+      title: '规则名称', key: 'name', width: 200,
+      render: (_, record) => (
+        <Space>
+          <FileTextOutlined style={{ color: '#1677ff' }} />
+          <Text>{record.name || record.fileName}</Text>
+        </Space>
+      ),
+    },
+    { title: '文件名', dataIndex: 'fileName', key: 'fileName', width: 200, ellipsis: true },
+    {
+      title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 180,
+      render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
+    },
+    {
+      title: '操作', key: 'action', width: 150,
+      render: (_, record) => (
+        <Space>
+          <Button type="link" size="small" icon={<EyeOutlined />}
+            onClick={() => handlePreview(record.id)}>预览</Button>
+          {canManage && (
+            <Popconfirm title="确定要删除此规则吗？" onConfirm={() => handleDeleteRule(record.id)}
+              okText="确定" cancelText="取消">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          )}
+        </Space>
+      ),
+    },
+  ];
+
+  // LIBRARY LIST VIEW
+  if (!currentLibrary) {
+    return (
+      <div>
+        <div className="page-header">
+          <Title level={4} style={{ margin: 0 }}>审查规则管理</Title>
+          {canManage && (
+            <Button type="primary" icon={<PlusOutlined />}
+              onClick={() => setCreateLibModalOpen(true)}>新建规则库</Button>
+          )}
+        </div>
+
+        <Card>
+          {libraries.length === 0 && !libLoading ? (
+            <Empty description="暂无规则库，请先创建规则库">
+              {canManage && (
+                <Button type="primary" onClick={() => setCreateLibModalOpen(true)}>新建规则库</Button>
+              )}
+            </Empty>
+          ) : (
+            <Table columns={libColumns} dataSource={libraries} rowKey="id" loading={libLoading}
+              pagination={{
+                current: libPage, pageSize: PAGE_SIZE, total: libTotal,
+                showTotal: (t) => `共 ${t} 个规则库`, onChange: (p) => setLibPage(p), showSizeChanger: false,
+              }}
+            />
+          )}
+        </Card>
+
+        {/* Create Library Modal */}
+        <Modal title="新建规则库" open={createLibModalOpen}
+          onCancel={() => { setCreateLibModalOpen(false); libForm.resetFields(); }}
+          footer={null} destroyOnClose>
+          <Form form={libForm} onFinish={handleCreateLibrary} layout="vertical">
+            <Form.Item name="name" label="规则库名称" rules={[{ required: true, message: '请输入规则库名称' }]}>
+              <Input placeholder="请输入规则库名称" />
+            </Form.Item>
+            <Form.Item name="description" label="描述">
+              <TextArea rows={3} placeholder="请输入规则库描述（可选）" />
+            </Form.Item>
+            <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+              <Space>
+                <Button onClick={() => setCreateLibModalOpen(false)}>取消</Button>
+                <Button type="primary" htmlType="submit" loading={creatingLib}>创建</Button>
+              </Space>
+            </Form.Item>
+          </Form>
+        </Modal>
+      </div>
+    );
+  }
+
+  // RULE LIST VIEW (inside a library)
   return (
     <div>
       <div className="page-header">
-        <Title level={4} style={{ margin: 0 }}>审查规则管理</Title>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setUploadModalOpen(true)}
-        >
-          上传规则
-        </Button>
+        <Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={backToLibraries}>返回</Button>
+          <Breadcrumb items={[
+            { title: '审查规则管理', onClick: backToLibraries, className: 'breadcrumb-link' },
+            { title: currentLibrary.name },
+          ]} />
+        </Space>
+        {canManage && (
+          <Button type="primary" icon={<PlusOutlined />}
+            onClick={() => setUploadModalOpen(true)}>上传规则</Button>
+        )}
       </div>
 
       <Card>
-        <Table
-          columns={columns}
-          dataSource={rules}
-          rowKey="id"
-          loading={loading}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
-            total,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: (p) => setPage(p),
-            showSizeChanger: false,
-          }}
-        />
+        {rules.length === 0 && !ruleLoading ? (
+          <Empty description="该规则库暂无规则">
+            {canManage && (
+              <Button type="primary" onClick={() => setUploadModalOpen(true)}>上传规则</Button>
+            )}
+          </Empty>
+        ) : (
+          <Table columns={ruleColumns} dataSource={rules} rowKey="id" loading={ruleLoading}
+            pagination={{
+              current: rulePage, pageSize: PAGE_SIZE, total: ruleTotal,
+              showTotal: (t) => `共 ${t} 条规则`, onChange: (p) => setRulePage(p), showSizeChanger: false,
+            }}
+          />
+        )}
       </Card>
 
-      {/* Upload Modal */}
-      <Modal
-        title="上传审查规则"
-        open={uploadModalOpen}
-        onCancel={() => {
-          setUploadModalOpen(false);
-          setUploadFile(null);
-          form.resetFields();
-        }}
-        footer={null}
-        destroyOnClose
-      >
-        <Form form={form} onFinish={handleUpload} layout="vertical">
-          <Form.Item
-            name="name"
-            label="规则名称"
-            rules={[{ required: true, message: '请输入规则名称' }]}
-          >
-            <Input placeholder="请输入规则名称" />
-          </Form.Item>
+      {/* Upload Rule Modal */}
+      <Modal title={`上传规则到「${currentLibrary.name}」`} open={uploadModalOpen}
+        onCancel={() => { setUploadModalOpen(false); setUploadFile(null); uploadForm.resetFields(); }}
+        footer={null} destroyOnClose>
+        <Form form={uploadForm} onFinish={handleUpload} layout="vertical">
           <Form.Item label="规则文件" required>
             <RuleUploader onFileSelect={(file) => setUploadFile(file)} />
           </Form.Item>
           <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
             <Space>
               <Button onClick={() => setUploadModalOpen(false)}>取消</Button>
-              <Button type="primary" htmlType="submit" loading={uploading}>
-                上传
-              </Button>
+              <Button type="primary" htmlType="submit" loading={uploading}
+                disabled={!uploadFile}>上传</Button>
             </Space>
           </Form.Item>
         </Form>
       </Modal>
 
       {/* Preview Modal */}
-      <Modal
-        title={`规则预览 - ${previewRule?.name || ''}`}
-        open={previewModalOpen}
+      <Modal title={`规则预览 - ${previewRule?.name || ''}`} open={previewModalOpen}
         onCancel={() => setPreviewModalOpen(false)}
-        footer={<Button onClick={() => setPreviewModalOpen(false)}>关闭</Button>}
-        width={700}
-      >
+        footer={<Button onClick={() => setPreviewModalOpen(false)}>关闭</Button>} width={700}>
         {previewRule && (
           <div>
             <Title level={5}>解析后的 Prompt</Title>
-            <Card
-              size="small"
-              style={{
-                maxHeight: 400,
-                overflow: 'auto',
-                background: '#fafafa',
-                marginBottom: 16,
-              }}
-            >
+            <Card size="small" style={{ maxHeight: 400, overflow: 'auto', background: '#fafafa', marginBottom: 16 }}>
               <Paragraph>
                 <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
                   {previewRule.prompt || previewRule.content || '暂无内容'}

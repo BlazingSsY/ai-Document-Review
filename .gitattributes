@@ -1,0 +1,18 @@
+# Enforce LF line endings for all text files in the repository
+# This is critical for Docker builds on Windows — CRLF breaks shell scripts,
+# SQL init scripts, and nginx configs inside Linux containers.
+
+* text=auto eol=lf
+
+# Explicitly mark binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.jar binary
+*.zip binary
+*.tar.gz binary
+*.pdf binary
+*.docx binary
+*.xlsx binary

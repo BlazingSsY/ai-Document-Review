@@ -6,24 +6,21 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("rules")
-public class Rule {
+@TableName("rule_libraries")
+public class RuleLibrary {
 
     @TableId(type = IdType.AUTO)
     private Long id;
 
-    private String ruleName;
+    private String name;
 
-    private String fileType;
-
-    private String content;
+    private String description;
 
     private Long creatorId;
 
-    private Long libraryId;
+    @TableField(fill = FieldFill.INSERT)
+    private LocalDateTime createdAt;
 
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
-
-    private Boolean isValid;
 }

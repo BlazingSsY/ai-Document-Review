@@ -35,6 +35,10 @@ export function refreshToken(refreshToken: string) {
   return request.post<ApiResponse<{ token: string }>>('/auth/refresh', { refreshToken });
 }
 
-export function getUserInfo() {
-  return request.get<ApiResponse<UserInfo>>('/auth/me');
+export function getUserProfile() {
+  return request.get<ApiResponse<UserInfo>>('/user/me');
+}
+
+export function changePassword(params: { oldPassword: string; newPassword: string }) {
+  return request.put<ApiResponse<null>>('/user/password', params);
 }

@@ -4,8 +4,10 @@ import com.aireview.dto.ApiResponse;
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.RuleDTO;
 import com.aireview.service.RuleService;
+import com.aireview.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -19,17 +21,19 @@ public class RuleController {
     private final RuleService ruleService;
 
     @PostMapping("/upload")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<RuleDTO> uploadRule(@RequestParam("file") MultipartFile file,
+                                           @RequestParam(required = false) Long libraryId,
                                            Authentication authentication) {
         try {
-            Long userId = (Long) authentication.getPrincipal();
-            RuleDTO rule = ruleService.uploadRule(file, userId);
-            return ApiResponse.success("Rule uploaded successfully", rule);
+            Long userId = SecurityUtils.getUserId(authentication);
+            RuleDTO rule = ruleService.uploadRule(file, userId, libraryId);
+            return ApiResponse.success("规则上传成功", rule);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         } catch (Exception e) {
             log.error("Rule upload failed", e);
-            return ApiResponse.error("Rule upload failed: " + e.getMessage());
+            return ApiResponse.error("规则上传失败: " + e.getMessage());
         }
     }
 
@@ -37,14 +41,16 @@ public class RuleController {
     public ApiResponse<PageResponse<RuleDTO>> listRules(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) Long libraryId,
             Authentication authentication) {
         try {
-            Long userId = (Long) authentication.getPrincipal();
-            PageResponse<RuleDTO> result = ruleService.listRules(page, size, userId);
+            Long userId = SecurityUtils.getUserId(authentication);
+            String role = SecurityUtils.getRoleFromAuthentication(authentication);
+            PageResponse<RuleDTO> result = ruleService.listRules(page, size, userId, role, libraryId);
             return ApiResponse.success(result);
         } catch (Exception e) {
             log.error("Failed to list rules", e);
-            return ApiResponse.error("Failed to list rules: " + e.getMessage());
+            return ApiResponse.error("获取规则列表失败: " + e.getMessage());
         }
     }
 
@@ -57,7 +63,7 @@ public class RuleController {
             return ApiResponse.notFound(e.getMessage());
         } catch (Exception e) {
             log.error("Failed to get rule", e);
-            return ApiResponse.error("Failed to get rule: " + e.getMessage());
+            return ApiResponse.error("获取规则失败: " + e.getMessage());
         }
     }
 }

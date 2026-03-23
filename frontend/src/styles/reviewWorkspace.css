@@ -2,7 +2,7 @@
   display: flex;
   height: calc(100vh - 112px);
   gap: 0;
-  background: #f0f2f5;
+  background: #ffffff;
 }
 
 .review-workspace .workspace-left {

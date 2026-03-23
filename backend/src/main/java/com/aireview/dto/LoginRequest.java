@@ -1,16 +1,14 @@
 package com.aireview.dto;
 
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 @Data
 public class LoginRequest {
 
-    @NotBlank(message = "Email is required")
-    @Email(message = "Invalid email format")
+    @NotBlank(message = "用户名/邮箱不能为空")
     private String email;
 
-    @NotBlank(message = "Password is required")
+    @NotBlank(message = "密码不能为空")
     private String password;
 }

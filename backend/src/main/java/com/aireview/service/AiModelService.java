@@ -32,9 +32,6 @@ public class AiModelService {
             .connectTimeout(Duration.ofSeconds(30))
             .build();
 
-    /**
-     * Create a new AI model configuration.
-     */
     public AiModelConfigDTO createConfig(AiModelConfigDTO dto) {
         AiModelConfig config = toEntity(dto);
         config.setCreatedAt(LocalDateTime.now());
@@ -44,37 +41,30 @@ public class AiModelService {
         return toDTO(config);
     }
 
-    /**
-     * Update an existing AI model configuration.
-     */
     public AiModelConfigDTO updateConfig(Long id, AiModelConfigDTO dto) {
         AiModelConfig config = aiModelConfigMapper.selectById(id);
         if (config == null) {
             throw new IllegalArgumentException("AI model config not found: " + id);
         }
-        config.setModelName(dto.getModelName());
-        config.setApiKey(dto.getApiKey());
-        config.setEndpoint(dto.getEndpoint());
-        config.setContextWindow(dto.getContextWindow());
-        config.setTimeout(dto.getTimeout());
-        config.setIsEnabled(dto.getIsEnabled());
+        if (dto.getName() != null) config.setModelName(dto.getName());
+        if (dto.getProvider() != null) config.setProvider(dto.getProvider());
+        if (dto.getModelKey() != null) config.setModelKey(dto.getModelKey());
+        if (dto.getApiEndpoint() != null) config.setEndpoint(dto.getApiEndpoint());
+        if (dto.getApiKey() != null && !dto.getApiKey().isBlank()) config.setApiKey(dto.getApiKey());
+        if (dto.getMaxTokens() != null) config.setMaxTokens(dto.getMaxTokens());
+        if (dto.getTemperature() != null) config.setTemperature(dto.getTemperature());
+        if (dto.getEnabled() != null) config.setIsEnabled(dto.getEnabled());
         config.setUpdatedAt(LocalDateTime.now());
         aiModelConfigMapper.updateById(config);
         log.info("AI model config updated: {}", config.getModelName());
         return toDTO(config);
     }
 
-    /**
-     * Delete an AI model configuration.
-     */
     public void deleteConfig(Long id) {
         aiModelConfigMapper.deleteById(id);
         log.info("AI model config deleted: {}", id);
     }
 
-    /**
-     * Get a single AI model config by ID.
-     */
     public AiModelConfigDTO getConfigById(Long id) {
         AiModelConfig config = aiModelConfigMapper.selectById(id);
         if (config == null) {
@@ -83,9 +73,6 @@ public class AiModelService {
         return toDTO(config);
     }
 
-    /**
-     * List all AI model configurations with pagination.
-     */
     public PageResponse<AiModelConfigDTO> listConfigs(int page, int size) {
         Page<AiModelConfig> pageParam = new Page<>(page, size);
         Page<AiModelConfig> result = aiModelConfigMapper.selectPage(pageParam, null);
@@ -93,9 +80,24 @@ public class AiModelService {
         return PageResponse.of(records, result.getTotal(), page, size);
     }
 
-    /**
-     * Get an enabled AI model config by model name.
-     */
+    public List<AiModelConfigDTO> listEnabledConfigs() {
+        LambdaQueryWrapper<AiModelConfig> query = new LambdaQueryWrapper<>();
+        query.eq(AiModelConfig::getIsEnabled, true);
+        List<AiModelConfig> configs = aiModelConfigMapper.selectList(query);
+        return configs.stream().map(this::toDTO).toList();
+    }
+
+    public void toggleConfig(Long id, boolean enabled) {
+        AiModelConfig config = aiModelConfigMapper.selectById(id);
+        if (config == null) {
+            throw new IllegalArgumentException("AI model config not found: " + id);
+        }
+        config.setIsEnabled(enabled);
+        config.setUpdatedAt(LocalDateTime.now());
+        aiModelConfigMapper.updateById(config);
+        log.info("AI model config {} {}", config.getModelName(), enabled ? "enabled" : "disabled");
+    }
+
     public AiModelConfig getEnabledModel(String modelName) {
         LambdaQueryWrapper<AiModelConfig> query = new LambdaQueryWrapper<>();
         query.eq(AiModelConfig::getModelName, modelName)
@@ -107,22 +109,14 @@ public class AiModelService {
         return config;
     }
 
-    /**
-     * Call the AI model API with the given system prompt and user content.
-     * Supports OpenAI-compatible API format (works with GPT-4o, Claude via proxy, Qwen, etc.).
-     *
-     * @param config       the AI model config
-     * @param systemPrompt the system prompt containing review rules
-     * @param userContent  the document content to review
-     * @return the AI model's response text
-     */
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent) throws Exception {
         log.info("Calling AI model: {} at {}", config.getModelName(), config.getEndpoint());
 
         JSONObject requestBody = new JSONObject();
-        requestBody.put("model", config.getModelName());
-        requestBody.put("temperature", 0.1);
-        requestBody.put("max_tokens", 4096);
+        requestBody.put("model", config.getModelKey() != null && !config.getModelKey().isBlank()
+                ? config.getModelKey() : config.getModelName());
+        requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.1);
+        requestBody.put("max_tokens", config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
 
         JSONArray messages = new JSONArray();
         JSONObject systemMsg = new JSONObject();
@@ -169,12 +163,14 @@ public class AiModelService {
     private AiModelConfigDTO toDTO(AiModelConfig config) {
         AiModelConfigDTO dto = new AiModelConfigDTO();
         dto.setId(config.getId());
-        dto.setModelName(config.getModelName());
+        dto.setName(config.getModelName());
+        dto.setProvider(config.getProvider() != null ? config.getProvider() : "openai");
+        dto.setModelKey(config.getModelKey() != null ? config.getModelKey() : config.getModelName());
+        dto.setApiEndpoint(config.getEndpoint());
         dto.setApiKey(maskApiKey(config.getApiKey()));
-        dto.setEndpoint(config.getEndpoint());
-        dto.setContextWindow(config.getContextWindow());
-        dto.setTimeout(config.getTimeout());
-        dto.setIsEnabled(config.getIsEnabled());
+        dto.setMaxTokens(config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
+        dto.setTemperature(config.getTemperature() != null ? config.getTemperature() : 0.7);
+        dto.setEnabled(config.getIsEnabled());
         dto.setCreatedAt(config.getCreatedAt());
         dto.setUpdatedAt(config.getUpdatedAt());
         return dto;
@@ -182,18 +178,19 @@ public class AiModelService {
 
     private AiModelConfig toEntity(AiModelConfigDTO dto) {
         AiModelConfig config = new AiModelConfig();
-        config.setModelName(dto.getModelName());
+        config.setModelName(dto.getName());
+        config.setProvider(dto.getProvider() != null ? dto.getProvider() : "openai");
+        config.setModelKey(dto.getModelKey() != null ? dto.getModelKey() : dto.getName());
         config.setApiKey(dto.getApiKey());
-        config.setEndpoint(dto.getEndpoint());
-        config.setContextWindow(dto.getContextWindow());
-        config.setTimeout(dto.getTimeout() != null ? dto.getTimeout() : 60);
-        config.setIsEnabled(dto.getIsEnabled() != null ? dto.getIsEnabled() : true);
+        config.setEndpoint(dto.getApiEndpoint());
+        config.setContextWindow(128000);
+        config.setMaxTokens(dto.getMaxTokens() != null ? dto.getMaxTokens() : 4096);
+        config.setTemperature(dto.getTemperature() != null ? dto.getTemperature() : 0.7);
+        config.setTimeout(60);
+        config.setIsEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
         return config;
     }
 
-    /**
-     * Mask API key for display, showing only first 4 and last 4 characters.
-     */
     private String maskApiKey(String apiKey) {
         if (apiKey == null || apiKey.length() <= 8) {
             return "****";

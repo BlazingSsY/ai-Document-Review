@@ -1,0 +1,26 @@
+# Dependencies (will be installed fresh inside container)
+node_modules/
+
+# Build output
+dist/
+
+# IDE files
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Logs
+*.log
+npm-debug.log*

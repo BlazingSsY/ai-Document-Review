@@ -8,6 +8,8 @@ import ScenarioListPage from './pages/ScenarioListPage';
 import ReviewPage from './pages/ReviewPage';
 import ReviewWorkspacePage from './pages/ReviewWorkspacePage';
 import ModelConfigPage from './pages/ModelConfigPage';
+import ProfilePage from './pages/ProfilePage';
+import UserManagementPage from './pages/UserManagementPage';
 
 function App() {
   return (
@@ -28,6 +30,8 @@ function App() {
         <Route path="review" element={<ReviewPage />} />
         <Route path="review/:taskId" element={<ReviewWorkspacePage />} />
         <Route path="models" element={<ModelConfigPage />} />
+        <Route path="profile" element={<ProfilePage />} />
+        <Route path="users" element={<UserManagementPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

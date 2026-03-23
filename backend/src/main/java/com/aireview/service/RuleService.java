@@ -27,6 +27,7 @@ import java.util.UUID;
 public class RuleService {
 
     private final RuleMapper ruleMapper;
+    private final com.aireview.repository.UserRuleAssignmentMapper userRuleAssignmentMapper;
 
     @Value("${file.rules-dir}")
     private String rulesDir;
@@ -38,7 +39,7 @@ public class RuleService {
      * @param creatorId the user ID of the uploader
      * @return the created rule DTO
      */
-    public RuleDTO uploadRule(MultipartFile file, Long creatorId) throws IOException {
+    public RuleDTO uploadRule(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null) {
             throw new IllegalArgumentException("File name is required");
@@ -73,6 +74,7 @@ public class RuleService {
         rule.setFileType(fileType);
         rule.setContent(parsedContent);
         rule.setCreatorId(creatorId);
+        rule.setLibraryId(libraryId);
         rule.setUpdatedAt(LocalDateTime.now());
         rule.setIsValid(true);
         ruleMapper.insert(rule);
@@ -82,13 +84,23 @@ public class RuleService {
     }
 
     /**
-     * List rules with pagination, optionally filtered by creator.
+     * List rules with pagination, role-based filtering.
+     * supervisor/admin: see all rules.
+     * user: see only assigned rules.
      */
-    public PageResponse<RuleDTO> listRules(int page, int size, Long creatorId) {
+    public PageResponse<RuleDTO> listRules(int page, int size, Long userId, String role, Long libraryId) {
         Page<Rule> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<Rule> query = new LambdaQueryWrapper<>();
-        if (creatorId != null) {
-            query.eq(Rule::getCreatorId, creatorId);
+
+        if ("user".equals(role)) {
+            List<Long> assignedLibraryIds = userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
+            if (assignedLibraryIds.isEmpty()) {
+                return PageResponse.of(List.of(), 0, page, size);
+            }
+            query.in(Rule::getLibraryId, assignedLibraryIds);
+        }
+        if (libraryId != null) {
+            query.eq(Rule::getLibraryId, libraryId);
         }
         query.orderByDesc(Rule::getUpdatedAt);
 
@@ -123,6 +135,7 @@ public class RuleService {
         dto.setFileType(rule.getFileType());
         dto.setContent(rule.getContent());
         dto.setCreatorId(rule.getCreatorId());
+        dto.setLibraryId(rule.getLibraryId());
         dto.setUpdatedAt(rule.getUpdatedAt());
         dto.setIsValid(rule.getIsValid());
         return dto;

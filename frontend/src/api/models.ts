@@ -32,7 +32,10 @@ export interface ModelListParams {
 }
 
 export function getModelList(params: ModelListParams) {
-  return request.get<ApiResponse<PaginatedResult<AIModel>>>('/models', { params });
+  const { pageSize, ...rest } = params;
+  return request.get<ApiResponse<PaginatedResult<AIModel>>>('/models', {
+    params: { ...rest, size: pageSize },
+  });
 }
 
 export function getEnabledModels() {

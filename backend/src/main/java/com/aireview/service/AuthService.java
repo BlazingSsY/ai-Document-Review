@@ -23,21 +23,17 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
 
-    /**
-     * Register a new user.
-     *
-     * @param request registration request with email and password
-     * @return map containing access and refresh tokens
-     */
     public Map<String, String> register(RegisterRequest request) {
         User existing = userMapper.findByEmail(request.getEmail());
         if (existing != null) {
-            throw new IllegalArgumentException("Email already registered: " + request.getEmail());
+            throw new IllegalArgumentException("该邮箱已注册");
         }
 
         User user = new User();
         user.setEmail(request.getEmail());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
+        user.setName(request.getName() != null ? request.getName() : request.getEmail().split("@")[0]);
+        user.setRole("user");
         user.setCreatedAt(LocalDateTime.now());
         userMapper.insert(user);
 
@@ -45,32 +41,20 @@ public class AuthService {
         return generateTokens(user);
     }
 
-    /**
-     * Login with email and password.
-     *
-     * @param request login request
-     * @return map containing access and refresh tokens
-     */
     public Map<String, String> login(LoginRequest request) {
         User user = userMapper.findByEmail(request.getEmail());
         if (user == null) {
-            throw new IllegalArgumentException("Invalid email or password");
+            throw new IllegalArgumentException("用户名或密码错误");
         }
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            throw new IllegalArgumentException("Invalid email or password");
+            throw new IllegalArgumentException("用户名或密码错误");
         }
 
         log.info("User logged in: {}", request.getEmail());
         return generateTokens(user);
     }
 
-    /**
-     * Refresh the access token using a valid refresh token.
-     *
-     * @param refreshToken the refresh token
-     * @return map containing new access and refresh tokens
-     */
     public Map<String, String> refresh(String refreshToken) {
         if (!jwtTokenProvider.validateToken(refreshToken)) {
             throw new IllegalArgumentException("Invalid or expired refresh token");
@@ -82,18 +66,20 @@ public class AuthService {
         }
 
         Long userId = jwtTokenProvider.getUserIdFromToken(refreshToken);
-        String email = jwtTokenProvider.getEmailFromToken(refreshToken);
+        // Re-fetch user from DB to get current role
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new IllegalArgumentException("User not found");
+        }
 
-        Map<String, String> tokens = new HashMap<>();
-        tokens.put("accessToken", jwtTokenProvider.generateAccessToken(userId, email));
-        tokens.put("refreshToken", jwtTokenProvider.generateRefreshToken(userId, email));
-        return tokens;
+        return generateTokens(user);
     }
 
     private Map<String, String> generateTokens(User user) {
+        String role = user.getRole() != null ? user.getRole() : "user";
         Map<String, String> tokens = new HashMap<>();
-        tokens.put("accessToken", jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail()));
-        tokens.put("refreshToken", jwtTokenProvider.generateRefreshToken(user.getId(), user.getEmail()));
+        tokens.put("accessToken", jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail(), role));
+        tokens.put("refreshToken", jwtTokenProvider.generateRefreshToken(user.getId(), user.getEmail(), role));
         return tokens;
     }
 }

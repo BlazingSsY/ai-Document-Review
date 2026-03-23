@@ -14,11 +14,19 @@ public class AiModelConfig {
 
     private String modelName;
 
+    private String provider;
+
+    private String modelKey;
+
     private String apiKey;
 
     private String endpoint;
 
     private Integer contextWindow;
+
+    private Integer maxTokens;
+
+    private Double temperature;
 
     private Integer timeout;
 

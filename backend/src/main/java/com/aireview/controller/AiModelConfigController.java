@@ -9,9 +9,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+import java.util.Map;
+
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/admin/ai-models")
+@RequestMapping("/api/v1/models")
 @RequiredArgsConstructor
 public class AiModelConfigController {
 
@@ -30,7 +33,7 @@ public class AiModelConfigController {
 
     @PutMapping("/{id}")
     public ApiResponse<AiModelConfigDTO> update(@PathVariable Long id,
-                                                 @Valid @RequestBody AiModelConfigDTO dto) {
+                                                 @RequestBody AiModelConfigDTO dto) {
         try {
             AiModelConfigDTO result = aiModelService.updateConfig(id, dto);
             return ApiResponse.success("AI model config updated", result);
@@ -76,6 +79,34 @@ public class AiModelConfigController {
         } catch (Exception e) {
             log.error("Failed to list AI model configs", e);
             return ApiResponse.error("Failed to list AI model configs: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/enabled")
+    public ApiResponse<List<AiModelConfigDTO>> listEnabled() {
+        try {
+            List<AiModelConfigDTO> result = aiModelService.listEnabledConfigs();
+            return ApiResponse.success(result);
+        } catch (Exception e) {
+            log.error("Failed to list enabled AI models", e);
+            return ApiResponse.error("Failed to list enabled AI models: " + e.getMessage());
+        }
+    }
+
+    @PutMapping("/{id}/toggle")
+    public ApiResponse<Void> toggle(@PathVariable Long id, @RequestBody Map<String, Boolean> body) {
+        try {
+            Boolean enabled = body.get("enabled");
+            if (enabled == null) {
+                return ApiResponse.badRequest("'enabled' field is required");
+            }
+            aiModelService.toggleConfig(id, enabled);
+            return ApiResponse.success("Model status updated", null);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.notFound(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to toggle AI model", e);
+            return ApiResponse.error("Failed to toggle AI model: " + e.getMessage());
         }
     }
 }

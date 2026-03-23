@@ -6,6 +6,16 @@ export interface Rule {
   fileName: string;
   content: string;
   prompt: string;
+  libraryId?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuleLibrary {
+  id: number;
+  name: string;
+  description: string;
+  ruleCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -13,6 +23,7 @@ export interface Rule {
 export interface RuleListParams {
   page: number;
   pageSize: number;
+  libraryId?: number;
   keyword?: string;
 }
 
@@ -25,7 +36,10 @@ export interface PaginatedResult<T> {
 }
 
 export function getRuleList(params: RuleListParams) {
-  return request.get<ApiResponse<PaginatedResult<Rule>>>('/rules', { params });
+  const { pageSize, ...rest } = params;
+  return request.get<ApiResponse<PaginatedResult<Rule>>>('/rules', {
+    params: { ...rest, size: pageSize },
+  });
 }
 
 export function getRuleDetail(id: number) {
@@ -40,4 +54,28 @@ export function uploadRule(formData: FormData) {
 
 export function deleteRule(id: number) {
   return request.delete<ApiResponse<null>>(`/rules/${id}`);
+}
+
+// Rule Library APIs
+export function getRuleLibraryList(params: { page: number; pageSize: number }) {
+  const { pageSize, ...rest } = params;
+  return request.get<ApiResponse<PaginatedResult<RuleLibrary>>>('/rule-libraries', {
+    params: { ...rest, size: pageSize },
+  });
+}
+
+export function getAllRuleLibraries() {
+  return request.get<ApiResponse<RuleLibrary[]>>('/rule-libraries/all');
+}
+
+export function createRuleLibrary(params: { name: string; description?: string }) {
+  return request.post<ApiResponse<RuleLibrary>>('/rule-libraries', params);
+}
+
+export function updateRuleLibrary(id: number, params: { name: string; description?: string }) {
+  return request.put<ApiResponse<RuleLibrary>>(`/rule-libraries/${id}`, params);
+}
+
+export function deleteRuleLibrary(id: number) {
+  return request.delete<ApiResponse<null>>(`/rule-libraries/${id}`);
 }

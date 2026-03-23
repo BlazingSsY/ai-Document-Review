@@ -1,0 +1,30 @@
+# Build output
+target/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Git
+.git/
+.gitignore
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Logs
+*.log
+logs/
+
+# Upload files (runtime data, not needed for build)
+uploads/
