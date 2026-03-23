@@ -122,6 +122,18 @@ public class RuleService {
     }
 
     /**
+     * Delete a rule by ID.
+     */
+    public void deleteRule(Long id) {
+        Rule rule = ruleMapper.selectById(id);
+        if (rule == null) {
+            throw new IllegalArgumentException("Rule not found: " + id);
+        }
+        ruleMapper.deleteById(id);
+        log.info("Rule deleted: {}", id);
+    }
+
+    /**
      * Get all rules associated with a scenario.
      */
     public List<Rule> getRulesByScenarioId(Long scenarioId) {

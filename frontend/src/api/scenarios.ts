@@ -1,14 +1,12 @@
 import request, { ApiResponse } from './request';
-import { PaginatedResult, Rule } from './rules';
+import { PaginatedResult } from './rules';
 
 export interface Scenario {
   id: number;
   name: string;
   description: string;
+  creatorId: number;
   ruleIds: number[];
-  rules?: Rule[];
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface CreateScenarioParams {

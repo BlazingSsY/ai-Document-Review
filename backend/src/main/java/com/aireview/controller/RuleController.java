@@ -66,4 +66,18 @@ public class RuleController {
             return ApiResponse.error("获取规则失败: " + e.getMessage());
         }
     }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<Void> deleteRule(@PathVariable Long id) {
+        try {
+            ruleService.deleteRule(id);
+            return ApiResponse.success("规则已删除", null);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.notFound(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to delete rule", e);
+            return ApiResponse.error("删除规则失败: " + e.getMessage());
+        }
+    }
 }

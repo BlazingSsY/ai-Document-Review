@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ReviewTask, ReviewFinding } from '../api/reviews';
+import { ReviewTask } from '../api/reviews';
 
 interface ReviewState {
   currentTask: ReviewTask | null;
@@ -10,11 +10,10 @@ interface ReviewState {
   setProgress: (progress: number) => void;
   setStatus: (status: string) => void;
   setDocumentHtml: (html: string) => void;
-  updateFindingStatus: (findingId: number, status: 'accepted' | 'rejected') => void;
   reset: () => void;
 }
 
-const useReviewStore = create<ReviewState>((set, get) => ({
+const useReviewStore = create<ReviewState>((set) => ({
   currentTask: null,
   progress: 0,
   status: 'pending',
@@ -22,8 +21,7 @@ const useReviewStore = create<ReviewState>((set, get) => ({
 
   setCurrentTask: (task) => set({
     currentTask: task,
-    progress: task?.progress ?? 0,
-    status: task?.status ?? 'pending',
+    status: task?.status?.toLowerCase() ?? 'pending',
   }),
 
   setProgress: (progress) => set({ progress }),
@@ -31,15 +29,6 @@ const useReviewStore = create<ReviewState>((set, get) => ({
   setStatus: (status) => set({ status }),
 
   setDocumentHtml: (html) => set({ documentHtml: html }),
-
-  updateFindingStatus: (findingId, status) => {
-    const task = get().currentTask;
-    if (!task) return;
-    const findings = task.findings.map((f: ReviewFinding) =>
-      f.id === findingId ? { ...f, status } : f
-    );
-    set({ currentTask: { ...task, findings } });
-  },
 
   reset: () => set({
     currentTask: null,

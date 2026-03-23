@@ -33,7 +33,7 @@ function ReviewPage() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [models, setModels] = useState<AIModel[]>([]);
   const [scenarioId, setScenarioId] = useState<number | undefined>();
-  const [modelId, setModelId] = useState<number | undefined>();
+  const [selectedModel, setSelectedModel] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -59,9 +59,9 @@ function ReviewPage() {
   const handleProgressUpdate = useCallback((data: TaskProgressMessage) => {
     setProgress(data.progress);
     setTaskStatus(data.status);
-    if (data.status === 'completed') {
+    if (data.status === 'completed' || data.status === 'COMPLETED') {
       setCurrentStep(3);
-    } else if (data.status === 'failed') {
+    } else if (data.status === 'failed' || data.status === 'FAILED') {
       message.error(data.message || '审查任务失败');
     }
   }, []);
@@ -83,7 +83,7 @@ function ReviewPage() {
       message.warning('请选择审查场景');
       return;
     }
-    if (!modelId) {
+    if (!selectedModel) {
       message.warning('请选择 AI 模型');
       return;
     }
@@ -93,9 +93,9 @@ function ReviewPage() {
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('scenarioId', String(scenarioId));
-      formData.append('modelId', String(modelId));
+      formData.append('selectedModel', selectedModel);
       const res = await submitReview(formData);
-      const newTaskId = res.data.data.taskId;
+      const newTaskId = res.data.data.id;
       setTaskId(newTaskId);
       setCurrentStep(2);
 
@@ -187,11 +187,11 @@ function ReviewPage() {
               <Form.Item label="AI 模型" required>
                 <Select
                   placeholder="请选择 AI 模型"
-                  value={modelId}
-                  onChange={setModelId}
+                  value={selectedModel}
+                  onChange={setSelectedModel}
                   options={models.map((m) => ({
                     label: `${m.name} (${m.provider})`,
-                    value: m.id,
+                    value: m.name,
                   }))}
                 />
               </Form.Item>
@@ -223,16 +223,16 @@ function ReviewPage() {
             </Text>
             <Progress
               percent={progress}
-              status={taskStatus === 'failed' ? 'exception' : 'active'}
+              status={taskStatus === 'failed' || taskStatus === 'FAILED' ? 'exception' : 'active'}
               strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
               style={{ marginBottom: 16 }}
             />
             <Text type="secondary">
-              {taskStatus === 'failed'
+              {taskStatus === 'failed' || taskStatus === 'FAILED'
                 ? '审查失败，请重试'
                 : `处理中... ${progress}%`}
             </Text>
-            {taskStatus === 'failed' && (
+            {(taskStatus === 'failed' || taskStatus === 'FAILED') && (
               <div style={{ marginTop: 16 }}>
                 <Button onClick={() => { setCurrentStep(1); setProgress(0); setTaskStatus(''); }}>
                   重新提交
@@ -259,7 +259,7 @@ function ReviewPage() {
                 setCurrentStep(0);
                 setSelectedFile(null);
                 setScenarioId(undefined);
-                setModelId(undefined);
+                setSelectedModel(undefined);
                 setTaskId(null);
                 setProgress(0);
                 setTaskStatus('');

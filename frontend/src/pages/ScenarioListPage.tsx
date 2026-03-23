@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Checkbox, Space, Typography, Tag,
-  message, Popconfirm, Descriptions, List,
+  message, Popconfirm, Descriptions,
 } from 'antd';
 import { PlusOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -86,8 +86,8 @@ function ScenarioListPage() {
       render: (_, record) => <Tag color="blue">{record.ruleIds?.length ?? 0} 条</Tag>,
     },
     {
-      title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 180,
-      render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
+      title: '关联规则数', key: 'ruleCount', width: 120,
+      render: (_, record) => <Tag color="blue">{record.ruleIds?.length ?? 0} 条</Tag>,
     },
     {
       title: '操作', key: 'action', width: 150,
@@ -141,8 +141,8 @@ function ScenarioListPage() {
                   <div key={rule.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
                     <Checkbox value={rule.id}>
                       <Space direction="vertical" size={0}>
-                        <Text strong>{rule.name}</Text>
-                        <Text type="secondary" style={{ fontSize: 12 }}>{rule.fileName}</Text>
+                        <Text strong>{rule.ruleName}</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>{rule.fileType}</Text>
                       </Space>
                     </Checkbox>
                   </div>
@@ -168,22 +168,20 @@ function ScenarioListPage() {
             <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
               <Descriptions.Item label="场景名称">{detailScenario.name}</Descriptions.Item>
               <Descriptions.Item label="描述">{detailScenario.description || '-'}</Descriptions.Item>
-              <Descriptions.Item label="创建时间">
-                {new Date(detailScenario.createdAt).toLocaleString('zh-CN')}
-              </Descriptions.Item>
+              <Descriptions.Item label="关联规则数">{detailScenario.ruleIds?.length ?? 0} 条</Descriptions.Item>
             </Descriptions>
             <Title level={5}>关联规则</Title>
-            <List size="small" bordered dataSource={detailScenario.rules || []}
-              renderItem={(rule) => (
-                <List.Item>
-                  <Space>
-                    <Tag color="blue">{rule.name}</Tag>
-                    <Text type="secondary">{rule.fileName}</Text>
-                  </Space>
-                </List.Item>
+            <div>
+              {detailScenario.ruleIds && detailScenario.ruleIds.length > 0 ? (
+                <Space wrap>
+                  {detailScenario.ruleIds.map((id) => (
+                    <Tag key={id} color="blue">规则 #{id}</Tag>
+                  ))}
+                </Space>
+              ) : (
+                <Text type="secondary">暂无关联规则</Text>
               )}
-              locale={{ emptyText: '暂无关联规则' }}
-            />
+            </div>
           </div>
         )}
       </Modal>

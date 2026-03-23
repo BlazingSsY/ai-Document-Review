@@ -7,104 +7,54 @@ import {
   Spin,
   Empty,
   Space,
-  Badge,
-  Select,
-  message,
-  Tooltip,
+  Card,
 } from 'antd';
 import {
   ArrowLeftOutlined,
-  FilterOutlined,
   CheckCircleOutlined,
   WarningOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
-import mammoth from 'mammoth';
-import { getReviewDetail, updateFindingStatus, ReviewTask, ReviewFinding } from '../api/reviews';
-import ReviewResultCard from '../components/ReviewResultCard';
-import useReviewStore from '../store/reviewStore';
-import { SEVERITY_TAG_COLORS, SEVERITY_LABELS, STATUS_LABELS } from '../utils/constants';
+import { getReviewDetail, ReviewTask } from '../api/reviews';
+import { STATUS_LABELS } from '../utils/constants';
 import '../styles/reviewWorkspace.css';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
+
+/** Extract issues from the backend aiResult structure */
+function extractIssues(aiResult: Record<string, unknown> | null): Array<Record<string, unknown>> {
+  if (!aiResult) return [];
+  const allIssues = aiResult.allIssues;
+  if (Array.isArray(allIssues)) return allIssues;
+  return [];
+}
+
+function normalizeStatus(status: string): string {
+  return status?.toLowerCase() || 'pending';
+}
 
 function ReviewWorkspacePage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [severityFilter, setSeverityFilter] = useState<string | undefined>();
-  const { currentTask, setCurrentTask, documentHtml, setDocumentHtml, updateFindingStatus: updateLocalStatus } = useReviewStore();
+  const [task, setTask] = useState<ReviewTask | null>(null);
 
   const fetchDetail = useCallback(async () => {
     if (!taskId) return;
     setLoading(true);
     try {
       const res = await getReviewDetail(taskId);
-      const task = res.data.data;
-      setCurrentTask(task);
-
-      // Parse Word doc if we have document content as base64 or URL
-      if (task.documentContent) {
-        try {
-          // Assume documentContent is base64-encoded .docx
-          const binary = atob(task.documentContent);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          const result = await mammoth.convertToHtml({ arrayBuffer: bytes.buffer });
-          setDocumentHtml(result.value);
-        } catch {
-          // Fallback: treat as HTML string
-          setDocumentHtml(task.documentContent);
-        }
-      }
+      setTask(res.data.data);
     } catch {
       // handled
     } finally {
       setLoading(false);
     }
-  }, [taskId, setCurrentTask, setDocumentHtml]);
+  }, [taskId]);
 
   useEffect(() => {
     fetchDetail();
-    return () => {
-      useReviewStore.getState().reset();
-    };
   }, [fetchDetail]);
-
-  const handleAccept = async (findingId: number) => {
-    if (!taskId) return;
-    try {
-      await updateFindingStatus(taskId, findingId, 'accepted');
-      updateLocalStatus(findingId, 'accepted');
-      message.success('已采纳');
-    } catch {
-      // handled
-    }
-  };
-
-  const handleReject = async (findingId: number) => {
-    if (!taskId) return;
-    try {
-      await updateFindingStatus(taskId, findingId, 'rejected');
-      updateLocalStatus(findingId, 'rejected');
-      message.success('已忽略');
-    } catch {
-      // handled
-    }
-  };
-
-  const filteredFindings = (currentTask?.findings || []).filter((f: ReviewFinding) => {
-    if (!severityFilter) return true;
-    return f.severity === severityFilter;
-  });
-
-  const severityCounts = {
-    high: (currentTask?.findings || []).filter((f: ReviewFinding) => f.severity === 'high').length,
-    medium: (currentTask?.findings || []).filter((f: ReviewFinding) => f.severity === 'medium').length,
-    low: (currentTask?.findings || []).filter((f: ReviewFinding) => f.severity === 'low').length,
-  };
 
   if (loading) {
     return (
@@ -114,7 +64,7 @@ function ReviewWorkspacePage() {
     );
   }
 
-  if (!currentTask) {
+  if (!task) {
     return (
       <Empty description="未找到审查任务" style={{ marginTop: 100 }}>
         <Button type="primary" onClick={() => navigate('/dashboard')}>
@@ -124,6 +74,11 @@ function ReviewWorkspacePage() {
     );
   }
 
+  const status = normalizeStatus(task.status);
+  const issues = extractIssues(task.aiResult);
+  const overallScore = task.aiResult?.overallScore as number | undefined;
+  const totalChunks = task.aiResult?.totalChunks as number | undefined;
+
   return (
     <div>
       <div className="page-header" style={{ marginBottom: 12 }}>
@@ -131,30 +86,38 @@ function ReviewWorkspacePage() {
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/dashboard')}>
             返回
           </Button>
-          <Title level={5} style={{ margin: 0 }}>{currentTask.fileName}</Title>
-          <Tag color={currentTask.status === 'completed' ? 'success' : 'processing'}>
-            {STATUS_LABELS[currentTask.status]}
+          <Title level={5} style={{ margin: 0 }}>{task.fileName}</Title>
+          <Tag color={status === 'completed' ? 'success' : status === 'failed' ? 'error' : 'processing'}>
+            {STATUS_LABELS[status] || task.status}
           </Tag>
         </Space>
         <Text type="secondary">
-          场景：{currentTask.scenarioName} | 模型：{currentTask.modelName}
+          模型：{task.selectedModel}
         </Text>
       </div>
 
       <div className="review-workspace">
-        {/* Left: Document Content */}
+        {/* Left: Summary */}
         <div className="workspace-left">
           <div className="workspace-header">
-            <h3>文档内容</h3>
+            <h3>审查概要</h3>
           </div>
           <div className="workspace-content">
-            {documentHtml ? (
-              <div
-                className="document-preview"
-                dangerouslySetInnerHTML={{ __html: documentHtml }}
-              />
-            ) : (
-              <Empty description="暂无文档内容" />
+            <Card size="small" style={{ marginBottom: 12 }}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {overallScore !== undefined && (
+                  <div>综合评分：<Text strong>{overallScore}</Text> 分</div>
+                )}
+                {totalChunks !== undefined && (
+                  <div>文档分块数：<Text strong>{totalChunks}</Text></div>
+                )}
+                <div>发现问题数：<Text strong>{issues.length}</Text></div>
+              </Space>
+            </Card>
+            {task.failReason && (
+              <Card size="small" style={{ borderColor: '#ff4d4f' }}>
+                <Text type="danger">失败原因：{task.failReason}</Text>
+              </Card>
             )}
           </div>
         </div>
@@ -163,60 +126,78 @@ function ReviewWorkspacePage() {
         <div className="workspace-right">
           <div className="workspace-header">
             <h3>审查结果</h3>
-            <Badge count={currentTask.findings?.length || 0} overflowCount={999}>
-              <span />
-            </Badge>
           </div>
 
-          <div className="findings-summary">
-            <Tooltip title="高风险">
+          {issues.length > 0 && (
+            <div className="findings-summary">
               <div className="summary-item">
                 <ExclamationCircleOutlined style={{ color: '#f5222d' }} />
-                <span>{severityCounts.high}</span>
+                <span>{issues.filter((i) => (i.severity as string) === 'high').length} 高</span>
               </div>
-            </Tooltip>
-            <Tooltip title="中风险">
               <div className="summary-item">
                 <WarningOutlined style={{ color: '#fa8c16' }} />
-                <span>{severityCounts.medium}</span>
+                <span>{issues.filter((i) => (i.severity as string) === 'medium').length} 中</span>
               </div>
-            </Tooltip>
-            <Tooltip title="低风险">
               <div className="summary-item">
                 <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                <span>{severityCounts.low}</span>
+                <span>{issues.filter((i) => (i.severity as string) === 'low').length} 低</span>
               </div>
-            </Tooltip>
-          </div>
-
-          <div className="workspace-toolbar">
-            <FilterOutlined />
-            <Select
-              placeholder="按严重程度筛选"
-              allowClear
-              size="small"
-              style={{ width: 160 }}
-              value={severityFilter}
-              onChange={setSeverityFilter}
-              options={[
-                { label: '高', value: 'high' },
-                { label: '中', value: 'medium' },
-                { label: '低', value: 'low' },
-              ]}
-            />
-          </div>
+            </div>
+          )}
 
           <div className="findings-list">
-            {filteredFindings.length === 0 ? (
-              <Empty description="暂无审查发现" style={{ marginTop: 40 }} />
+            {issues.length === 0 ? (
+              <div style={{ padding: 16 }}>
+                {task.aiResult ? (
+                  <Card size="small" style={{ background: '#fafafa' }}>
+                    <Paragraph>
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13, maxHeight: 600, overflow: 'auto' }}>
+                        {JSON.stringify(task.aiResult, null, 2)}
+                      </pre>
+                    </Paragraph>
+                  </Card>
+                ) : (
+                  <Empty description="暂无审查结果" style={{ marginTop: 40 }} />
+                )}
+              </div>
             ) : (
-              filteredFindings.map((finding: ReviewFinding) => (
-                <ReviewResultCard
-                  key={finding.id}
-                  finding={finding}
-                  onAccept={handleAccept}
-                  onReject={handleReject}
-                />
+              issues.map((issue, idx) => (
+                <Card
+                  key={idx}
+                  size="small"
+                  className={`finding-card severity-${issue.severity || 'low'}`}
+                  style={{ marginBottom: 8 }}
+                >
+                  <Space style={{ marginBottom: 4 }}>
+                    {issue.severity && (
+                      <Tag color={
+                        issue.severity === 'high' ? 'red' :
+                        issue.severity === 'medium' ? 'orange' : 'green'
+                      }>
+                        {issue.severity === 'high' ? '高' :
+                         issue.severity === 'medium' ? '中' : '低'}
+                      </Tag>
+                    )}
+                    {issue.category && <Tag>{issue.category as string}</Tag>}
+                  </Space>
+                  {issue.explanation && (
+                    <Paragraph style={{ marginBottom: 4, fontSize: 13 }}>
+                      {issue.explanation as string}
+                    </Paragraph>
+                  )}
+                  {issue.originalText && (
+                    <div className="original-text">
+                      <Text type="secondary" style={{ fontSize: 12 }}>原文：</Text>
+                      {issue.originalText as string}
+                    </div>
+                  )}
+                  {issue.suggestion && (
+                    <div className="suggestion-text">
+                      <Text type="secondary" style={{ fontSize: 12 }}>建议：</Text>
+                      {issue.suggestion as string}
+                    </div>
+                  )}
+                </Card>
               ))
             )}
           </div>

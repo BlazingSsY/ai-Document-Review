@@ -2,13 +2,13 @@ import request, { ApiResponse } from './request';
 
 export interface Rule {
   id: number;
-  name: string;
-  fileName: string;
+  ruleName: string;
+  fileType: string;
   content: string;
-  prompt: string;
+  creatorId: number;
   libraryId?: number;
-  createdAt: string;
   updatedAt: string;
+  isValid: boolean;
 }
 
 export interface RuleLibrary {

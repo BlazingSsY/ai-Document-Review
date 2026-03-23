@@ -183,15 +183,15 @@ function RuleListPage() {
   // Rule list columns
   const ruleColumns: ColumnsType<Rule> = [
     {
-      title: '规则名称', key: 'name', width: 200,
+      title: '规则名称', key: 'ruleName', width: 200,
       render: (_, record) => (
         <Space>
           <FileTextOutlined style={{ color: '#1677ff' }} />
-          <Text>{record.name || record.fileName}</Text>
+          <Text>{record.ruleName}</Text>
         </Space>
       ),
     },
-    { title: '文件名', dataIndex: 'fileName', key: 'fileName', width: 200, ellipsis: true },
+    { title: '文件类型', dataIndex: 'fileType', key: 'fileType', width: 100 },
     {
       title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 180,
       render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
@@ -318,16 +318,16 @@ function RuleListPage() {
       </Modal>
 
       {/* Preview Modal */}
-      <Modal title={`规则预览 - ${previewRule?.name || ''}`} open={previewModalOpen}
+      <Modal title={`规则预览 - ${previewRule?.ruleName || ''}`} open={previewModalOpen}
         onCancel={() => setPreviewModalOpen(false)}
         footer={<Button onClick={() => setPreviewModalOpen(false)}>关闭</Button>} width={700}>
         {previewRule && (
           <div>
-            <Title level={5}>解析后的 Prompt</Title>
+            <Title level={5}>规则内容</Title>
             <Card size="small" style={{ maxHeight: 400, overflow: 'auto', background: '#fafafa', marginBottom: 16 }}>
               <Paragraph>
                 <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
-                  {previewRule.prompt || previewRule.content || '暂无内容'}
+                  {previewRule.content || '暂无内容'}
                 </pre>
               </Paragraph>
             </Card>

@@ -81,31 +81,29 @@ function DashboardPage() {
       width: 200,
     },
     {
-      title: '审查场景',
-      dataIndex: 'scenarioName',
-      key: 'scenarioName',
-      width: 150,
-    },
-    {
       title: 'AI 模型',
-      dataIndex: 'modelName',
-      key: 'modelName',
-      width: 120,
+      dataIndex: 'selectedModel',
+      key: 'selectedModel',
+      width: 150,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: string) => (
-        <Tag color={STATUS_COLORS[status]}>{STATUS_LABELS[status]}</Tag>
-      ),
+      render: (status: string) => {
+        const s = status?.toLowerCase();
+        return <Tag color={STATUS_COLORS[s]}>{STATUS_LABELS[s] || status}</Tag>;
+      },
     },
     {
       title: '发现问题',
-      key: 'findingCount',
+      key: 'issueCount',
       width: 100,
-      render: (_, record) => record.findings?.length ?? '-',
+      render: (_, record) => {
+        const issues = record.aiResult?.allIssues;
+        return Array.isArray(issues) ? issues.length : '-';
+      },
     },
     {
       title: '创建时间',
@@ -122,8 +120,8 @@ function DashboardPage() {
         <Button
           type="link"
           size="small"
-          onClick={() => navigate(`/review/${record.taskId}`)}
-          disabled={record.status === 'pending'}
+          onClick={() => navigate(`/review/${record.id}`)}
+          disabled={record.status?.toLowerCase() === 'pending'}
         >
           查看详情
         </Button>
