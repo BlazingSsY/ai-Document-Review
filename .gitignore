@@ -29,3 +29,13 @@ logs/
 
 # Environment (keep .env with defaults, ignore local overrides)
 .env.local
+
+# 依赖目录（核心！禁止上传）
+node_modules/
+target/
+*.log
+.DS_Store
+__MACOSX
+.idea
+.vscode
+docker/volumes
