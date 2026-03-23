@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: ai-review-db
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ai_review
       POSTGRES_USER: postgres
@@ -24,16 +25,24 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: ai-review-backend
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ai_review
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres123
+      SPRING_SQL_INIT_MODE: never
       JWT_SECRET: Y2hhbmdlLXRoaXMtdG8tYS1zZWN1cmUtcmFuZG9tLWtleS1pbi1wcm9kdWN0aW9uLWF0LWxlYXN0LTI1Ni1iaXRz
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     volumes:
       - upload_files:/app/uploads
     networks:
@@ -44,10 +53,12 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: ai-review-frontend
+    restart: unless-stopped
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - ai-review-net
 

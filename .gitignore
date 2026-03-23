@@ -1,0 +1,31 @@
+# Java / Maven
+backend/target/
+*.class
+*.jar
+*.war
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Runtime
+uploads/
+logs/
+*.log
+
+# Environment (keep .env with defaults, ignore local overrides)
+.env.local
