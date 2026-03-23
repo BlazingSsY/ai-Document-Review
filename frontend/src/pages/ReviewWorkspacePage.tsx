@@ -161,44 +161,49 @@ function ReviewWorkspacePage() {
                 )}
               </div>
             ) : (
-              issues.map((issue, idx) => (
-                <Card
-                  key={idx}
-                  size="small"
-                  className={`finding-card severity-${issue.severity || 'low'}`}
-                  style={{ marginBottom: 8 }}
-                >
-                  <Space style={{ marginBottom: 4 }}>
-                    {issue.severity && (
+              issues.map((issue, idx) => {
+                const severity = String(issue.severity || 'low');
+                const category = issue.category ? String(issue.category) : '';
+                const explanation = issue.explanation ? String(issue.explanation) : '';
+                const originalText = issue.originalText ? String(issue.originalText) : '';
+                const suggestion = issue.suggestion ? String(issue.suggestion) : '';
+                return (
+                  <Card
+                    key={idx}
+                    size="small"
+                    className={`finding-card severity-${severity}`}
+                    style={{ marginBottom: 8 }}
+                  >
+                    <Space style={{ marginBottom: 4 }}>
                       <Tag color={
-                        issue.severity === 'high' ? 'red' :
-                        issue.severity === 'medium' ? 'orange' : 'green'
+                        severity === 'high' ? 'red' :
+                        severity === 'medium' ? 'orange' : 'green'
                       }>
-                        {issue.severity === 'high' ? '高' :
-                         issue.severity === 'medium' ? '中' : '低'}
+                        {severity === 'high' ? '高' :
+                         severity === 'medium' ? '中' : '低'}
                       </Tag>
+                      {category && <Tag>{category}</Tag>}
+                    </Space>
+                    {explanation && (
+                      <Paragraph style={{ marginBottom: 4, fontSize: 13 }}>
+                        {explanation}
+                      </Paragraph>
                     )}
-                    {issue.category && <Tag>{issue.category as string}</Tag>}
-                  </Space>
-                  {issue.explanation && (
-                    <Paragraph style={{ marginBottom: 4, fontSize: 13 }}>
-                      {issue.explanation as string}
-                    </Paragraph>
-                  )}
-                  {issue.originalText && (
-                    <div className="original-text">
-                      <Text type="secondary" style={{ fontSize: 12 }}>原文：</Text>
-                      {issue.originalText as string}
-                    </div>
-                  )}
-                  {issue.suggestion && (
-                    <div className="suggestion-text">
-                      <Text type="secondary" style={{ fontSize: 12 }}>建议：</Text>
-                      {issue.suggestion as string}
-                    </div>
-                  )}
-                </Card>
-              ))
+                    {originalText && (
+                      <div className="original-text">
+                        <Text type="secondary" style={{ fontSize: 12 }}>原文：</Text>
+                        {originalText}
+                      </div>
+                    )}
+                    {suggestion && (
+                      <div className="suggestion-text">
+                        <Text type="secondary" style={{ fontSize: 12 }}>建议：</Text>
+                        {suggestion}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })
             )}
           </div>
         </div>

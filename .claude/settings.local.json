@@ -12,7 +12,11 @@
       "Bash(python3 -c \"import bcrypt; print\\(bcrypt.hashpw\\(b''admin_root'', bcrypt.gensalt\\(\\)\\).decode\\(\\)\\)\")",
       "Bash(pip3 install:*)",
       "Bash(python3 -c \"import bcrypt; print\\(bcrypt.hashpw\\(b''admin_root'', bcrypt.gensalt\\(10\\)\\).decode\\(\\)\\)\")",
-      "Bash(curl -s http://localhost:3000/api/v1/auth/login -X POST -H 'Content-Type: application/json' -d '{\"\"\"\"email\"\"\"\":\"\"\"\"admin_root\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"admin_root\"\"\"\"}')"
+      "Bash(curl -s http://localhost:3000/api/v1/auth/login -X POST -H 'Content-Type: application/json' -d '{\"\"\"\"email\"\"\"\":\"\"\"\"admin_root\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"admin_root\"\"\"\"}')",
+      "Bash(./node_modules/.bin/tsc -b)",
+      "Bash(node_modules/.bin/tsc -b)",
+      "Bash(npm run:*)",
+      "Bash(npm install:*)"
     ]
   }
 }
