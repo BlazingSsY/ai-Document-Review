@@ -1,17 +1,129 @@
 {
-  "taskId" : "4e1eae973012c4dbdc7a17d6c1e34100",
+  "taskId" : "fa626f88023fac0caf80dc1729095c84",
   "fileName" : "[公开] 集成式备用仪表环境鉴定试验大纲（非电磁类）.docx",
-  "timestamp" : "2026-03-30T16:23:55.472932048",
-  "chapterCount" : 1,
-  "chunkCount" : 1,
+  "timestamp" : "2026-03-30T17:25:46.357338210",
+  "chapterCount" : 10,
+  "chunkCount" : 10,
   "chapters" : [ {
-    "title" : "",
-    "contentLength" : 37746,
-    "estimatedTokens" : 20527
+    "index" : 1,
+    "title" : "温度变化试验",
+    "contentLength" : 3363,
+    "estimatedTokens" : 1886,
+    "contentPreview" : "## 试验目的\n\n确定受试设备在规定的高低温工作温度极值之间温度变化过程中的性能特性是否符合要求。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第4章，C类设备规定的温度和高度试验。此类试验考核E/ISI-2集成式备用仪表在表 14-1中规定的温度、高度和压力下的性能特征。\n表 14-1：温度变化条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>低温工作温度</td>\n    <td>-15℃</td>\n    <td>/</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>高温工作温度</td>\n    <td>+55℃</td>\n    <td>/</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>温度稳定时间</td>\n    <td>2h</td>\n   "
+  }, {
+    "index" : 2,
+    "title" : "湿热",
+    "contentLength" : 3322,
+    "estimatedTokens" : 1780,
+    "contentPreview" : "## 试验目的\n\n确定受试设备在湿热试验环境下的适应能力。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第6章，A类设备规定的湿热试验。此类试验考核E/ISI-2集成式备用仪表在经受表 15-1中规定的温湿度条件后的性能特征，并遵守以下细则：\n液体介质：水，PH=6.5~7.2（25℃），电阻率不低于250000Ω·cm；\n空气流速：0.5~1.7m/s。\n表 15-1：湿热试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>试验阶段</th>\n    <th>温度（℃）</th>\n    <th>相对湿度（%）</th>\n    <th>时间（h）</th>\n    <th>周期数</th>\n    <th>试验允差</th>\n  </tr>\n  <tr>\n    <td>升温</td>\n    <td>38～50</td>\n    <td>85～95</td>\n    <td>2</td>\n    <td>2</td>\n    <td>温度：±2℃相对湿度：±4%RH</td>\n  </tr>\n  <tr>\n  "
+  }, {
+    "index" : 3,
+    "title" : "工作冲击和坠撞安全",
+    "contentLength" : 5755,
+    "estimatedTokens" : 3214,
+    "contentPreview" : "## 试验目的\n\n验证受试设备在经受飞机正常飞行期间遭遇冲击时能否继续在合格的性能标准范围内工作。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，放置位置为平行于机头到机尾方向，且受试设备上部两个散热孔区域朝上，安装在固定托架上，设备前面板朝向机头，试验时应依据受试设备的实际机上安装方向并结合该项DO-160G第7章B类规定的要求试验开展相关工作冲击试验；应通过DO-160G第7章B类规定的坠撞安全试验。\n沿受试设备的三个正交轴的两个方向上冲击3次（共18次），试验条件见表16-1，冲击波形容差见图16-1。\n表 16-1：工作冲击试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>冲击波形</th>\n    <th>峰值加速度（g）</th>\n    <th>持续时间（ms）</th>\n    <th>方向</th>\n    <th>冲击次数</th>\n  </tr>\n  <tr>\n    <td>后峰锯齿波</td>\n    <td>6</td>\n    <td>11</td>\n    <td>+X/－X</td>\n    <td>每"
+  }, {
+    "index" : 4,
+    "title" : "振动",
+    "contentLength" : 5640,
+    "estimatedTokens" : 3187,
+    "contentPreview" : "## 试验目的\n\n确定受试设备在适当的安装位置上经受规定类别的振动量值时是否符合相关设备性能标准。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表应通过DO－160G第8章，S类规定的要求进行标准振动试验；R类规定的要求进行强化振动试验；H类规定的要求进行短时高量值振动试验。\n按照DO－160G中第8章S类别（B3曲线）进行标准振动试验，标准振动试验曲线如图 17-1所示，试验条件见表 17-1，安装方向如图 16-2所示。按照DO－160G中第8章R类别（B3和B4曲线）进行试验，强化振动试验曲线如图 17-2所示，试验条件见表 17-2，安装方向如图 16-2所示。按照DO－160G中第8章H类别（R曲线）进行试验，振动试验曲线如图 17-3所示，安装方向如图 16-2所示。\n图 17-1：标准振动试验曲线\n表 17-1：标准振动试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>振动曲线频率拐点</th>\n    <th>试验条件</th>\n  </tr>\n  <tr>\n    <td>频率（Hz）</td>\n    <td>10</td>\n    "
+  }, {
+    "index" : 5,
+    "title" : "防水",
+    "contentLength" : 2820,
+    "estimatedTokens" : 1589,
+    "contentPreview" : "## 试验目的\n\n本试验用于确定设备是否能经受住滴水的影响。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表应通过DO-160G第10章，W类规定的防水试验。\n\n## 受试/陪试设备\n\n受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；\n陪试设备：详见6.5节；\n工作状态：详见6.4节。\n\n## 试验设备、测试设备及要求\n\n表 18-1：设备信息表\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>设备名称</th>\n    <th>用途</th>\n    <th>设备型号</th>\n    <th>技术要求/精度</th>\n    <th>校验方式</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>专用测试设备</td>\n    <td>产品功能性能测试</td>\n    <td>5C6363-0815</td>\n    <td>/</td>\n    <td>设备校验</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>可编程直流电源</t"
+  }, {
+    "index" : 6,
+    "title" : "流体敏感性",
+    "contentLength" : 3365,
+    "estimatedTokens" : 1809,
+    "contentPreview" : "## 试验目的\n\n确定受试设备结构中所用材料受到流体污染时能否承受流体的有害侵蚀。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第11章，F类规定的喷淋试验。\n流体试验涉及的污染液的种类和对应温度见表 19-1。\n表 19-1：污染液的种类和液体温度表\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>污染流体类别</th>\n    <th>试验流体</th>\n    <th>流体温度</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>溶剂和清洗用流体</td>\n    <td>飞机客舱清洗剂（深度）NW-015A</td>\n    <td>23℃</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>杀虫剂</td>\n    <td>六维航化NW-016A杀虫气雾剂（氯菊酯含量2%）</td>\n    <td>23℃</td>\n    <td></td>\n  </tr>"
+  }, {
+    "index" : 7,
+    "title" : "霉菌",
+    "contentLength" : 4008,
+    "estimatedTokens" : 2016,
+    "contentPreview" : "## 试验目的\n\n考核受试设备的抗霉能力及长霉对受试设备性能的影响程度。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第13章，F类规定的霉菌试验。\n表 20-1：霉菌试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>试验周期</td>\n    <td>28</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>试验温度</td>\n    <td>（30±1）℃</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>相对湿度</td>\n    <td>（97±2）%</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>试验菌种</td>\n    <td"
+  }, {
+    "index" : 8,
+    "title" : "防火，可燃性",
+    "contentLength" : 3438,
+    "estimatedTokens" : 1892,
+    "contentPreview" : "## 试验目的\n\n检查在受试设备内部或外部出现引燃情况下的可燃性。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，受试样件应通过DO－160G第26章中C类规定的可燃性试验。\n表 21-1：防火，可燃性试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>火焰高度</td>\n    <td>38mm</td>\n    <td>/</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>高出燃烧器顶端平面</td>\n    <td>19mm</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>火焰施加时间</td>\n    <td>12s</td>\n    <td></td>\n  </tr>\n</table>\n\n\n## 受试/陪试设备\n\n受试设备：E/ISI-2集成"
+  }, {
+    "index" : 9,
+    "title" : "加速度",
+    "contentLength" : 2940,
+    "estimatedTokens" : 1617,
+    "contentPreview" : "## 试验目的\n\n考核受试设备的加速度对受试设备性能的影响程度。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于驾驶舱，应通过ISO2669:1995《机载设备环境试验——恒定加速度》规定的试验。该试验考核E/ISI-2集成式备用仪表在经受表 22-1中规定的加速度条件的性能特征，加速度试验条件见表 22-1。安装方向如图 16-2所示。\n表 22-1：加速度试验条件（核实量值）\n\n<table border=\"1\">\n  <tr>\n    <th>试验类别</th>\n    <th>下(-Z)</th>\n    <th>上(Z)</th>\n    <th>前(-X)</th>\n    <th>后(X)</th>\n    <th>左(-Y)</th>\n    <th>右(Y)</th>\n  </tr>\n  <tr>\n    <td>功能试验量值</td>\n    <td>4.5g</td>\n    <td>2.83g</td>\n    <td>2.0g</td>\n    <td>2.0g</td>\n    <td>2.0g</td>\n    <td>2.0g</td>\n  </"
+  }, {
+    "index" : 10,
+    "title" : "风车",
+    "contentLength" : 2968,
+    "estimatedTokens" : 1517,
+    "contentPreview" : "## 试验目的\n\n确定受试设备在适当的安装位置上经受规定类别的风车振动量级是否符合相关设备性能标准。\n\n## 试验要求\n\n沿受试设备的三个正交轴向分别进行正弦扫频振动试验，试验条件如下：\n表 23-1：风车试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>每轴向时间</td>\n    <td>2小时/轴向</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>扫频率</td>\n    <td>7Hz/min</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>加速度量值</td>\n    <td>2g</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>频率范围</td>\n    <td>5"
   } ],
   "chunks" : [ {
-    "label" : "第 1 部分",
-    "estimatedTokens" : 20527,
-    "contentPreview" : "### 温度变化试验\n\n\n## 试验目的\n\n确定受试设备在规定的高低温工作温度极值之间温度变化过程中的性能特性是否符合要求。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第4章，C类设备规定的温度和高度试验。此类试验考核E/ISI-2集成式备用仪表在表 14-1中规定的温度、高度和压力下的性能特征。\n表 14-1：温度变化条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    "
+    "index" : 1,
+    "label" : "温度变化试验",
+    "estimatedTokens" : 1886,
+    "contentLength" : 3371,
+    "contentPreview" : "温度变化试验\n\n## 试验目的\n\n确定受试设备在规定的高低温工作温度极值之间温度变化过程中的性能特性是否符合要求。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第4章，C类设备规定的温度和高度试验。此类试验考核E/ISI-2集成式备用仪表在表 14-1中规定的温度、高度和压力下的性能特征。\n表 14-1：温度变化条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>低温工作温度</td>\n    <td>-15℃</td>\n    <td>/</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>高温工作温度</td>\n    <td>+55℃</td>\n    <td>/</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>温度稳定时间</td>\n    <td>2h<"
+  }, {
+    "index" : 2,
+    "label" : "湿热",
+    "estimatedTokens" : 1780,
+    "contentLength" : 3326,
+    "contentPreview" : "湿热\n\n## 试验目的\n\n确定受试设备在湿热试验环境下的适应能力。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第6章，A类设备规定的湿热试验。此类试验考核E/ISI-2集成式备用仪表在经受表 15-1中规定的温湿度条件后的性能特征，并遵守以下细则：\n液体介质：水，PH=6.5~7.2（25℃），电阻率不低于250000Ω·cm；\n空气流速：0.5~1.7m/s。\n表 15-1：湿热试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>试验阶段</th>\n    <th>温度（℃）</th>\n    <th>相对湿度（%）</th>\n    <th>时间（h）</th>\n    <th>周期数</th>\n    <th>试验允差</th>\n  </tr>\n  <tr>\n    <td>升温</td>\n    <td>38～50</td>\n    <td>85～95</td>\n    <td>2</td>\n    <td>2</td>\n    <td>温度：±2℃相对湿度：±4%RH</td>\n  </tr>\n  <tr"
+  }, {
+    "index" : 3,
+    "label" : "工作冲击和坠撞安全",
+    "estimatedTokens" : 3214,
+    "contentLength" : 5766,
+    "contentPreview" : "工作冲击和坠撞安全\n\n## 试验目的\n\n验证受试设备在经受飞机正常飞行期间遭遇冲击时能否继续在合格的性能标准范围内工作。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，放置位置为平行于机头到机尾方向，且受试设备上部两个散热孔区域朝上，安装在固定托架上，设备前面板朝向机头，试验时应依据受试设备的实际机上安装方向并结合该项DO-160G第7章B类规定的要求试验开展相关工作冲击试验；应通过DO-160G第7章B类规定的坠撞安全试验。\n沿受试设备的三个正交轴的两个方向上冲击3次（共18次），试验条件见表16-1，冲击波形容差见图16-1。\n表 16-1：工作冲击试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>冲击波形</th>\n    <th>峰值加速度（g）</th>\n    <th>持续时间（ms）</th>\n    <th>方向</th>\n    <th>冲击次数</th>\n  </tr>\n  <tr>\n    <td>后峰锯齿波</td>\n    <td>6</td>\n    <td>11</td>\n    <td>+X/－X</td"
+  }, {
+    "index" : 4,
+    "label" : "振动",
+    "estimatedTokens" : 3187,
+    "contentLength" : 5644,
+    "contentPreview" : "振动\n\n## 试验目的\n\n确定受试设备在适当的安装位置上经受规定类别的振动量值时是否符合相关设备性能标准。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表应通过DO－160G第8章，S类规定的要求进行标准振动试验；R类规定的要求进行强化振动试验；H类规定的要求进行短时高量值振动试验。\n按照DO－160G中第8章S类别（B3曲线）进行标准振动试验，标准振动试验曲线如图 17-1所示，试验条件见表 17-1，安装方向如图 16-2所示。按照DO－160G中第8章R类别（B3和B4曲线）进行试验，强化振动试验曲线如图 17-2所示，试验条件见表 17-2，安装方向如图 16-2所示。按照DO－160G中第8章H类别（R曲线）进行试验，振动试验曲线如图 17-3所示，安装方向如图 16-2所示。\n图 17-1：标准振动试验曲线\n表 17-1：标准振动试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>振动曲线频率拐点</th>\n    <th>试验条件</th>\n  </tr>\n  <tr>\n    <td>频率（Hz）</td>\n    <td>10</td>\n"
+  }, {
+    "index" : 5,
+    "label" : "防水",
+    "estimatedTokens" : 1589,
+    "contentLength" : 2824,
+    "contentPreview" : "防水\n\n## 试验目的\n\n本试验用于确定设备是否能经受住滴水的影响。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表应通过DO-160G第10章，W类规定的防水试验。\n\n## 受试/陪试设备\n\n受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；\n陪试设备：详见6.5节；\n工作状态：详见6.4节。\n\n## 试验设备、测试设备及要求\n\n表 18-1：设备信息表\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>设备名称</th>\n    <th>用途</th>\n    <th>设备型号</th>\n    <th>技术要求/精度</th>\n    <th>校验方式</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>专用测试设备</td>\n    <td>产品功能性能测试</td>\n    <td>5C6363-0815</td>\n    <td>/</td>\n    <td>设备校验</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>可编程直流电"
+  }, {
+    "index" : 6,
+    "label" : "流体敏感性",
+    "estimatedTokens" : 1809,
+    "contentLength" : 3372,
+    "contentPreview" : "流体敏感性\n\n## 试验目的\n\n确定受试设备结构中所用材料受到流体污染时能否承受流体的有害侵蚀。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第11章，F类规定的喷淋试验。\n流体试验涉及的污染液的种类和对应温度见表 19-1。\n表 19-1：污染液的种类和液体温度表\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>污染流体类别</th>\n    <th>试验流体</th>\n    <th>流体温度</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>溶剂和清洗用流体</td>\n    <td>飞机客舱清洗剂（深度）NW-015A</td>\n    <td>23℃</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>杀虫剂</td>\n    <td>六维航化NW-016A杀虫气雾剂（氯菊酯含量2%）</td>\n    <td>23℃</td>\n    <td></td>\n"
+  }, {
+    "index" : 7,
+    "label" : "霉菌",
+    "estimatedTokens" : 2016,
+    "contentLength" : 4012,
+    "contentPreview" : "霉菌\n\n## 试验目的\n\n考核受试设备的抗霉能力及长霉对受试设备性能的影响程度。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第13章，F类规定的霉菌试验。\n表 20-1：霉菌试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>试验周期</td>\n    <td>28</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>试验温度</td>\n    <td>（30±1）℃</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>相对湿度</td>\n    <td>（97±2）%</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>试验菌种</td>\n   "
+  }, {
+    "index" : 8,
+    "label" : "防火，可燃性",
+    "estimatedTokens" : 1892,
+    "contentLength" : 3446,
+    "contentPreview" : "防火，可燃性\n\n## 试验目的\n\n检查在受试设备内部或外部出现引燃情况下的可燃性。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，受试样件应通过DO－160G第26章中C类规定的可燃性试验。\n表 21-1：防火，可燃性试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>火焰高度</td>\n    <td>38mm</td>\n    <td>/</td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>高出燃烧器顶端平面</td>\n    <td>19mm</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>火焰施加时间</td>\n    <td>12s</td>\n    <td></td>\n  </tr>\n</table>\n\n\n## 受试/陪试设备\n\n受试设备：E"
+  }, {
+    "index" : 9,
+    "label" : "加速度",
+    "estimatedTokens" : 1617,
+    "contentLength" : 2945,
+    "contentPreview" : "加速度\n\n## 试验目的\n\n考核受试设备的加速度对受试设备性能的影响程度。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于驾驶舱，应通过ISO2669:1995《机载设备环境试验——恒定加速度》规定的试验。该试验考核E/ISI-2集成式备用仪表在经受表 22-1中规定的加速度条件的性能特征，加速度试验条件见表 22-1。安装方向如图 16-2所示。\n表 22-1：加速度试验条件（核实量值）\n\n<table border=\"1\">\n  <tr>\n    <th>试验类别</th>\n    <th>下(-Z)</th>\n    <th>上(Z)</th>\n    <th>前(-X)</th>\n    <th>后(X)</th>\n    <th>左(-Y)</th>\n    <th>右(Y)</th>\n  </tr>\n  <tr>\n    <td>功能试验量值</td>\n    <td>4.5g</td>\n    <td>2.83g</td>\n    <td>2.0g</td>\n    <td>2.0g</td>\n    <td>2.0g</td>\n    <td>2.0g</td>"
+  }, {
+    "index" : 10,
+    "label" : "风车",
+    "estimatedTokens" : 1517,
+    "contentLength" : 2972,
+    "contentPreview" : "风车\n\n## 试验目的\n\n确定受试设备在适当的安装位置上经受规定类别的风车振动量级是否符合相关设备性能标准。\n\n## 试验要求\n\n沿受试设备的三个正交轴向分别进行正弦扫频振动试验，试验条件如下：\n表 23-1：风车试验条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    <td></td>\n    <td>每轴向时间</td>\n    <td>2小时/轴向</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>扫频率</td>\n    <td>7Hz/min</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>加速度量值</td>\n    <td>2g</td>\n    <td></td>\n  </tr>\n  <tr>\n    <td></td>\n    <td>频率范围</td>\n    <"
   } ]
 }
