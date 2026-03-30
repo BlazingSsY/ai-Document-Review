@@ -42,8 +42,14 @@ CREATE TABLE IF NOT EXISTS scenario_rule_mapping (
     PRIMARY KEY (scenario_id, rule_id)
 );
 
+CREATE TABLE IF NOT EXISTS scenario_library_mapping (
+    scenario_id     BIGINT          NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    library_id      BIGINT          NOT NULL REFERENCES rule_libraries(id) ON DELETE CASCADE,
+    PRIMARY KEY (scenario_id, library_id)
+);
+
 CREATE TABLE IF NOT EXISTS review_tasks (
-    id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              VARCHAR(36)     PRIMARY KEY,
     user_id         BIGINT          NOT NULL REFERENCES users(id),
     file_name       VARCHAR(500)    NOT NULL,
     file_path       VARCHAR(1000)   NOT NULL,

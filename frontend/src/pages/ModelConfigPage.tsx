@@ -12,10 +12,11 @@ import {
   Space,
   Typography,
   Tag,
+  Tooltip,
   message,
   Popconfirm,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getModelList,
@@ -39,6 +40,7 @@ function ModelConfigPage() {
   const [editingModel, setEditingModel] = useState<AIModel | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  const [isCustomProvider, setIsCustomProvider] = useState(false);
 
   const fetchModels = async () => {
     setLoading(true);
@@ -59,6 +61,7 @@ function ModelConfigPage() {
 
   const openCreateModal = () => {
     setEditingModel(null);
+    setIsCustomProvider(false);
     form.resetFields();
     form.setFieldsValue({ maxTokens: 4096, temperature: 0.7, enabled: true });
     setModalOpen(true);
@@ -66,9 +69,12 @@ function ModelConfigPage() {
 
   const openEditModal = (model: AIModel) => {
     setEditingModel(model);
+    const knownProvider = MODEL_PROVIDERS.some((p) => p.value === model.provider);
+    setIsCustomProvider(!knownProvider);
     form.setFieldsValue({
       name: model.name,
-      provider: model.provider,
+      providerSelect: knownProvider ? model.provider : '__custom__',
+      providerCustom: knownProvider ? '' : model.provider,
       modelKey: model.modelKey,
       apiEndpoint: model.apiEndpoint,
       apiKey: model.apiKey,
@@ -79,14 +85,27 @@ function ModelConfigPage() {
     setModalOpen(true);
   };
 
-  const handleSave = async (values: CreateModelParams) => {
+  const handleSave = async (values: Record<string, unknown>) => {
+    const provider = values.providerSelect === '__custom__'
+      ? (values.providerCustom as string)
+      : (values.providerSelect as string);
+    const params: CreateModelParams = {
+      name: values.name as string,
+      provider,
+      modelKey: values.modelKey as string,
+      apiEndpoint: values.apiEndpoint as string,
+      apiKey: values.apiKey as string,
+      maxTokens: values.maxTokens as number,
+      temperature: values.temperature as number,
+      enabled: values.enabled as boolean,
+    };
     setSaving(true);
     try {
       if (editingModel) {
-        await updateModel(editingModel.id, values);
+        await updateModel(editingModel.id, params);
         message.success('模型配置已更新');
       } else {
-        await createModel(values);
+        await createModel(params);
         message.success('模型配置已创建');
       }
       setModalOpen(false);
@@ -158,10 +177,10 @@ function ModelConfigPage() {
       width: 110,
     },
     {
-      title: '温度',
+      title: 'Temperature',
       dataIndex: 'temperature',
       key: 'temperature',
-      width: 80,
+      width: 100,
     },
     {
       title: '状态',
@@ -263,12 +282,28 @@ function ModelConfigPage() {
             <Input placeholder="例：GPT-4o" />
           </Form.Item>
           <Form.Item
-            name="provider"
+            name="providerSelect"
             label="供应商"
             rules={[{ required: true, message: '请选择供应商' }]}
           >
-            <Select placeholder="请选择供应商" options={MODEL_PROVIDERS} />
+            <Select
+              placeholder="请选择供应商"
+              options={[
+                ...MODEL_PROVIDERS.filter((p) => p.value !== 'custom'),
+                { label: '自定义供应商', value: '__custom__' },
+              ]}
+              onChange={(v) => setIsCustomProvider(v === '__custom__')}
+            />
           </Form.Item>
+          {isCustomProvider && (
+            <Form.Item
+              name="providerCustom"
+              label="自定义供应商名称"
+              rules={[{ required: true, message: '请输入供应商名称' }]}
+            >
+              <Input placeholder="例：deepseek、zhipu、minimax" />
+            </Form.Item>
+          )}
           <Form.Item
             name="modelKey"
             label="模型标识"
@@ -302,10 +337,17 @@ function ModelConfigPage() {
             </Form.Item>
             <Form.Item
               name="temperature"
-              label="温度"
+              label={
+                <span>
+                  Temperature&nbsp;
+                  <Tooltip title="Temperature 控制模型输出的随机性。值越低（接近0），输出越确定和保守；值越高（接近1），输出越多样和有创意。文件审查建议使用较低值（0.1~0.3）以获得更稳定的结果。">
+                    <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                  </Tooltip>
+                </span>
+              }
               rules={[{ required: true, message: '请输入' }]}
             >
-              <InputNumber min={0} max={2} step={0.1} style={{ width: 160 }} />
+              <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} />
             </Form.Item>
           </Space>
           <Form.Item name="enabled" label="启用状态" valuePropName="checked">

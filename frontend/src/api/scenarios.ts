@@ -6,13 +6,13 @@ export interface Scenario {
   name: string;
   description: string;
   creatorId: number;
-  ruleIds: number[];
+  libraryIds: number[];
 }
 
 export interface CreateScenarioParams {
   name: string;
   description: string;
-  ruleIds: number[];
+  libraryIds: number[];
 }
 
 export interface ScenarioListParams {

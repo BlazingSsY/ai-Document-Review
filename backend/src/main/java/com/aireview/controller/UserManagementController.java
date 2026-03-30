@@ -91,6 +91,20 @@ public class UserManagementController {
         }
     }
 
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteUser(@PathVariable Long id, Authentication authentication) {
+        try {
+            Long operatorId = SecurityUtils.getUserId(authentication);
+            userService.deleteUser(id, operatorId);
+            return ApiResponse.success("用户删除成功", null);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to delete user", e);
+            return ApiResponse.error("删除用户失败: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/{id}/libraries")
     public ApiResponse<List<Long>> getUserLibraries(@PathVariable Long id) {
         try {

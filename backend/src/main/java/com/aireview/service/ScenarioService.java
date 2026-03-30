@@ -4,9 +4,9 @@ import com.aireview.dto.ScenarioCreateRequest;
 import com.aireview.dto.ScenarioDTO;
 import com.aireview.dto.PageResponse;
 import com.aireview.entity.Scenario;
-import com.aireview.entity.ScenarioRuleMapping;
+import com.aireview.entity.ScenarioLibraryMapping;
 import com.aireview.repository.ScenarioMapper;
-import com.aireview.repository.ScenarioRuleMappingMapper;
+import com.aireview.repository.ScenarioLibraryMappingMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -22,11 +22,8 @@ import java.util.List;
 public class ScenarioService {
 
     private final ScenarioMapper scenarioMapper;
-    private final ScenarioRuleMappingMapper scenarioRuleMappingMapper;
+    private final ScenarioLibraryMappingMapper scenarioLibraryMappingMapper;
 
-    /**
-     * Create a new scenario with associated rules.
-     */
     @Transactional
     public ScenarioDTO createScenario(ScenarioCreateRequest request, Long creatorId) {
         Scenario scenario = new Scenario();
@@ -35,34 +32,26 @@ public class ScenarioService {
         scenario.setCreatorId(creatorId);
         scenarioMapper.insert(scenario);
 
-        // Create rule mappings
-        if (request.getRuleIds() != null) {
-            for (Long ruleId : request.getRuleIds()) {
-                ScenarioRuleMapping mapping = new ScenarioRuleMapping(scenario.getId(), ruleId);
-                scenarioRuleMappingMapper.insert(mapping);
+        if (request.getLibraryIds() != null) {
+            for (Long libId : request.getLibraryIds()) {
+                scenarioLibraryMappingMapper.insert(new ScenarioLibraryMapping(scenario.getId(), libId));
             }
         }
 
-        log.info("Scenario created: {} with {} rules by user {}",
-                scenario.getName(), request.getRuleIds().size(), creatorId);
-        return toDTO(scenario, request.getRuleIds());
+        log.info("Scenario created: {} with {} libraries by user {}",
+                scenario.getName(), request.getLibraryIds().size(), creatorId);
+        return toDTO(scenario, request.getLibraryIds());
     }
 
-    /**
-     * Get a scenario by ID with its associated rule IDs.
-     */
     public ScenarioDTO getScenarioById(Long id) {
         Scenario scenario = scenarioMapper.selectById(id);
         if (scenario == null) {
             throw new IllegalArgumentException("Scenario not found: " + id);
         }
-        List<Long> ruleIds = scenarioRuleMappingMapper.findRuleIdsByScenarioId(id);
-        return toDTO(scenario, ruleIds);
+        List<Long> libraryIds = scenarioLibraryMappingMapper.findLibraryIdsByScenarioId(id);
+        return toDTO(scenario, libraryIds);
     }
 
-    /**
-     * List scenarios with pagination.
-     */
     public PageResponse<ScenarioDTO> listScenarios(int page, int size, Long creatorId) {
         Page<Scenario> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<Scenario> query = new LambdaQueryWrapper<>();
@@ -72,16 +61,13 @@ public class ScenarioService {
 
         Page<Scenario> result = scenarioMapper.selectPage(pageParam, query);
         List<ScenarioDTO> records = result.getRecords().stream().map(s -> {
-            List<Long> ruleIds = scenarioRuleMappingMapper.findRuleIdsByScenarioId(s.getId());
-            return toDTO(s, ruleIds);
+            List<Long> libraryIds = scenarioLibraryMappingMapper.findLibraryIdsByScenarioId(s.getId());
+            return toDTO(s, libraryIds);
         }).toList();
 
         return PageResponse.of(records, result.getTotal(), page, size);
     }
 
-    /**
-     * Update a scenario's basic info and rule associations.
-     */
     @Transactional
     public ScenarioDTO updateScenario(Long id, ScenarioCreateRequest request, Long userId) {
         Scenario scenario = scenarioMapper.selectById(id);
@@ -96,21 +82,17 @@ public class ScenarioService {
         scenario.setDescription(request.getDescription());
         scenarioMapper.updateById(scenario);
 
-        // Re-create rule mappings
-        scenarioRuleMappingMapper.deleteByScenarioId(id);
-        if (request.getRuleIds() != null) {
-            for (Long ruleId : request.getRuleIds()) {
-                scenarioRuleMappingMapper.insert(new ScenarioRuleMapping(id, ruleId));
+        scenarioLibraryMappingMapper.deleteByScenarioId(id);
+        if (request.getLibraryIds() != null) {
+            for (Long libId : request.getLibraryIds()) {
+                scenarioLibraryMappingMapper.insert(new ScenarioLibraryMapping(id, libId));
             }
         }
 
         log.info("Scenario updated: {}", id);
-        return toDTO(scenario, request.getRuleIds());
+        return toDTO(scenario, request.getLibraryIds());
     }
 
-    /**
-     * Delete a scenario and its rule mappings.
-     */
     @Transactional
     public void deleteScenario(Long id, Long userId) {
         Scenario scenario = scenarioMapper.selectById(id);
@@ -121,18 +103,18 @@ public class ScenarioService {
             throw new IllegalArgumentException("You can only delete your own scenarios");
         }
 
-        scenarioRuleMappingMapper.deleteByScenarioId(id);
+        scenarioLibraryMappingMapper.deleteByScenarioId(id);
         scenarioMapper.deleteById(id);
         log.info("Scenario deleted: {}", id);
     }
 
-    private ScenarioDTO toDTO(Scenario scenario, List<Long> ruleIds) {
+    private ScenarioDTO toDTO(Scenario scenario, List<Long> libraryIds) {
         ScenarioDTO dto = new ScenarioDTO();
         dto.setId(scenario.getId());
         dto.setName(scenario.getName());
         dto.setDescription(scenario.getDescription());
         dto.setCreatorId(scenario.getCreatorId());
-        dto.setRuleIds(ruleIds);
+        dto.setLibraryIds(libraryIds);
         return dto;
     }
 }

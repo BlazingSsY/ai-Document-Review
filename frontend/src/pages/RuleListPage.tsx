@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getRuleList, uploadRule, deleteRule, getRuleDetail, Rule, RuleLibrary,
+  getRuleList, uploadRule, deleteRule, Rule, RuleLibrary,
   getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
 } from '../api/rules';
 import RuleUploader from '../components/RuleUploader';
@@ -117,12 +117,9 @@ function RuleListPage() {
     finally { setUploading(false); }
   };
 
-  const handlePreview = async (id: number) => {
-    try {
-      const res = await getRuleDetail(id);
-      setPreviewRule(res.data.data);
-      setPreviewModalOpen(true);
-    } catch { /* handled */ }
+  const handlePreview = (rule: Rule) => {
+    setPreviewRule(rule);
+    setPreviewModalOpen(true);
   };
 
   const handleDeleteRule = async (id: number) => {
@@ -201,7 +198,7 @@ function RuleListPage() {
       render: (_, record) => (
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />}
-            onClick={() => handlePreview(record.id)}>预览</Button>
+            onClick={() => handlePreview(record)}>预览</Button>
           {canManage && (
             <Popconfirm title="确定要删除此规则吗？" onConfirm={() => handleDeleteRule(record.id)}
               okText="确定" cancelText="取消">

@@ -10,6 +10,6 @@ import java.util.List;
 @Mapper
 public interface RuleMapper extends BaseMapper<Rule> {
 
-    @Select("SELECT r.* FROM rules r INNER JOIN scenario_rule_mapping srm ON r.id = srm.rule_id WHERE srm.scenario_id = #{scenarioId} AND r.is_valid = true")
+    @Select("SELECT r.* FROM rules r INNER JOIN scenario_library_mapping slm ON r.library_id = slm.library_id WHERE slm.scenario_id = #{scenarioId} AND r.is_valid = true")
     List<Rule> findByScenarioId(Long scenarioId);
 }

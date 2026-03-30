@@ -75,15 +75,12 @@ public class RuleParser {
             JSONObject rule = JSON.parseObject(jsonContent);
             StringBuilder prompt = new StringBuilder();
 
+            // Try well-known English field names
             String name = rule.getString("name");
-            if (name != null) {
-                prompt.append("## Rule: ").append(name).append("\n\n");
-            }
+            if (name != null) prompt.append("## Rule: ").append(name).append("\n\n");
 
             String description = rule.getString("description");
-            if (description != null) {
-                prompt.append("### Description\n").append(description).append("\n\n");
-            }
+            if (description != null) prompt.append("### Description\n").append(description).append("\n\n");
 
             JSONArray criteria = rule.getJSONArray("criteria");
             if (criteria != null && !criteria.isEmpty()) {
@@ -98,13 +95,11 @@ public class RuleParser {
             if (scoring != null) {
                 prompt.append("### Scoring Guidelines\n");
                 for (String key : scoring.keySet()) {
-                    prompt.append("- **").append(key).append("**: ")
-                            .append(scoring.getString(key)).append("\n");
+                    prompt.append("- **").append(key).append("**: ").append(scoring.getString(key)).append("\n");
                 }
                 prompt.append("\n");
             }
 
-            // Handle any additional fields
             JSONArray checkpoints = rule.getJSONArray("checkpoints");
             if (checkpoints != null && !checkpoints.isEmpty()) {
                 prompt.append("### Checkpoints\n");
@@ -114,7 +109,31 @@ public class RuleParser {
                 prompt.append("\n");
             }
 
-            return prompt.toString().trim();
+            // If none of the expected fields were found, fall back to rendering all fields
+            // (handles JSON files with Chinese or custom field names)
+            if (prompt.length() == 0) {
+                for (String key : rule.keySet()) {
+                    Object value = rule.get(key);
+                    prompt.append("**").append(key).append("**：");
+                    if (value instanceof JSONArray arr) {
+                        prompt.append("\n");
+                        for (int i = 0; i < arr.size(); i++) {
+                            prompt.append("  - ").append(arr.getString(i)).append("\n");
+                        }
+                    } else if (value instanceof JSONObject obj) {
+                        prompt.append("\n");
+                        for (String k : obj.keySet()) {
+                            prompt.append("  - ").append(k).append(": ").append(obj.getString(k)).append("\n");
+                        }
+                    } else {
+                        prompt.append(value).append("\n");
+                    }
+                    prompt.append("\n");
+                }
+            }
+
+            String result = prompt.toString().trim();
+            return result.isEmpty() ? jsonContent : result;
         } catch (Exception e) {
             log.warn("Failed to parse JSON rule, using raw content: {}", e.getMessage());
             return jsonContent;
@@ -139,26 +158,44 @@ public class RuleParser {
      */
     public static String buildSystemPrompt(List<String> ruleContents) {
         if (ruleContents == null || ruleContents.isEmpty()) {
-            return "You are a document reviewer. Please review the provided document for quality, accuracy, and completeness.";
+            return "你是一名专业的文档审查员，请严格按照检查标准审查提供的文档内容，使用中文回复。";
         }
 
-        StringBuilder systemPrompt = new StringBuilder();
-        systemPrompt.append("You are an expert document reviewer. ")
-                .append("Review the following document according to these rules and criteria.\n\n");
-        systemPrompt.append("Please provide a structured review result in JSON format with the following fields:\n");
-        systemPrompt.append("- \"overall_score\": a number from 0 to 100\n");
-        systemPrompt.append("- \"summary\": a brief summary of the review\n");
-        systemPrompt.append("- \"issues\": an array of issues found, each with \"severity\" (high/medium/low), ");
-        systemPrompt.append("\"location\", \"description\", and \"suggestion\"\n");
-        systemPrompt.append("- \"rule_results\": review result for each rule\n\n");
-        systemPrompt.append("=== REVIEW RULES ===\n\n");
+        StringBuilder sp = new StringBuilder();
+        sp.append("你是一名专业的文档审查员，负责对文档内容进行严格审查。\n");
+        sp.append("请严格按照以下审查规则和检查标准，逐条审查用户提供的文档内容。\n\n");
+
+        sp.append("【输出要求】\n");
+        sp.append("请以JSON格式返回审查结果，字段说明如下：\n");
+        sp.append("{\n");
+        sp.append("  \"overall_score\": 0-100的整体评分,\n");
+        sp.append("  \"summary\": \"本章节审查总结（中文）\",\n");
+        sp.append("  \"issues\": [\n");
+        sp.append("    {\n");
+        sp.append("      \"severity\": \"high/medium/low\",\n");
+        sp.append("      \"location\": \"问题所在位置（引用原文或表格位置）\",\n");
+        sp.append("      \"description\": \"问题描述\",\n");
+        sp.append("      \"suggestion\": \"修改建议\",\n");
+        sp.append("      \"rule\": \"对应的审查规则名称\"\n");
+        sp.append("    }\n");
+        sp.append("  ],\n");
+        sp.append("  \"passed_items\": [\"通过的检查项列表\"]\n");
+        sp.append("}\n\n");
+
+        sp.append("【注意事项】\n");
+        sp.append("1. 仅输出JSON，不要添加任何markdown代码块标记或其他文字\n");
+        sp.append("2. 所有审查结论和描述使用中文\n");
+        sp.append("3. 如果文档中包含HTML表格，请仔细审查表格内容的准确性和完整性\n");
+        sp.append("4. 对每条审查规则都给出明确结论（通过或不通过）\n\n");
+
+        sp.append("=== 审查规则 ===\n\n");
 
         for (int i = 0; i < ruleContents.size(); i++) {
-            systemPrompt.append("--- Rule ").append(i + 1).append(" ---\n");
-            systemPrompt.append(ruleContents.get(i)).append("\n\n");
+            sp.append("--- 规则 ").append(i + 1).append(" ---\n");
+            sp.append(ruleContents.get(i)).append("\n\n");
         }
 
-        return systemPrompt.toString();
+        return sp.toString();
     }
 
     /**

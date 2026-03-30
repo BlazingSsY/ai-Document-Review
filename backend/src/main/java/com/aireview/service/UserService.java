@@ -99,6 +99,23 @@ public class UserService {
     }
 
     @Transactional
+    public void deleteUser(Long targetUserId, Long operatorId) {
+        if (targetUserId.equals(operatorId)) {
+            throw new IllegalArgumentException("不能删除自己");
+        }
+        User target = userMapper.selectById(targetUserId);
+        if (target == null) {
+            throw new IllegalArgumentException("用户不存在");
+        }
+        if ("supervisor".equals(target.getRole())) {
+            throw new IllegalArgumentException("不能删除项目主管");
+        }
+        userRuleAssignmentMapper.deleteByUserId(targetUserId);
+        userMapper.deleteById(targetUserId);
+        log.info("User {} deleted by operator {}", targetUserId, operatorId);
+    }
+
+    @Transactional
     public void assignLibrariesToUser(Long userId, List<Long> libraryIds) {
         User user = userMapper.selectById(userId);
         if (user == null) {

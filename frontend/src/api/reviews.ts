@@ -48,6 +48,24 @@ export function getReviewDetail(taskId: string) {
   return request.get<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}`);
 }
 
+export function cancelReview(taskId: string) {
+  return request.post<ApiResponse<null>>(`/reviews/tasks/${taskId}/cancel`);
+}
+
+export function reReview(taskId: string) {
+  return request.post<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}/re-review`);
+}
+
+export function deleteReview(taskId: string) {
+  return request.delete<ApiResponse<null>>(`/reviews/tasks/${taskId}`);
+}
+
+export function exportReviewExcel(taskId: string) {
+  return request.get(`/reviews/tasks/${taskId}/export`, {
+    responseType: 'blob',
+  });
+}
+
 export function getReviewStats() {
   return request.get<ApiResponse<{
     total: number;

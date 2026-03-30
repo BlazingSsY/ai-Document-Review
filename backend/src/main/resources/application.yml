@@ -21,6 +21,9 @@ spring:
       max-file-size: 200MB
       max-request-size: 210MB
 
+  lifecycle:
+    timeout-per-shutdown-phase: 5s
+
   sql:
     init:
       mode: always
@@ -63,8 +66,8 @@ review:
     max-attempts: 3
     interval-ms: 5000
   chunk:
-    max-tokens: 6000
-    overlap-tokens: 200
+    max-tokens: 25600
+    overlap-tokens: 0
 
 logging:
   level:

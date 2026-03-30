@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 import {
   Card, Table, Tag, Select, Button, Modal, Checkbox, Form, Input,
-  Typography, Space, message,
+  Typography, Space, Popconfirm, message,
 } from 'antd';
-import { PlusOutlined, UserOutlined, LockOutlined, MailOutlined } from '@ant-design/icons';
+import { PlusOutlined, UserOutlined, LockOutlined, MailOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { UserInfo } from '../api/auth';
-import { getUserList, createUser, updateUserRole, assignLibraries, getUserAssignedLibraries } from '../api/users';
+import { getUserList, createUser, updateUserRole, deleteUser, assignLibraries, getUserAssignedLibraries } from '../api/users';
 import { getAllRuleLibraries, RuleLibrary } from '../api/rules';
 
 const { Title, Text } = Typography;
@@ -76,6 +76,14 @@ function UserManagementPage() {
     } catch { /* handled */ }
   };
 
+  const handleDeleteUser = async (userId: number) => {
+    try {
+      await deleteUser(userId);
+      message.success('用户已删除');
+      fetchUsers();
+    } catch { /* handled */ }
+  };
+
   const handleAssign = async () => {
     if (assignUserId === null) return;
     setAssigning(true);
@@ -114,13 +122,20 @@ function UserManagementPage() {
       render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
     },
     {
-      title: '操作', key: 'action', width: 120,
+      title: '操作', key: 'action', width: 200,
       render: (_, record) => {
         if (record.role === 'supervisor') return <Text type="secondary">-</Text>;
         return (
-          <Button type="link" size="small" onClick={() => openAssignModal(record)}>
-            分配规则库
-          </Button>
+          <Space>
+            <Button type="link" size="small" onClick={() => openAssignModal(record)}>
+              分配规则库
+            </Button>
+            <Popconfirm title="确定要删除此用户吗？删除后不可恢复。"
+              onConfirm={() => handleDeleteUser(record.id)}
+              okText="确定" cancelText="取消">
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          </Space>
         );
       },
     },

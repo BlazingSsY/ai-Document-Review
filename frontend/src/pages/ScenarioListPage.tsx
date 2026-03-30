@@ -3,10 +3,10 @@ import {
   Card, Table, Button, Modal, Form, Input, Checkbox, Space, Typography, Tag,
   message, Popconfirm, Descriptions,
 } from 'antd';
-import { PlusOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getScenarioList, createScenario, deleteScenario, getScenarioDetail, Scenario } from '../api/scenarios';
-import { getRuleList, Rule } from '../api/rules';
+import { getScenarioList, createScenario, updateScenario, deleteScenario, getScenarioDetail, Scenario } from '../api/scenarios';
+import { getAllRuleLibraries, RuleLibrary } from '../api/rules';
 import { PAGE_SIZE } from '../utils/constants';
 import useAuthStore from '../store/authStore';
 
@@ -22,11 +22,15 @@ function ScenarioListPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingScenario, setEditingScenario] = useState<Scenario | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [detailScenario, setDetailScenario] = useState<Scenario | null>(null);
-  const [allRules, setAllRules] = useState<Rule[]>([]);
+  const [allLibraries, setAllLibraries] = useState<RuleLibrary[]>([]);
   const [creating, setCreating] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
 
   const fetchScenarios = async () => {
     setLoading(true);
@@ -37,18 +41,18 @@ function ScenarioListPage() {
     } catch { /* handled */ } finally { setLoading(false); }
   };
 
-  const fetchAllRules = async () => {
+  const fetchAllLibraries = async () => {
     try {
-      const res = await getRuleList({ page: 1, pageSize: 1000 });
-      setAllRules(res.data.data.records);
+      const res = await getAllRuleLibraries();
+      setAllLibraries(res.data.data);
     } catch { /* handled */ }
   };
 
   useEffect(() => { fetchScenarios(); }, [page]);
 
-  const handleCreate = async (values: { name: string; description: string; ruleIds: number[] }) => {
-    if (!values.ruleIds || values.ruleIds.length === 0) {
-      message.warning('请至少选择一条审查规则'); return;
+  const handleCreate = async (values: { name: string; description: string; libraryIds: number[] }) => {
+    if (!values.libraryIds || values.libraryIds.length === 0) {
+      message.warning('请至少选择一个规则库'); return;
     }
     setCreating(true);
     try {
@@ -68,6 +72,37 @@ function ScenarioListPage() {
     } catch { /* handled */ }
   };
 
+  const handleOpenEdit = async (id: number) => {
+    await fetchAllLibraries();
+    try {
+      const res = await getScenarioDetail(id);
+      const scenario = res.data.data;
+      setEditingScenario(scenario);
+      editForm.setFieldsValue({
+        name: scenario.name,
+        description: scenario.description,
+        libraryIds: scenario.libraryIds || [],
+      });
+      setEditModalOpen(true);
+    } catch { /* handled */ }
+  };
+
+  const handleUpdate = async (values: { name: string; description: string; libraryIds: number[] }) => {
+    if (!editingScenario) return;
+    if (!values.libraryIds || values.libraryIds.length === 0) {
+      message.warning('请至少选择一个规则库'); return;
+    }
+    setUpdating(true);
+    try {
+      await updateScenario(editingScenario.id, values);
+      message.success('场景更新成功');
+      setEditModalOpen(false);
+      editForm.resetFields();
+      setEditingScenario(null);
+      fetchScenarios();
+    } catch { /* handled */ } finally { setUpdating(false); }
+  };
+
   const handleDelete = async (id: number) => {
     try {
       await deleteScenario(id);
@@ -76,25 +111,43 @@ function ScenarioListPage() {
     } catch { /* handled */ }
   };
 
-  const openCreateModal = () => { fetchAllRules(); setCreateModalOpen(true); };
+  const openCreateModal = () => { fetchAllLibraries(); setCreateModalOpen(true); };
+
+  const renderLibraryCheckboxList = (libraries: RuleLibrary[]) => (
+    <div style={{ maxHeight: 300, overflow: 'auto' }}>
+      {libraries.map((lib) => (
+        <div key={lib.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+          <Checkbox value={lib.id}>
+            <Space direction="vertical" size={0}>
+              <Text strong>{lib.name}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {lib.description || '无描述'} ({lib.ruleCount} 条规则)
+              </Text>
+            </Space>
+          </Checkbox>
+        </div>
+      ))}
+      {libraries.length === 0 && <Text type="secondary">暂无规则库，请先创建规则库</Text>}
+    </div>
+  );
 
   const columns: ColumnsType<Scenario> = [
     { title: '场景名称', dataIndex: 'name', key: 'name', width: 180 },
     { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true, width: 300 },
     {
-      title: '关联规则数', key: 'ruleCount', width: 120,
-      render: (_, record) => <Tag color="blue">{record.ruleIds?.length ?? 0} 条</Tag>,
+      title: '关联规则库数', key: 'libraryCount', width: 130,
+      render: (_, record) => <Tag color="blue">{record.libraryIds?.length ?? 0} 个</Tag>,
     },
     {
-      title: '关联规则数', key: 'ruleCount', width: 120,
-      render: (_, record) => <Tag color="blue">{record.ruleIds?.length ?? 0} 条</Tag>,
-    },
-    {
-      title: '操作', key: 'action', width: 150,
+      title: '操作', key: 'action', width: 200,
       render: (_, record) => (
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />}
             onClick={() => handleViewDetail(record.id)}>详情</Button>
+          {canManage && (
+            <Button type="link" size="small" icon={<EditOutlined />}
+              onClick={() => handleOpenEdit(record.id)}>编辑</Button>
+          )}
           {canManage && (
             <Popconfirm title="确定要删除此场景吗？" onConfirm={() => handleDelete(record.id)}
               okText="确定" cancelText="取消">
@@ -124,6 +177,7 @@ function ScenarioListPage() {
         />
       </Card>
 
+      {/* Create Modal */}
       <Modal title="创建审查场景" open={createModalOpen}
         onCancel={() => { setCreateModalOpen(false); form.resetFields(); }}
         footer={null} destroyOnClose width={600}>
@@ -134,21 +188,9 @@ function ScenarioListPage() {
           <Form.Item name="description" label="场景描述">
             <TextArea rows={3} placeholder="请输入场景描述（可选）" />
           </Form.Item>
-          <Form.Item name="ruleIds" label="选择审查规则" rules={[{ required: true, message: '请至少选择一条规则' }]}>
+          <Form.Item name="libraryIds" label="选择规则库" rules={[{ required: true, message: '请至少选择一个规则库' }]}>
             <Checkbox.Group style={{ width: '100%' }}>
-              <div style={{ maxHeight: 300, overflow: 'auto' }}>
-                {allRules.map((rule) => (
-                  <div key={rule.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-                    <Checkbox value={rule.id}>
-                      <Space direction="vertical" size={0}>
-                        <Text strong>{rule.ruleName}</Text>
-                        <Text type="secondary" style={{ fontSize: 12 }}>{rule.fileType}</Text>
-                      </Space>
-                    </Checkbox>
-                  </div>
-                ))}
-                {allRules.length === 0 && <Text type="secondary">暂无可用规则，请先上传规则</Text>}
-              </div>
+              {renderLibraryCheckboxList(allLibraries)}
             </Checkbox.Group>
           </Form.Item>
           <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
@@ -160,6 +202,32 @@ function ScenarioListPage() {
         </Form>
       </Modal>
 
+      {/* Edit Modal */}
+      <Modal title={`编辑场景 - ${editingScenario?.name || ''}`} open={editModalOpen}
+        onCancel={() => { setEditModalOpen(false); editForm.resetFields(); setEditingScenario(null); }}
+        footer={null} destroyOnClose width={600}>
+        <Form form={editForm} onFinish={handleUpdate} layout="vertical">
+          <Form.Item name="name" label="场景名称" rules={[{ required: true, message: '请输入场景名称' }]}>
+            <Input placeholder="请输入场景名称" />
+          </Form.Item>
+          <Form.Item name="description" label="场景描述">
+            <TextArea rows={3} placeholder="请输入场景描述（可选）" />
+          </Form.Item>
+          <Form.Item name="libraryIds" label="选择规则库（勾选/取消勾选即可增减）" rules={[{ required: true, message: '请至少选择一个规则库' }]}>
+            <Checkbox.Group style={{ width: '100%' }}>
+              {renderLibraryCheckboxList(allLibraries)}
+            </Checkbox.Group>
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => { setEditModalOpen(false); setEditingScenario(null); }}>取消</Button>
+              <Button type="primary" htmlType="submit" loading={updating}>保存</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Detail Modal */}
       <Modal title={`场景详情 - ${detailScenario?.name || ''}`} open={detailModalOpen}
         onCancel={() => setDetailModalOpen(false)}
         footer={<Button onClick={() => setDetailModalOpen(false)}>关闭</Button>} width={600}>
@@ -168,18 +236,19 @@ function ScenarioListPage() {
             <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
               <Descriptions.Item label="场景名称">{detailScenario.name}</Descriptions.Item>
               <Descriptions.Item label="描述">{detailScenario.description || '-'}</Descriptions.Item>
-              <Descriptions.Item label="关联规则数">{detailScenario.ruleIds?.length ?? 0} 条</Descriptions.Item>
+              <Descriptions.Item label="关联规则库数">{detailScenario.libraryIds?.length ?? 0} 个</Descriptions.Item>
             </Descriptions>
-            <Title level={5}>关联规则</Title>
+            <Title level={5}>关联规则库</Title>
             <div>
-              {detailScenario.ruleIds && detailScenario.ruleIds.length > 0 ? (
+              {detailScenario.libraryIds && detailScenario.libraryIds.length > 0 ? (
                 <Space wrap>
-                  {detailScenario.ruleIds.map((id) => (
-                    <Tag key={id} color="blue">规则 #{id}</Tag>
-                  ))}
+                  {detailScenario.libraryIds.map((id) => {
+                    const lib = allLibraries.find(l => l.id === id);
+                    return <Tag key={id} color="blue">{lib ? lib.name : `规则库 #${id}`}</Tag>;
+                  })}
                 </Space>
               ) : (
-                <Text type="secondary">暂无关联规则</Text>
+                <Text type="secondary">暂无关联规则库</Text>
               )}
             </div>
           </div>

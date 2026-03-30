@@ -16,7 +16,13 @@
       "Bash(./node_modules/.bin/tsc -b)",
       "Bash(node_modules/.bin/tsc -b)",
       "Bash(npm run:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker builder:*)",
+      "WebSearch",
+      "Bash(docker images:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker ps:*)"
     ]
   }
 }

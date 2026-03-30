@@ -4,8 +4,6 @@ import { Layout, Menu, Avatar, Dropdown, Typography, Space, Tag, theme } from 'a
 import {
   DashboardOutlined,
   FileTextOutlined,
-  AppstoreOutlined,
-  AuditOutlined,
   SettingOutlined,
   UserOutlined,
   LogoutOutlined,
@@ -46,9 +44,7 @@ function AppLayout() {
 
   const menuItems: MenuProps['items'] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
-    { key: '/rules', icon: <FileTextOutlined />, label: '审查规则' },
-    { key: '/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
-    { key: '/review', icon: <AuditOutlined />, label: '文件审查' },
+    { key: '/rules', icon: <FileTextOutlined />, label: '规则与场景' },
     { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
     ...(isSupervisor ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }] : []),
   ];

@@ -1,7 +1,7 @@
 package com.aireview.entity;
 
+import com.aireview.config.SimpleJsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.*;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -26,7 +26,7 @@ public class ReviewTask {
 
     private String status;
 
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = SimpleJsonbTypeHandler.class)
     private Map<String, Object> aiResult;
 
     @TableField(fill = FieldFill.INSERT)
@@ -42,4 +42,5 @@ public class ReviewTask {
     public static final String STATUS_PROCESSING = "PROCESSING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";
+    public static final String STATUS_CANCELLED = "CANCELLED";
 }

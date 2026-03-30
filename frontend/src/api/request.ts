@@ -28,6 +28,10 @@ request.interceptors.request.use(
 
 request.interceptors.response.use(
   (response) => {
+    // Skip JSON parsing for blob responses (e.g. Excel export)
+    if (response.config.responseType === 'blob') {
+      return response;
+    }
     const res = response.data as ApiResponse;
     if (res.code !== 200) {
       message.error(res.msg || '请求失败');

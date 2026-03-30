@@ -50,7 +50,9 @@ public class AiModelService {
         if (dto.getProvider() != null) config.setProvider(dto.getProvider());
         if (dto.getModelKey() != null) config.setModelKey(dto.getModelKey());
         if (dto.getApiEndpoint() != null) config.setEndpoint(dto.getApiEndpoint());
-        if (dto.getApiKey() != null && !dto.getApiKey().isBlank()) config.setApiKey(dto.getApiKey());
+        if (dto.getApiKey() != null && !dto.getApiKey().isBlank() && !dto.getApiKey().contains("****")) {
+            config.setApiKey(dto.getApiKey());
+        }
         if (dto.getMaxTokens() != null) config.setMaxTokens(dto.getMaxTokens());
         if (dto.getTemperature() != null) config.setTemperature(dto.getTemperature());
         if (dto.getEnabled() != null) config.setIsEnabled(dto.getEnabled());
@@ -110,7 +112,13 @@ public class AiModelService {
     }
 
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent) throws Exception {
-        log.info("Calling AI model: {} at {}", config.getModelName(), config.getEndpoint());
+        String fullUrl = buildFullApiUrl(config);
+        log.info("Calling AI model: {} at {} (resolved URL: {})", config.getModelName(), config.getEndpoint(), fullUrl);
+
+        // Guard against masked API keys
+        if (config.getApiKey() == null || config.getApiKey().contains("****")) {
+            throw new RuntimeException("API Key 无效或已被脱敏，请重新配置模型的 API Key");
+        }
 
         JSONObject requestBody = new JSONObject();
         requestBody.put("model", config.getModelKey() != null && !config.getModelKey().isBlank()
@@ -132,23 +140,27 @@ public class AiModelService {
         requestBody.put("messages", messages);
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(config.getEndpoint()))
+                .uri(URI.create(fullUrl))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + config.getApiKey())
-                .timeout(Duration.ofSeconds(config.getTimeout()))
+                .timeout(Duration.ofSeconds(config.getTimeout() != null ? config.getTimeout() : 180))
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
                 .build();
+
+        log.debug("AI request body (truncated): model={}, messages count={}, content length={}",
+                requestBody.getString("model"), messages.size(), userContent.length());
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
             log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
-            throw new RuntimeException("AI model API error: HTTP " + response.statusCode());
+            throw new RuntimeException("AI API HTTP " + response.statusCode() + ": " + response.body());
         }
 
         JSONObject responseBody = JSON.parseObject(response.body());
         JSONArray choices = responseBody.getJSONArray("choices");
         if (choices == null || choices.isEmpty()) {
+            log.error("AI model returned empty choices. Full response: {}", response.body());
             throw new RuntimeException("AI model returned empty response");
         }
 
@@ -189,6 +201,81 @@ public class AiModelService {
         config.setTimeout(60);
         config.setIsEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
         return config;
+    }
+
+    private String buildFullApiUrl(AiModelConfig config) {
+        String endpoint = config.getEndpoint();
+        if (endpoint == null || endpoint.trim().isEmpty()) {
+            throw new IllegalArgumentException("API endpoint cannot be empty");
+        }
+        
+        String provider = config.getProvider() != null ? config.getProvider().toLowerCase() : "openai";
+        String baseUrl = endpoint.trim();
+        
+        // 确保URL以http开头
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+            baseUrl = "https://" + baseUrl;
+        }
+        
+        // 移除末尾的斜杠
+        if (baseUrl.endsWith("/")) {
+            baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+        }
+        
+        // 根据提供商添加API路径
+        switch (provider) {
+            case "openai":
+                if (!baseUrl.contains("/v1")) {
+                    return baseUrl + "/v1/chat/completions";
+                } else if (baseUrl.endsWith("/v1")) {
+                    return baseUrl + "/chat/completions";
+                } else {
+                    return baseUrl;
+                }
+            case "azure":
+                // Azure OpenAI 的URL通常已经包含完整的路径
+                return baseUrl;
+            case "anthropic":
+                if (!baseUrl.contains("/v1/messages")) {
+                    return baseUrl + "/v1/messages";
+                } else {
+                    return baseUrl;
+                }
+            case "moonshot":
+            case "kimi":
+                // Moonshot/Kimi API
+                if (!baseUrl.contains("/v1/chat/completions")) {
+                    return baseUrl + "/v1/chat/completions";
+                } else {
+                    return baseUrl;
+                }
+            case "baidu":
+                // 百度文心大模型API
+                if (!baseUrl.contains("/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/")) {
+                    // 如果是基础URL，需要用户指定完整路径或使用默认
+                    return baseUrl;
+                } else {
+                    return baseUrl;
+                }
+            case "alibaba":
+                // 阿里通义千问API
+                if (!baseUrl.contains("/api/v1/services/aigc/text-generation/generation")) {
+                    return baseUrl;
+                } else {
+                    return baseUrl;
+                }
+            case "xfyun":
+                // 讯飞星火API
+                if (!baseUrl.contains("/v1/chat/completions")) {
+                    return baseUrl;
+                } else {
+                    return baseUrl;
+                }
+            case "custom":
+            default:
+                // 对于自定义或其他提供商，假设用户输入的是完整URL
+                return baseUrl;
+        }
     }
 
     private String maskApiKey(String apiKey) {

@@ -11,5 +11,5 @@ public class ScenarioDTO {
     private String name;
     private String description;
     private Long creatorId;
-    private List<Long> ruleIds;
+    private List<Long> libraryIds;
 }

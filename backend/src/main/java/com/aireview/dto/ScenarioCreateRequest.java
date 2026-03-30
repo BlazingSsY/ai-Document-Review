@@ -14,6 +14,6 @@ public class ScenarioCreateRequest {
 
     private String description;
 
-    @NotEmpty(message = "At least one rule must be selected")
-    private List<Long> ruleIds;
+    @NotEmpty(message = "At least one rule library must be selected")
+    private List<Long> libraryIds;
 }

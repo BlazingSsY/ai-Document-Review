@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
@@ -66,13 +67,10 @@ public class RuleService {
         Path savedPath = uploadDir.resolve(savedFileName);
         Files.write(savedPath, file.getBytes());
 
-        // Parse and store rule content
-        String parsedContent = RuleParser.parseContent(content, fileType);
-
         Rule rule = new Rule();
         rule.setRuleName(originalFilename.replaceAll("\\.[^.]+$", ""));
         rule.setFileType(fileType);
-        rule.setContent(parsedContent);
+        rule.setContent(content); // Store raw file content; parsing happens at review time
         rule.setCreatorId(creatorId);
         rule.setLibraryId(libraryId);
         rule.setUpdatedAt(LocalDateTime.now());
@@ -145,11 +143,55 @@ public class RuleService {
         dto.setId(rule.getId());
         dto.setRuleName(rule.getRuleName());
         dto.setFileType(rule.getFileType());
-        dto.setContent(rule.getContent());
         dto.setCreatorId(rule.getCreatorId());
         dto.setLibraryId(rule.getLibraryId());
         dto.setUpdatedAt(rule.getUpdatedAt());
         dto.setIsValid(rule.getIsValid());
+
+        // Use DB content if present; otherwise fall back to reading the file from disk.
+        // This handles rules that were uploaded before the raw-content storage fix.
+        String content = rule.getContent();
+        if (content == null || content.isBlank()) {
+            content = readContentFromDisk(rule.getRuleName(), rule.getFileType());
+            if (content != null && !content.isBlank()) {
+                // Persist the recovered content so future reads are fast
+                Rule update = new Rule();
+                update.setId(rule.getId());
+                update.setContent(content);
+                update.setUpdatedAt(rule.getUpdatedAt()); // keep original updatedAt
+                ruleMapper.updateById(update);
+                log.info("Recovered and persisted content for rule id={} name='{}'",
+                        rule.getId(), rule.getRuleName());
+            }
+        }
+        dto.setContent(content);
         return dto;
+    }
+
+    /**
+     * Try to read rule content from the saved file on disk.
+     * Files are saved as "{UUID}_{ruleName}.{fileType}" under rulesDir.
+     */
+    private String readContentFromDisk(String ruleName, String fileType) {
+        if (ruleName == null || fileType == null) return null;
+        try {
+            Path dir = Path.of(rulesDir);
+            if (!Files.exists(dir)) return null;
+
+            // Saved filename ends with "_{ruleName}.{fileType}"
+            String expectedSuffix = "_" + ruleName + "." + fileType;
+            Optional<Path> match = Files.list(dir)
+                    .filter(p -> p.getFileName().toString().endsWith(expectedSuffix))
+                    .findFirst();
+
+            if (match.isPresent()) {
+                String content = Files.readString(match.get(), StandardCharsets.UTF_8);
+                log.info("Read rule content from disk: {}", match.get().getFileName());
+                return content;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to read rule content from disk for '{}': {}", ruleName, e.getMessage());
+        }
+        return null;
     }
 }

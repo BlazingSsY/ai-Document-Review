@@ -3,6 +3,7 @@ export const STATUS_LABELS: Record<string, string> = {
   processing: '处理中',
   completed: '已完成',
   failed: '失败',
+  cancelled: '已取消',
   accepted: '已采纳',
   rejected: '已拒绝',
 };
@@ -12,6 +13,7 @@ export const STATUS_COLORS: Record<string, string> = {
   processing: 'processing',
   completed: 'success',
   failed: 'error',
+  cancelled: 'warning',
   accepted: 'success',
   rejected: 'warning',
 };
@@ -37,6 +39,7 @@ export const SEVERITY_TAG_COLORS: Record<string, string> = {
 export const MODEL_PROVIDERS = [
   { label: 'OpenAI', value: 'openai' },
   { label: 'Anthropic', value: 'anthropic' },
+  { label: 'Moonshot(Kimi)', value: 'moonshot' },
   { label: '百度文心', value: 'baidu' },
   { label: '阿里通义', value: 'alibaba' },
   { label: '讯飞星火', value: 'xfyun' },

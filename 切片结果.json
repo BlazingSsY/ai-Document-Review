@@ -1,0 +1,17 @@
+{
+  "taskId" : "4e1eae973012c4dbdc7a17d6c1e34100",
+  "fileName" : "[公开] 集成式备用仪表环境鉴定试验大纲（非电磁类）.docx",
+  "timestamp" : "2026-03-30T16:23:55.472932048",
+  "chapterCount" : 1,
+  "chunkCount" : 1,
+  "chapters" : [ {
+    "title" : "",
+    "contentLength" : 37746,
+    "estimatedTokens" : 20527
+  } ],
+  "chunks" : [ {
+    "label" : "第 1 部分",
+    "estimatedTokens" : 20527,
+    "contentPreview" : "### 温度变化试验\n\n\n## 试验目的\n\n确定受试设备在规定的高低温工作温度极值之间温度变化过程中的性能特性是否符合要求。\n\n## 试验要求\n\nE/ISI-2集成式备用仪表安装于飞机驾驶舱，应通过DO－160G第4章，C类设备规定的温度和高度试验。此类试验考核E/ISI-2集成式备用仪表在表 14-1中规定的温度、高度和压力下的性能特征。\n表 14-1：温度变化条件\n\n<table border=\"1\">\n  <tr>\n    <th>序号</th>\n    <th>试验参数</th>\n    <th>试验条件</th>\n    <th>备注</th>\n  </tr>\n  <tr>\n    "
+  } ]
+}
