@@ -22,7 +22,14 @@
       "WebSearch",
       "Bash(docker images:*)",
       "Bash(docker exec:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(xargs -I{} jar tf {})",
+      "Bash(open -a Docker)",
+      "Bash(docker build:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(docker cp:*)",
+      "Bash(python3 -:*)",
+      "Bash(java -version)"
     ]
   }
 }

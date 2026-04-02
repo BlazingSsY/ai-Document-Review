@@ -44,7 +44,7 @@ services:
       start_period: 60s
     volumes:
       - upload_files:/app/uploads
-      - ./切片结果.json:/app/切片结果.json
+      - ./output:/app/output
     networks:
       - ai-review-net
 

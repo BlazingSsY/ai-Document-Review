@@ -365,7 +365,10 @@ public class ReviewService {
     }
 
     /**
-     * Save chapter/chunk debug information to 切片结果.json in the working directory.
+     * Save complete chapter/chunk information to 切片结果.json.
+     * Writes full content (no truncation) to the bind-mounted ./output directory
+     * so the file is directly accessible on the host machine.
+     * Also writes a copy to the uploads volume as a backup.
      */
     private void saveChunkDebugInfo(String taskId, String fileName,
                                      List<WordParser.Chapter> chapters,
@@ -378,20 +381,21 @@ public class ReviewService {
             debug.put("chapterCount", chapters.size());
             debug.put("chunkCount", chunks.size());
 
+            // Chapter list with FULL content (no truncation)
             List<Map<String, Object>> chapterList = new ArrayList<>();
             for (int i = 0; i < chapters.size(); i++) {
                 WordParser.Chapter ch = chapters.get(i);
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("index", i + 1);
                 m.put("title", ch.getTitle().isBlank() ? "(前言/无标题)" : ch.getTitle());
-                m.put("contentLength", ch.getContent().length());
                 m.put("estimatedTokens", ChunkUtils.estimateTokens(ch.getFullText()));
-                String preview = ch.getContent();
-                m.put("contentPreview", preview.substring(0, Math.min(500, preview.length())));
+                m.put("contentLength", ch.getContent().length());
+                m.put("content", ch.getContent());          // full content
                 chapterList.add(m);
             }
             debug.put("chapters", chapterList);
 
+            // Chunk list with FULL content (no truncation)
             List<Map<String, Object>> chunkList = new ArrayList<>();
             for (int i = 0; i < chunks.size(); i++) {
                 ChunkUtils.ChunkResult chunk = chunks.get(i);
@@ -400,27 +404,29 @@ public class ReviewService {
                 m.put("label", chunk.getLabel());
                 m.put("estimatedTokens", chunk.getEstimatedTokens());
                 m.put("contentLength", chunk.getContent().length());
-                String preview = chunk.getContent();
-                m.put("contentPreview", preview.substring(0, Math.min(500, preview.length())));
+                m.put("content", chunk.getContent());       // full content
                 chunkList.add(m);
             }
             debug.put("chunks", chunkList);
 
             String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(debug);
 
-            // Primary: save to uploads directory (volume-mounted, definitely writable)
+            // Primary: write to bind-mounted output directory (accessible on host at ./output/)
+            try {
+                Path outputDir = Path.of("/app/output");
+                Files.createDirectories(outputDir);
+                Path outputFile = outputDir.resolve("切片结果.json");
+                Files.writeString(outputFile, json);
+                log.info("切片结果.json saved to output dir: {}", outputFile.toAbsolutePath());
+            } catch (Exception ex) {
+                log.warn("Could not write to /app/output (bind mount may be unavailable): {}", ex.getMessage());
+            }
+
+            // Backup: also save to uploads volume
             Path uploadsDebugFile = Path.of(documentsDir).getParent().resolve("切片结果.json");
             Files.writeString(uploadsDebugFile, json);
-            log.info("Chunk debug info saved to uploads: {}", uploadsDebugFile.toAbsolutePath());
+            log.info("切片结果.json backup saved to uploads: {}", uploadsDebugFile.toAbsolutePath());
 
-            // Also try bind-mounted project root path
-            try {
-                Path rootDebugFile = Path.of(System.getProperty("user.dir"), "切片结果.json");
-                Files.writeString(rootDebugFile, json);
-                log.info("Chunk debug info also saved to app root: {}", rootDebugFile.toAbsolutePath());
-            } catch (Exception ex) {
-                log.debug("Could not write to app root (bind mount may be unavailable): {}", ex.getMessage());
-            }
         } catch (Exception e) {
             log.warn("Failed to save chunk debug info: {}", e.getMessage());
         }
