@@ -29,7 +29,8 @@
       "Bash(python3 -c \":*)",
       "Bash(docker cp:*)",
       "Bash(python3 -:*)",
-      "Bash(java -version)"
+      "Bash(java -version)",
+      "Bash(/usr/local/bin/docker compose:*)"
     ]
   }
 }

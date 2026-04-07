@@ -265,8 +265,101 @@ function ReviewWorkspacePage() {
       </div>
 
       <div className="review-workspace">
-        {/* Left: Summary + Log */}
+        {/* Left: AI Review Results */}
         <div className="workspace-left">
+          <div className="workspace-header">
+            <h3>审查结果</h3>
+          </div>
+
+          {issues.length > 0 && (
+            <div className="findings-summary">
+              <div className="summary-item">
+                <ExclamationCircleOutlined style={{ color: '#f5222d' }} />
+                <span>{issues.filter((i) => (i.severity as string) === 'high').length} 高</span>
+              </div>
+              <div className="summary-item">
+                <WarningOutlined style={{ color: '#fa8c16' }} />
+                <span>{issues.filter((i) => (i.severity as string) === 'medium').length} 中</span>
+              </div>
+              <div className="summary-item">
+                <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                <span>{issues.filter((i) => (i.severity as string) === 'low').length} 低</span>
+              </div>
+            </div>
+          )}
+
+          <div className="findings-list">
+            {issues.length === 0 ? (
+              <div style={{ padding: 16 }}>
+                {task.aiResult ? (
+                  <Card size="small" style={{ background: '#fafafa' }}>
+                    <Paragraph>
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13, maxHeight: 600, overflow: 'auto' }}>
+                        {JSON.stringify(task.aiResult, null, 2)}
+                      </pre>
+                    </Paragraph>
+                  </Card>
+                ) : isProcessing ? (
+                  <div style={{ textAlign: 'center', marginTop: 60 }}>
+                    <Spin size="large" />
+                    <div style={{ marginTop: 16 }}>
+                      <Text type="secondary">AI 正在审查中，请查看右侧日志面板...</Text>
+                    </div>
+                  </div>
+                ) : (
+                  <Empty description="暂无审查结果" style={{ marginTop: 40 }} />
+                )}
+              </div>
+            ) : (
+              issues.map((issue, idx) => {
+                const severity = String(issue.severity || 'low');
+                const category = issue.category ? String(issue.category) : '';
+                const explanation = issue.explanation ? String(issue.explanation) : '';
+                const originalText = issue.originalText ? String(issue.originalText) : '';
+                const suggestion = issue.suggestion ? String(issue.suggestion) : '';
+                return (
+                  <Card
+                    key={idx}
+                    size="small"
+                    className={`finding-card severity-${severity}`}
+                    style={{ marginBottom: 8 }}
+                  >
+                    <Space style={{ marginBottom: 4 }}>
+                      <Tag color={
+                        severity === 'high' ? 'red' :
+                        severity === 'medium' ? 'orange' : 'green'
+                      }>
+                        {severity === 'high' ? '高' :
+                         severity === 'medium' ? '中' : '低'}
+                      </Tag>
+                      {category && <Tag>{category}</Tag>}
+                    </Space>
+                    {explanation && (
+                      <Paragraph style={{ marginBottom: 4, fontSize: 13 }}>
+                        {explanation}
+                      </Paragraph>
+                    )}
+                    {originalText && (
+                      <div className="original-text">
+                        <Text type="secondary" style={{ fontSize: 12 }}>原文：</Text>
+                        {originalText}
+                      </div>
+                    )}
+                    {suggestion && (
+                      <div className="suggestion-text">
+                        <Text type="secondary" style={{ fontSize: 12 }}>建议：</Text>
+                        {suggestion}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Right: Summary + Log */}
+        <div className="workspace-right">
           <div className="workspace-header">
             <h3>审查概要</h3>
           </div>
@@ -370,99 +463,6 @@ function ReviewWorkspacePage() {
                 <div ref={logEndRef} />
               </div>
             </Card>
-          </div>
-        </div>
-
-        {/* Right: AI Review Results */}
-        <div className="workspace-right">
-          <div className="workspace-header">
-            <h3>审查结果</h3>
-          </div>
-
-          {issues.length > 0 && (
-            <div className="findings-summary">
-              <div className="summary-item">
-                <ExclamationCircleOutlined style={{ color: '#f5222d' }} />
-                <span>{issues.filter((i) => (i.severity as string) === 'high').length} 高</span>
-              </div>
-              <div className="summary-item">
-                <WarningOutlined style={{ color: '#fa8c16' }} />
-                <span>{issues.filter((i) => (i.severity as string) === 'medium').length} 中</span>
-              </div>
-              <div className="summary-item">
-                <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                <span>{issues.filter((i) => (i.severity as string) === 'low').length} 低</span>
-              </div>
-            </div>
-          )}
-
-          <div className="findings-list">
-            {issues.length === 0 ? (
-              <div style={{ padding: 16 }}>
-                {task.aiResult ? (
-                  <Card size="small" style={{ background: '#fafafa' }}>
-                    <Paragraph>
-                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13, maxHeight: 600, overflow: 'auto' }}>
-                        {JSON.stringify(task.aiResult, null, 2)}
-                      </pre>
-                    </Paragraph>
-                  </Card>
-                ) : isProcessing ? (
-                  <div style={{ textAlign: 'center', marginTop: 60 }}>
-                    <Spin size="large" />
-                    <div style={{ marginTop: 16 }}>
-                      <Text type="secondary">AI 正在审查中，请查看左侧日志面板...</Text>
-                    </div>
-                  </div>
-                ) : (
-                  <Empty description="暂无审查结果" style={{ marginTop: 40 }} />
-                )}
-              </div>
-            ) : (
-              issues.map((issue, idx) => {
-                const severity = String(issue.severity || 'low');
-                const category = issue.category ? String(issue.category) : '';
-                const explanation = issue.explanation ? String(issue.explanation) : '';
-                const originalText = issue.originalText ? String(issue.originalText) : '';
-                const suggestion = issue.suggestion ? String(issue.suggestion) : '';
-                return (
-                  <Card
-                    key={idx}
-                    size="small"
-                    className={`finding-card severity-${severity}`}
-                    style={{ marginBottom: 8 }}
-                  >
-                    <Space style={{ marginBottom: 4 }}>
-                      <Tag color={
-                        severity === 'high' ? 'red' :
-                        severity === 'medium' ? 'orange' : 'green'
-                      }>
-                        {severity === 'high' ? '高' :
-                         severity === 'medium' ? '中' : '低'}
-                      </Tag>
-                      {category && <Tag>{category}</Tag>}
-                    </Space>
-                    {explanation && (
-                      <Paragraph style={{ marginBottom: 4, fontSize: 13 }}>
-                        {explanation}
-                      </Paragraph>
-                    )}
-                    {originalText && (
-                      <div className="original-text">
-                        <Text type="secondary" style={{ fontSize: 12 }}>原文：</Text>
-                        {originalText}
-                      </div>
-                    )}
-                    {suggestion && (
-                      <div className="suggestion-text">
-                        <Text type="secondary" style={{ fontSize: 12 }}>建议：</Text>
-                        {suggestion}
-                      </div>
-                    )}
-                  </Card>
-                );
-              })
-            )}
           </div>
         </div>
       </div>

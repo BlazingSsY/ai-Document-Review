@@ -348,6 +348,9 @@ public class ReviewService {
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在汇总审查结果...", 95);
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
 
+            // 6.5 Persist the aggregated AI result to ./output/审查结果.json on the host
+            saveAiResultToFile(taskId, task.getFileName(), aggregatedResult);
+
             // 7. Save result and mark as completed
             task.setAiResult(aggregatedResult);
             updateTaskStatus(task, ReviewTask.STATUS_COMPLETED, null);
@@ -429,6 +432,31 @@ public class ReviewService {
 
         } catch (Exception e) {
             log.warn("Failed to save chunk debug info: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Persist the AI-aggregated review result to ./output/审查结果.json on the host
+     * (via the bind-mounted /app/output directory).
+     */
+    private void saveAiResultToFile(String taskId, String fileName,
+                                     Map<String, Object> aggregatedResult) {
+        try {
+            Map<String, Object> wrapper = new LinkedHashMap<>();
+            wrapper.put("taskId", taskId);
+            wrapper.put("fileName", fileName);
+            wrapper.put("timestamp", LocalDateTime.now().toString());
+            wrapper.put("result", aggregatedResult);
+
+            String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapper);
+
+            Path outputDir = Path.of("/app/output");
+            Files.createDirectories(outputDir);
+            Path outputFile = outputDir.resolve("审查结果.json");
+            Files.writeString(outputFile, json);
+            log.info("审查结果.json saved to: {}", outputFile.toAbsolutePath());
+        } catch (Exception e) {
+            log.warn("Failed to save 审查结果.json: {}", e.getMessage());
         }
     }
 

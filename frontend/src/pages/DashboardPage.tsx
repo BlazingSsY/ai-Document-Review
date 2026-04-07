@@ -166,29 +166,36 @@ function DashboardPage() {
     if (!selectedModel) { message.warning('请选择 AI 模型'); return; }
 
     setSubmitting(true);
+    let newTaskId: string | null = null;
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('scenarioId', String(scenarioId));
       formData.append('selectedModel', selectedModel);
       const res = await submitReview(formData);
-      const newTaskId = res.data.data.id;
-      setTaskId(newTaskId);
+      newTaskId = res.data.data.id;
       message.success('审查任务已提交');
+    } catch {
+      // handled by interceptor
+      setSubmitting(false);
+      return;
+    }
 
-      // Auto-close modal and refresh list
-      setReviewModalOpen(false);
-      resetReviewModal();
-      fetchTasks();
-      fetchStats();
+    // Close modal & reset state IMMEDIATELY on success — must happen before any
+    // further async work so that nothing can throw and leave the modal open.
+    setSubmitting(false);
+    setReviewModalOpen(false);
+    resetReviewModal();
 
-      // Subscribe to progress updates for global handler
+    // Refresh task list & stats
+    fetchTasks();
+    fetchStats();
+
+    // Subscribe to progress updates for global handler
+    if (newTaskId) {
+      setTaskId(newTaskId);
       progressHandlerRef.current = handleProgressUpdate;
       taskWebSocket.subscribe(newTaskId, handleProgressUpdate);
-    } catch {
-      // handled
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -310,7 +317,7 @@ function DashboardPage() {
             {(s === 'COMPLETED' || s === 'FAILED' || s === 'CANCELLED') && (
               <Popconfirm
                 title="确定要重新审查此任务吗？"
-                onConfirm={() => handleReReview(record.id)}
+                onConfirm={() => { handleReReview(record.id); }}
                 okText="确定"
                 cancelText="取消"
               >
@@ -322,7 +329,7 @@ function DashboardPage() {
             {(s === 'PENDING' || s === 'PROCESSING') && (
               <Popconfirm
                 title="确定要取消此审查任务吗？"
-                onConfirm={() => handleCancel(record.id)}
+                onConfirm={() => { handleCancel(record.id); }}
                 okText="确定"
                 cancelText="取消"
               >
@@ -334,7 +341,7 @@ function DashboardPage() {
             {s !== 'PROCESSING' && (
               <Popconfirm
                 title="确定要删除此任务吗？删除后不可恢复。"
-                onConfirm={() => handleDelete(record.id)}
+                onConfirm={() => { handleDelete(record.id); }}
                 okText="确定"
                 cancelText="取消"
               >
