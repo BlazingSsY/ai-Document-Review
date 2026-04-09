@@ -40,9 +40,7 @@ export const MODEL_PROVIDERS = [
   { label: 'OpenAI', value: 'openai' },
   { label: 'Anthropic', value: 'anthropic' },
   { label: 'Moonshot(Kimi)', value: 'moonshot' },
-  { label: '百度文心', value: 'baidu' },
   { label: '阿里通义', value: 'alibaba' },
-  { label: '讯飞星火', value: 'xfyun' },
   { label: '自定义', value: 'custom' },
 ];
 

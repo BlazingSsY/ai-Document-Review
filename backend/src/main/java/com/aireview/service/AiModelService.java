@@ -232,9 +232,6 @@ public class AiModelService {
                 } else {
                     return baseUrl;
                 }
-            case "azure":
-                // Azure OpenAI 的URL通常已经包含完整的路径
-                return baseUrl;
             case "anthropic":
                 if (!baseUrl.contains("/v1/messages")) {
                     return baseUrl + "/v1/messages";
@@ -242,31 +239,15 @@ public class AiModelService {
                     return baseUrl;
                 }
             case "moonshot":
-            case "kimi":
-                // Moonshot/Kimi API
+                // Moonshot
                 if (!baseUrl.contains("/v1/chat/completions")) {
                     return baseUrl + "/v1/chat/completions";
-                } else {
-                    return baseUrl;
-                }
-            case "baidu":
-                // 百度文心大模型API
-                if (!baseUrl.contains("/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/")) {
-                    // 如果是基础URL，需要用户指定完整路径或使用默认
-                    return baseUrl;
                 } else {
                     return baseUrl;
                 }
             case "alibaba":
                 // 阿里通义千问API
                 if (!baseUrl.contains("/api/v1/services/aigc/text-generation/generation")) {
-                    return baseUrl;
-                } else {
-                    return baseUrl;
-                }
-            case "xfyun":
-                // 讯飞星火API
-                if (!baseUrl.contains("/v1/chat/completions")) {
                     return baseUrl;
                 } else {
                     return baseUrl;
