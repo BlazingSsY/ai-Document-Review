@@ -39,7 +39,7 @@ export const SEVERITY_TAG_COLORS: Record<string, string> = {
 export const MODEL_PROVIDERS = [
   { label: 'OpenAI', value: 'openai' },
   { label: 'Anthropic', value: 'anthropic' },
-  { label: 'Moonshot(Kimi)', value: 'moonshot' },
+  { label: 'Moonshot', value: 'moonshot' },
   { label: '阿里通义', value: 'alibaba' },
   { label: '自定义', value: 'custom' },
 ];

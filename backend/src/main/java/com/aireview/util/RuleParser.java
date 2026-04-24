@@ -168,11 +168,9 @@ public class RuleParser {
         sp.append("【输出要求】\n");
         sp.append("请以JSON格式返回审查结果，字段说明如下：\n");
         sp.append("{\n");
-        sp.append("  \"overall_score\": 0-100的整体评分,\n");
         sp.append("  \"summary\": \"本章节审查总结（中文）\",\n");
         sp.append("  \"issues\": [\n");
         sp.append("    {\n");
-        sp.append("      \"severity\": \"high/medium/low\",\n");
         sp.append("      \"location\": \"问题所在位置（引用原文或表格位置）\",\n");
         sp.append("      \"description\": \"问题描述\",\n");
         sp.append("      \"suggestion\": \"修改建议\",\n");
