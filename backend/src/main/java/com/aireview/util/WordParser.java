@@ -4,10 +4,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.xwpf.usermodel.*;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTAbstractNum;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTLvl;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTc;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTVMerge;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STMerge;
 
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigInteger;
 import java.nio.file.Path;
 import java.util.*;
 
@@ -119,6 +126,11 @@ public class WordParser {
             Map<String, Integer> styleHeadingLevels = buildStyleHeadingMap(document, bodyElements);
             log.info("Style heading map from styles.xml: {}", styleHeadingLevels);
 
+            // Resolve auto-generated numbering (e.g. "1.", "1.1", "(1)"). Word stores list
+            // numbers in numbering.xml and renders them at display time; XWPFParagraph.getText()
+            // strips them out, so we have to recompute and prepend them ourselves.
+            NumberingFormatter numberingFormatter = new NumberingFormatter(document.getNumbering());
+
             // First pass: find the FIRST heading level that appears in the document.
             // This is the chapter-split boundary (top-level heading = chapter heading).
             int firstHeadingLevel = -1;
@@ -146,10 +158,10 @@ public class WordParser {
                 StringBuilder sb = new StringBuilder();
                 for (IBodyElement element : bodyElements) {
                     if (element instanceof XWPFParagraph p) {
-                        String t = p.getText();
+                        String t = withNumbering(p, numberingFormatter);
                         if (t != null && !t.isBlank()) sb.append(t).append("\n");
                     } else if (element instanceof XWPFTable tbl) {
-                        sb.append("\n").append(convertTableToHtml(tbl)).append("\n\n");
+                        sb.append("\n").append(convertTableToHtml(tbl, numberingFormatter)).append("\n\n");
                     }
                 }
                 chapters.add(new Chapter("", sb.toString().trim()));
@@ -166,7 +178,11 @@ public class WordParser {
 
             for (IBodyElement element : bodyElements) {
                 if (element instanceof XWPFParagraph paragraph) {
-                    String paraText = paragraph.getText();
+                    String rawText = paragraph.getText();
+                    // Reconstruct auto-numbering. This advances internal counters even when
+                    // the paragraph has no visible text, so list numbering stays correct.
+                    String numberPrefix = numberingFormatter.formatNumber(paragraph);
+                    String paraText = combinePrefixAndText(numberPrefix, rawText);
                     int headingLevel = getHeadingLevel(paragraph, styleHeadingLevels);
 
                     // Chapter boundary: save current chapter and start new one
@@ -184,7 +200,7 @@ public class WordParser {
                     // OLE/image-only paragraph: add placeholder instead of silently skipping.
                     // This preserves the knowledge that visual content (Visio diagrams, EMF
                     // charts, etc.) exists at this point in the document.
-                    if ((paraText == null || paraText.isBlank()) && hasDrawingOrPicture(paragraph)) {
+                    if ((rawText == null || rawText.isBlank()) && hasDrawingOrPicture(paragraph)) {
                         figureIndex++;
                         currentBody.append("[图表 ").append(figureIndex).append("]\n");
                         continue;
@@ -204,7 +220,7 @@ public class WordParser {
                     }
 
                 } else if (element instanceof XWPFTable table) {
-                    currentBody.append("\n").append(convertTableToHtml(table)).append("\n\n");
+                    currentBody.append("\n").append(convertTableToHtml(table, numberingFormatter)).append("\n\n");
                 }
             }
 
@@ -357,9 +373,26 @@ public class WordParser {
     }
 
     /**
-     * Convert a Word table to HTML string, preserving row/column structure.
+     * Convert a Word table to HTML, preserving row/column structure, merged cells
+     * (rowspan/colspan), and any auto-numbering inside cells (e.g. the leading
+     * "1.", "2." of a 序号 column that Word renders from numbering.xml).
+     *
+     * <p>Merge handling:
+     * <ul>
+     *   <li>Horizontal merge (gridSpan) → emitted as {@code colspan="N"}.</li>
+     *   <li>Vertical merge (vMerge): the first cell with vMerge="restart" emits
+     *       {@code rowspan="N"} where N counts subsequent rows whose corresponding
+     *       cell has vMerge="continue"; continuation cells themselves are NOT
+     *       emitted into the HTML, since their content is the merged cell's text.
+     *       The continuation cell's paragraphs are still walked so the numbering
+     *       formatter's counters stay correct.</li>
+     * </ul>
+     *
+     * @param table     the Word table to convert
+     * @param formatter shared numbering formatter (so cell auto-numbers stay in sync
+     *                  with body counters); may be {@code null} for nested calls
      */
-    private static String convertTableToHtml(XWPFTable table) {
+    private static String convertTableToHtml(XWPFTable table, NumberingFormatter formatter) {
         StringBuilder html = new StringBuilder();
         html.append("<table border=\"1\">\n");
 
@@ -369,11 +402,36 @@ public class WordParser {
             html.append("  <tr>\n");
             String cellTag = (rowIdx == 0) ? "th" : "td";
 
-            for (XWPFTableCell cell : row.getTableCells()) {
-                String cellText = extractCellText(cell);
-                html.append("    <").append(cellTag).append(">");
+            List<XWPFTableCell> cells = row.getTableCells();
+            int logicalCol = 0;
+            for (int cellIdx = 0; cellIdx < cells.size(); cellIdx++) {
+                XWPFTableCell cell = cells.get(cellIdx);
+                int gridSpan = getGridSpan(cell);
+                STMerge.Enum vMergeState = getVMergeState(cell);
+
+                if (vMergeState == STMerge.CONTINUE) {
+                    // Continuation cell: the rowspan from the matching restart cell already
+                    // covers this slot, so don't emit a <td>. Still walk the cell's paragraphs
+                    // to keep the numbering formatter's counters aligned with document order.
+                    extractCellText(cell, formatter);
+                    logicalCol += gridSpan;
+                    continue;
+                }
+
+                int rowSpan = 1;
+                if (vMergeState == STMerge.RESTART) {
+                    rowSpan = computeRowSpan(rows, rowIdx, logicalCol);
+                }
+
+                String cellText = extractCellText(cell, formatter);
+                html.append("    <").append(cellTag);
+                if (rowSpan > 1) html.append(" rowspan=\"").append(rowSpan).append("\"");
+                if (gridSpan > 1) html.append(" colspan=\"").append(gridSpan).append("\"");
+                html.append(">");
                 html.append(escapeHtml(cellText));
                 html.append("</").append(cellTag).append(">\n");
+
+                logicalCol += gridSpan;
             }
             html.append("  </tr>\n");
         }
@@ -382,17 +440,92 @@ public class WordParser {
         return html.toString();
     }
 
+    /** Number of grid columns spanned by this cell (default 1). */
+    private static int getGridSpan(XWPFTableCell cell) {
+        try {
+            CTTc tc = cell.getCTTc();
+            if (tc == null) return 1;
+            CTTcPr tcPr = tc.getTcPr();
+            if (tcPr == null || tcPr.getGridSpan() == null
+                    || tcPr.getGridSpan().getVal() == null) {
+                return 1;
+            }
+            int span = tcPr.getGridSpan().getVal().intValue();
+            return span > 0 ? span : 1;
+        } catch (Exception e) {
+            return 1;
+        }
+    }
+
     /**
-     * Recursively extract all text from a table cell, including text in nested tables.
-     * Uses getBodyElements() so nested XWPFTable objects are included, unlike getText()
-     * which only scans the cell's direct paragraph list and misses nested tables.
+     * Vertical-merge state of this cell: {@code RESTART} (first cell of merge),
+     * {@code CONTINUE} (subsequent merged cell, no visible content), or {@code null}
+     * (cell is not part of any vertical merge).
+     *
+     * <p>Per OOXML, a {@code <w:vMerge/>} element with no {@code val} attribute is a
+     * continuation; only an explicit {@code val="restart"} starts a new merge.
      */
-    private static String extractCellText(XWPFTableCell cell) {
+    private static STMerge.Enum getVMergeState(XWPFTableCell cell) {
+        try {
+            CTTc tc = cell.getCTTc();
+            if (tc == null) return null;
+            CTTcPr tcPr = tc.getTcPr();
+            if (tcPr == null) return null;
+            CTVMerge vMerge = tcPr.getVMerge();
+            if (vMerge == null) return null;
+            STMerge.Enum val = vMerge.getVal();
+            return val != null ? val : STMerge.CONTINUE;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * For a vMerge="restart" cell at {@code startLogicalCol} in row {@code startRowIdx},
+     * count how many subsequent rows have a matching vMerge="continue" cell aligned to
+     * the same logical column. Returns the total rowspan (>= 1).
+     */
+    private static int computeRowSpan(List<XWPFTableRow> rows, int startRowIdx, int startLogicalCol) {
+        int rowSpan = 1;
+        for (int r = startRowIdx + 1; r < rows.size(); r++) {
+            List<XWPFTableCell> rowCells = rows.get(r).getTableCells();
+            int col = 0;
+            XWPFTableCell match = null;
+            for (XWPFTableCell c : rowCells) {
+                int span = getGridSpan(c);
+                if (col == startLogicalCol) {
+                    match = c;
+                    break;
+                }
+                col += span;
+            }
+            if (match == null) break;
+            STMerge.Enum state = getVMergeState(match);
+            if (state == STMerge.CONTINUE) {
+                rowSpan++;
+            } else {
+                break;
+            }
+        }
+        return rowSpan;
+    }
+
+    /**
+     * Recursively extract all text from a table cell, including text in nested tables
+     * and any auto-numbering rendered by Word from numbering.xml.
+     *
+     * <p>Uses {@code getBodyElements()} so nested {@link XWPFTable} objects are included,
+     * unlike {@code getText()} which only scans the cell's direct paragraph list and misses
+     * nested tables. When {@code formatter} is non-null, paragraph text is prefixed with the
+     * computed number (e.g. "1.", "1.1", "(1)") that Word would otherwise render at display
+     * time. Without this, columns like 序号 that rely on auto-numbering come out empty.
+     */
+    private static String extractCellText(XWPFTableCell cell, NumberingFormatter formatter) {
         StringBuilder sb = new StringBuilder();
         try {
             for (IBodyElement el : cell.getBodyElements()) {
                 if (el instanceof XWPFParagraph p) {
-                    String t = p.getText();
+                    String t = (formatter != null) ? withNumbering(p, formatter) : p.getText();
                     if (t != null && !t.isBlank()) {
                         if (sb.length() > 0) sb.append(" ");
                         sb.append(t.trim());
@@ -402,7 +535,7 @@ public class WordParser {
                         StringBuilder rowSb = new StringBuilder();
                         for (XWPFTableCell nCell : nRow.getTableCells()) {
                             if (rowSb.length() > 0) rowSb.append(" | ");
-                            rowSb.append(extractCellText(nCell));
+                            rowSb.append(extractCellText(nCell, formatter));
                         }
                         if (rowSb.length() > 0) {
                             if (sb.length() > 0) sb.append("; ");
@@ -500,6 +633,231 @@ public class WordParser {
             return xml.contains("<w:drawing") || xml.contains("<w:pict") || xml.contains("<w:object");
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    /**
+     * Prepend any auto-numbering text to the raw paragraph text, with a single space
+     * separator. Returns the raw text unchanged if there is no numbering.
+     */
+    private static String combinePrefixAndText(String prefix, String rawText) {
+        boolean hasPrefix = prefix != null && !prefix.isBlank();
+        boolean hasText = rawText != null && !rawText.isBlank();
+        if (hasPrefix && hasText) return prefix + " " + rawText;
+        if (hasPrefix) return prefix;
+        return rawText;
+    }
+
+    /**
+     * Convenience for the no-headings code path: get the paragraph text with auto-numbering
+     * prepended. Always advances the formatter's counters, even if the paragraph is empty.
+     */
+    private static String withNumbering(XWPFParagraph paragraph, NumberingFormatter formatter) {
+        String prefix = formatter.formatNumber(paragraph);
+        return combinePrefixAndText(prefix, paragraph.getText());
+    }
+
+    /**
+     * Reconstructs the visible auto-numbering text (e.g. "1.", "1.1", "(1)", "一、") that
+     * Word renders for paragraphs with a numbering definition.
+     *
+     * <p>POI exposes numbering metadata through {@code paragraph.getNumID()} and the
+     * document's {@link XWPFNumbering} table, but it does NOT pre-render the actual number
+     * — {@code paragraph.getText()} returns the body text without the leading number. The
+     * number we see in Word is computed at render time by walking numbering.xml. This class
+     * does that walk: for each numbered paragraph it looks up the level template (lvlText,
+     * e.g. "%1.%2."), formats the per-level counters (decimal, letter, roman, Chinese), and
+     * returns the resulting prefix.
+     *
+     * <p>Counter rules (matches Word's behavior):
+     * <ul>
+     *   <li>Counters are scoped per (numId, level). Different numId values are independent
+     *       lists with independent counts.</li>
+     *   <li>When a paragraph at level N is encountered, level N's counter increments (or
+     *       initializes from the level's start value), and all deeper-level counters reset
+     *       so the next nested item starts fresh.</li>
+     * </ul>
+     */
+    private static class NumberingFormatter {
+        private final XWPFNumbering numbering;
+        // key = "numId:level", value = current count
+        private final Map<String, Integer> counters = new HashMap<>();
+
+        NumberingFormatter(XWPFNumbering numbering) {
+            this.numbering = numbering;
+        }
+
+        /**
+         * Compute the numbering prefix for the given paragraph, or {@code null} if it has
+         * no numbering, the numbering definition is missing, or the format is non-numeric
+         * (bullets / "none").
+         */
+        String formatNumber(XWPFParagraph paragraph) {
+            if (numbering == null || paragraph == null) return null;
+            BigInteger numId;
+            BigInteger ilvl;
+            try {
+                numId = paragraph.getNumID();
+                ilvl = paragraph.getNumIlvl();
+            } catch (Exception e) {
+                return null;
+            }
+            // numId == 0 is OOXML's explicit "no numbering"; treat the same as null.
+            if (numId == null || numId.signum() == 0) return null;
+
+            try {
+                XWPFNum num = numbering.getNum(numId);
+                if (num == null || num.getCTNum() == null
+                        || num.getCTNum().getAbstractNumId() == null) {
+                    return null;
+                }
+                BigInteger absNumId = num.getCTNum().getAbstractNumId().getVal();
+                XWPFAbstractNum absNum = numbering.getAbstractNum(absNumId);
+                if (absNum == null) return null;
+                CTAbstractNum ctAbsNum = absNum.getCTAbstractNum();
+                if (ctAbsNum == null) return null;
+
+                List<CTLvl> lvlList = ctAbsNum.getLvlList();
+                if (lvlList == null || lvlList.isEmpty()) return null;
+
+                int currentLevel = (ilvl != null) ? ilvl.intValue() : 0;
+                if (currentLevel < 0 || currentLevel >= lvlList.size()) return null;
+                CTLvl lvl = lvlList.get(currentLevel);
+
+                String numFmt = "decimal";
+                if (lvl.getNumFmt() != null && lvl.getNumFmt().getVal() != null) {
+                    numFmt = lvl.getNumFmt().getVal().toString();
+                }
+                // Skip non-numeric formats — bullets render as glyphs, not numbers, and
+                // "none" explicitly suppresses the prefix.
+                if ("bullet".equalsIgnoreCase(numFmt) || "none".equalsIgnoreCase(numFmt)) {
+                    return null;
+                }
+
+                int startVal = 1;
+                if (lvl.getStart() != null && lvl.getStart().getVal() != null) {
+                    startVal = lvl.getStart().getVal().intValue();
+                }
+
+                // Increment this level's counter (or initialize from start value).
+                String key = numId + ":" + currentLevel;
+                int current = counters.getOrDefault(key, startVal - 1) + 1;
+                counters.put(key, current);
+                // Reset deeper counters so the next nested item restarts.
+                for (int deeper = currentLevel + 1; deeper < lvlList.size(); deeper++) {
+                    counters.remove(numId + ":" + deeper);
+                }
+
+                String lvlText = (lvl.getLvlText() != null && lvl.getLvlText().getVal() != null)
+                        ? lvl.getLvlText().getVal()
+                        : ("%" + (currentLevel + 1) + ".");
+
+                // Substitute %1, %2, ... with the formatted counter for that ancestor level.
+                StringBuilder result = new StringBuilder();
+                int i = 0;
+                while (i < lvlText.length()) {
+                    char c = lvlText.charAt(i);
+                    if (c == '%' && i + 1 < lvlText.length()
+                            && Character.isDigit(lvlText.charAt(i + 1))) {
+                        int placeholder = lvlText.charAt(i + 1) - '0';
+                        int targetLevel = placeholder - 1;
+                        int value = (targetLevel >= 0 && targetLevel <= currentLevel)
+                                ? counters.getOrDefault(numId + ":" + targetLevel, 0)
+                                : 0;
+                        String fmt = numFmt;
+                        if (targetLevel >= 0 && targetLevel < lvlList.size()) {
+                            CTLvl ancestorLvl = lvlList.get(targetLevel);
+                            if (ancestorLvl.getNumFmt() != null
+                                    && ancestorLvl.getNumFmt().getVal() != null) {
+                                fmt = ancestorLvl.getNumFmt().getVal().toString();
+                            }
+                        }
+                        result.append(formatValue(value, fmt));
+                        i += 2;
+                    } else {
+                        result.append(c);
+                        i++;
+                    }
+                }
+                return result.toString();
+            } catch (Exception e) {
+                log.debug("Failed to format numbering for paragraph: {}", e.getMessage());
+                return null;
+            }
+        }
+
+        private static String formatValue(int value, String numFmt) {
+            if (numFmt == null) return Integer.toString(value);
+            switch (numFmt.toLowerCase()) {
+                case "decimal":
+                    return Integer.toString(value);
+                case "decimalzero":
+                    return value < 10 ? "0" + value : Integer.toString(value);
+                case "lowerletter":
+                    return toLetters(value, false);
+                case "upperletter":
+                    return toLetters(value, true);
+                case "lowerroman":
+                    return toRoman(value).toLowerCase();
+                case "upperroman":
+                    return toRoman(value);
+                case "chinesecounting":
+                case "chinesecountingthousand":
+                case "ideographdigital":
+                case "japanesecounting":
+                case "taiwanesecounting":
+                    return toChineseCount(value);
+                case "decimalfullwidth":
+                    return toFullWidthDigits(value);
+                default:
+                    return Integer.toString(value);
+            }
+        }
+
+        private static String toLetters(int n, boolean upper) {
+            if (n <= 0) return Integer.toString(n);
+            StringBuilder sb = new StringBuilder();
+            while (n > 0) {
+                int rem = (n - 1) % 26;
+                sb.insert(0, (char) ((upper ? 'A' : 'a') + rem));
+                n = (n - 1) / 26;
+            }
+            return sb.toString();
+        }
+
+        private static String toRoman(int n) {
+            if (n <= 0) return Integer.toString(n);
+            int[] values = {1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1};
+            String[] symbols = {"M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"};
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < values.length; i++) {
+                while (n >= values[i]) {
+                    sb.append(symbols[i]);
+                    n -= values[i];
+                }
+            }
+            return sb.toString();
+        }
+
+        private static String toChineseCount(int n) {
+            if (n <= 0) return Integer.toString(n);
+            String[] digits = {"零", "一", "二", "三", "四", "五", "六", "七", "八", "九"};
+            if (n < 10) return digits[n];
+            if (n < 20) return n == 10 ? "十" : "十" + digits[n - 10];
+            if (n < 100) {
+                int tens = n / 10;
+                int ones = n % 10;
+                return digits[tens] + "十" + (ones == 0 ? "" : digits[ones]);
+            }
+            return Integer.toString(n);
+        }
+
+        private static String toFullWidthDigits(int n) {
+            StringBuilder sb = new StringBuilder();
+            for (char c : Integer.toString(n).toCharArray()) {
+                sb.append((char) (c - '0' + 0xFF10));
+            }
+            return sb.toString();
         }
     }
 

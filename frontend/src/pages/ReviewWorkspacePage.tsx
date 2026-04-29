@@ -15,7 +15,6 @@ import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
   WarningOutlined,
-  ExclamationCircleOutlined,
   CloseCircleOutlined,
   LoadingOutlined,
   InfoCircleOutlined,
@@ -271,23 +270,6 @@ function ReviewWorkspacePage() {
             <h3>审查结果</h3>
           </div>
 
-          {issues.length > 0 && (
-            <div className="findings-summary">
-              <div className="summary-item">
-                <ExclamationCircleOutlined style={{ color: '#f5222d' }} />
-                <span>{issues.filter((i) => (i.severity as string) === 'high').length} 高</span>
-              </div>
-              <div className="summary-item">
-                <WarningOutlined style={{ color: '#fa8c16' }} />
-                <span>{issues.filter((i) => (i.severity as string) === 'medium').length} 中</span>
-              </div>
-              <div className="summary-item">
-                <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                <span>{issues.filter((i) => (i.severity as string) === 'low').length} 低</span>
-              </div>
-            </div>
-          )}
-
           <div className="findings-list">
             {issues.length === 0 ? (
               <div style={{ padding: 16 }}>
@@ -312,37 +294,36 @@ function ReviewWorkspacePage() {
               </div>
             ) : (
               issues.map((issue, idx) => {
-                const severity = String(issue.severity || 'low');
                 const category = issue.category ? String(issue.category) : '';
-                const explanation = issue.explanation ? String(issue.explanation) : '';
-                const originalText = issue.originalText ? String(issue.originalText) : '';
+                const description = issue.description ? String(issue.description)
+                  : issue.explanation ? String(issue.explanation) : '';
+                const location = issue.location ? String(issue.location)
+                  : issue.originalText ? String(issue.originalText) : '';
                 const suggestion = issue.suggestion ? String(issue.suggestion) : '';
+                const rule = issue.rule ? String(issue.rule) : '';
                 return (
                   <Card
                     key={idx}
                     size="small"
-                    className={`finding-card severity-${severity}`}
+                    className="finding-card"
                     style={{ marginBottom: 8 }}
                   >
-                    <Space style={{ marginBottom: 4 }}>
-                      <Tag color={
-                        severity === 'high' ? 'red' :
-                        severity === 'medium' ? 'orange' : 'green'
-                      }>
-                        {severity === 'high' ? '高' :
-                         severity === 'medium' ? '中' : '低'}
-                      </Tag>
-                      {category && <Tag>{category}</Tag>}
-                    </Space>
-                    {explanation && (
-                      <Paragraph style={{ marginBottom: 4, fontSize: 13 }}>
-                        {explanation}
-                      </Paragraph>
+                    {(category || rule) && (
+                      <Space style={{ marginBottom: 4 }} wrap>
+                        {category && <Tag>{category}</Tag>}
+                        {rule && <Tag color="blue">{rule}</Tag>}
+                      </Space>
                     )}
-                    {originalText && (
+                    {description && (
+                      <div style={{ marginBottom: 4 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>问题：</Text>
+                        <span style={{ fontSize: 13 }}>{description}</span>
+                      </div>
+                    )}
+                    {location && (
                       <div className="original-text">
-                        <Text type="secondary" style={{ fontSize: 12 }}>原文：</Text>
-                        {originalText}
+                        <Text type="secondary" style={{ fontSize: 12 }}>位置：</Text>
+                        {location}
                       </div>
                     )}
                     {suggestion && (

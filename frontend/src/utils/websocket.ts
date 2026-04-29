@@ -5,6 +5,7 @@ export interface TaskProgressMessage {
   status: string;
   progress: number;
   message?: string;
+  timestamp?: number;
 }
 
 class TaskWebSocket {
@@ -13,10 +14,24 @@ class TaskWebSocket {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  // Belt-and-suspenders dedupe: even if the connect()/subscribe() guards miss
+  // an edge case, the backend stamps every broadcast with a timestamp. Drop
+  // any message whose key has been seen recently.
+  private seenMessageKeys: Set<string> = new Set();
+  private seenMessageQueue: string[] = [];
+  private static readonly DEDUPE_WINDOW = 200;
 
   connect() {
     const token = localStorage.getItem('token');
     if (!token) return;
+
+    // Idempotent: reuse the existing connection if it's already open or connecting.
+    // Without this guard each navigation/strict-mode remount would spawn a new
+    // WebSocket; old sockets stay open and all of them dispatch every broadcast,
+    // which is what causes duplicated log lines in the workspace.
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -32,6 +47,17 @@ class TaskWebSocket {
     this.ws.onmessage = (event) => {
       try {
         const data: TaskProgressMessage = JSON.parse(event.data);
+        const key = `${data.taskId}|${data.timestamp ?? ''}|${data.status}|${data.progress ?? ''}|${data.message ?? ''}`;
+        if (this.seenMessageKeys.has(key)) {
+          return;
+        }
+        this.seenMessageKeys.add(key);
+        this.seenMessageQueue.push(key);
+        if (this.seenMessageQueue.length > TaskWebSocket.DEDUPE_WINDOW) {
+          const evicted = this.seenMessageQueue.shift();
+          if (evicted) this.seenMessageKeys.delete(evicted);
+        }
+
         const taskHandlers = this.handlers.get(data.taskId);
         if (taskHandlers) {
           taskHandlers.forEach((handler) => handler(data));
@@ -65,6 +91,7 @@ class TaskWebSocket {
 
   subscribe(taskId: string, handler: MessageHandler) {
     const existing = this.handlers.get(taskId) || [];
+    if (existing.includes(handler)) return;
     existing.push(handler);
     this.handlers.set(taskId, existing);
   }

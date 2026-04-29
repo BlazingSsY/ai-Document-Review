@@ -15,7 +15,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -41,6 +43,17 @@ public class ReviewService {
     private final AiModelService aiModelService;
     private final WebSocketService webSocketService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * Self-reference to invoke {@code @Async} methods through the Spring proxy.
+     * Calling {@code this.executeReviewAsync(...)} bypasses the AOP proxy, which makes
+     * the call run synchronously on the request thread — that's exactly what was
+     * blocking the upload response and leaving the dashboard modal stuck open.
+     * {@code @Lazy} breaks the bean's self-referential init cycle.
+     */
+    @Lazy
+    @Autowired
+    private ReviewService self;
 
     /** Tracks cancelled task IDs so the async loop can exit early. */
     private final Set<String> cancelledTasks = ConcurrentHashMap.newKeySet();
@@ -98,8 +111,8 @@ public class ReviewService {
         log.info("Review task created: {} for file {} using model {}",
                 task.getId(), originalFilename, selectedModel);
 
-        // Start async processing
-        executeReviewAsync(task.getId());
+        // Start async processing — must go through the proxy so @Async actually fires.
+        self.executeReviewAsync(task.getId());
 
         return toDTO(task);
     }
@@ -234,7 +247,7 @@ public class ReviewService {
         reviewTaskMapper.insert(task);
 
         log.info("Re-review task created: {} from original: {}", task.getId(), taskId);
-        executeReviewAsync(task.getId());
+        self.executeReviewAsync(task.getId());
         return toDTO(task);
     }
 
@@ -623,24 +636,16 @@ public class ReviewService {
                                 opinionCell.setCellValue(opinion);
                                 opinionCell.setCellStyle(dataStyle);
 
-                                // 判定依据 (location + rule + severity)
+                                // 判定依据 (location + rule)
                                 String location = issue.get("location") != null
                                         ? issue.get("location").toString() : "";
                                 String rule = issue.get("rule") != null
                                         ? issue.get("rule").toString() : "";
-                                String severity = issue.get("severity") != null
-                                        ? issue.get("severity").toString() : "";
                                 StringBuilder basis = new StringBuilder();
                                 if (!location.isEmpty()) basis.append("位置：").append(location);
                                 if (!rule.isEmpty()) {
                                     if (basis.length() > 0) basis.append("\n");
                                     basis.append("规则：").append(rule);
-                                }
-                                if (!severity.isEmpty()) {
-                                    if (basis.length() > 0) basis.append("\n");
-                                    basis.append("严重程度：").append(
-                                            "high".equals(severity) ? "高" :
-                                            "medium".equals(severity) ? "中" : "低");
                                 }
                                 Cell basisCell = row.createCell(3);
                                 basisCell.setCellValue(basis.toString());

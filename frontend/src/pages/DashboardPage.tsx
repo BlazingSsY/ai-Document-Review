@@ -176,8 +176,14 @@ function DashboardPage() {
       newTaskId = res.data.data.id;
       message.success('审查任务已提交');
     } catch {
-      // handled by interceptor
+      // The interceptor already surfaced the error. Even on failure (e.g. client-side
+      // timeout) the task may have been created server-side, so refresh the list and
+      // close the modal — leaving it stuck open is worse than closing it eagerly.
       setSubmitting(false);
+      setReviewModalOpen(false);
+      resetReviewModal();
+      fetchTasks();
+      fetchStats();
       return;
     }
 

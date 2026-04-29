@@ -34,6 +34,11 @@ export interface ReviewListParams {
 export function submitReview(formData: FormData) {
   return request.post<ApiResponse<ReviewTask>>('/reviews/execute', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    // Uploads carry the document body, so the default 30s timeout is too aggressive
+    // for large files on slow networks. The handler returns as soon as the task
+    // record is inserted and async review is dispatched, so this is just an upper
+    // bound on the upload itself.
+    timeout: 120000,
   });
 }
 

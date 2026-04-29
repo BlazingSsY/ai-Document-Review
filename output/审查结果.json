@@ -1,746 +1,701 @@
 {
-  "taskId" : "6c9b25259c17af53046c50af6fa64228",
+  "taskId" : "e1787d66902a5e280b8a99bebf648a10",
   "fileName" : "[公开] 集成式备用仪表环境鉴定试验大纲（非电磁类）.docx",
-  "timestamp" : "2026-04-08T06:53:53.225781972",
+  "timestamp" : "2026-04-29T15:22:01.634771084",
   "result" : {
     "allIssues" : [ {
-      "severity" : "medium",
-      "location" : "受试/陪试设备部分",
-      "description" : "受试设备构型状态、陪试设备、搭接要求、工作状态均引用其他章节，但未在本章节给出具体信息。",
-      "suggestion" : "补充6.1节、6.4节、6.5节相关内容，明确受试设备构型状态、陪试设备、搭接要求、工作状态的具体信息。",
-      "rule" : "G-1-test_unit"
+      "location" : "试验要求",
+      "description" : "引用的表格编号表 14-1 未在文档中提供",
+      "suggestion" : "提供完整的表格 14-1 内容",
+      "rule" : "G-16-pic_sheet"
     }, {
-      "severity" : "medium",
-      "location" : "试验设备、测试设备及要求部分",
-      "description" : "表14-2中部分设备的技术要求/精度未给出具体数值。",
-      "suggestion" : "补充表14-2中专用测试设备的技术要求/精度信息。",
+      "location" : "试验设备、测试设备及要求",
+      "description" : "引用的表格编号表 14-2 未在文档中提供",
+      "suggestion" : "提供完整的表格 14-2 内容",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "试验布置和连接",
+      "description" : "引用的图表编号图 14-1 和图 14-2 未在文档中提供",
+      "suggestion" : "提供完整的图表 14-1 和图 14-2 内容",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "试验程序",
+      "description" : "引用的图表编号图 14-3 未在文档中提供",
+      "suggestion" : "提供完整的图表 14-3 内容",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "试验设备、测试设备及要求",
+      "description" : "表格中部分设备的技术要求/精度列信息缺失",
+      "suggestion" : "补充完整表格中所有设备的技术要求/精度信息",
       "rule" : "G-10-Test equipment and certificates"
     }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "图14-1、图14-2、图14-3未提供，无法判断试验布置、连接、控制曲线是否合理。",
-      "suggestion" : "补充图14-1、图14-2、图14-3，明确试验布置、连接、控制曲线的具体要求。",
+      "location" : "受试/陪试设备",
+      "description" : "受试设备和陪试设备的详细构型、搭接要求、工作状态均引用其他章节，但未在文档中提供具体内容",
+      "suggestion" : "提供6.1节、6.4节和6.5节的具体内容或在文档中直接描述相关信息",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及试验前准备检查",
+      "suggestion" : "补充试验前的准备检查项目和标准",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "试验要求",
+      "description" : "引用的表格15-1中“周期数”一栏在“高温高湿”行缺失数据",
+      "suggestion" : "补充“高温高湿”行的“周期数”数据",
       "rule" : "G-16-pic_sheet"
     }, {
-      "severity" : "low",
-      "location" : "试验程序部分",
-      "description" : "工作状态2的描述不明确，未给出具体定义。",
-      "suggestion" : "明确工作状态2的具体含义和要求。",
-      "rule" : "G-5-mode"
+      "location" : "试验设备、测试设备及要求",
+      "description" : "表格15-2中序号列缺失序号",
+      "suggestion" : "补充表格15-2中各行的序号",
+      "rule" : "G-16-pic_sheet"
     }, {
-      "severity" : "low",
-      "location" : "试验判据部分",
-      "description" : "QPAT1-1、QPAT2、QPAT3和QPAT4检查的具体内容未给出。",
-      "suggestion" : "补充12.2章节中QPAT1-1、QPAT2、QPAT3和QPAT4检查的具体内容和要求。",
-      "rule" : "G-3-functional_check"
+      "location" : "试验程序",
+      "description" : "引用的图表4、图表5、图表6未提供",
+      "suggestion" : "提供缺失的图表4、图表5、图表6",
+      "rule" : "G-16-pic_sheet"
     }, {
-      "severity" : "medium",
-      "location" : "试验要求部分",
-      "description" : "缺少试验单位和试验场所的具体信息",
-      "suggestion" : "补充具体的试验单位和试验场所信息",
+      "location" : "试验要求",
+      "description" : "未提供试验单位信息",
+      "suggestion" : "补充具体的试验单位信息",
       "rule" : "G-1-test_unit"
     }, {
-      "severity" : "medium",
-      "location" : "表 15-1中的高温高湿阶段",
-      "description" : "未提供周期数的具体数值",
-      "suggestion" : "补充高温高湿阶段的周期数",
+      "location" : "试验要求",
+      "description" : "未提供试验场所信息",
+      "suggestion" : "补充具体的试验场所信息",
+      "rule" : "G-1-test_unit"
+    }, {
+      "location" : "试验程序",
+      "description" : "引用的'12.2章节表12-2'未在文档中提供",
+      "suggestion" : "提供缺失的'12.2章节表12-2'",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "表 16-1",
+      "description" : "表格中+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息缺失",
+      "suggestion" : "补充+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息",
       "rule" : "G-2-Project_omissions"
     }, {
-      "severity" : "medium",
-      "location" : "表 15-1中的降温阶段",
-      "description" : "未提供周期数和试验允差的具体数值",
-      "suggestion" : "补充降温阶段的周期数和试验允差",
+      "location" : "表 16-2",
+      "description" : "表格中+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息缺失",
+      "suggestion" : "补充+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息",
       "rule" : "G-2-Project_omissions"
     }, {
-      "severity" : "medium",
       "location" : "试验设备、测试设备及要求部分",
-      "description" : "序号列缺失具体序号",
-      "suggestion" : "补充设备信息表中的序号列",
-      "rule" : "G-11-auxiliary_facilities"
-    }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "引用的图表编号未在文档中提供",
-      "suggestion" : "提供图表 15-1、15-2和15-3的具体内容或确认其在文档中的其他位置",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "受试/陪试设备部分",
-      "description" : "陪试设备的具体信息未提供，仅提到详见6.5节",
-      "suggestion" : "补充陪试设备的具体信息或确认其在文档中的其他位置",
+      "description" : "设备信息表中序号列未填写任何序号，影响表格信息的完整性和条理性",
+      "suggestion" : "补充设备信息表中各设备的序号，确保表格信息的完整性和条理性",
       "rule" : "G-2-Project_omissions"
     }, {
-      "severity" : "medium",
-      "location" : "受试设备、试验装置（试验前）的制造符合性要求部分",
-      "description" : "引用的“6.试验产品/设备说明”和“12.1要求”未在文档中提供",
-      "suggestion" : "提供相关章节的具体内容或确认其在文档中的其他位置",
-      "rule" : "G-2-Project_omissions"
-    }, {
-      "severity" : "medium",
       "location" : "表 16-1、表 16-2、表 16-3",
-      "description" : "部分表格内容缺失，如表 16-1 中 +Y/－Y 和 +Z/－Z 方向的试验条件未给出，表 16-2 中同样缺少 +Y/－Y 和 +Z/－Z 方向的试验条件。",
-      "suggestion" : "补充完整所有缺失的试验条件，确保表格信息的完整性。",
-      "rule" : "G-2-Project_omissions"
-    }, {
-      "severity" : "medium",
-      "location" : "表 16-4",
-      "description" : "设备信息表中序号列缺失，部分设备的技术要求/精度未给出。",
-      "suggestion" : "补充设备信息表中缺失的序号列，完善所有设备的技术要求/精度信息。",
-      "rule" : "G-2-Project_omissions"
-    }, {
-      "severity" : "low",
-      "location" : "图 16-1、图 16-2、图 16-3、图 16-4、图 16-5、图 16-6",
-      "description" : "引用的图表未提供，无法验证图表内容的准确性和完整性。",
-      "suggestion" : "提供所有引用的图表，确保图表内容与文档描述一致。",
+      "description" : "表格中存在空白单元格，未填写具体内容",
+      "suggestion" : "补充完整所有空白单元格，确保表格信息的完整性",
       "rule" : "G-16-pic_sheet"
     }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "试验程序描述中多次提到“按照12.2章节表12-2要求进行QPAT检查”，但文档中未提供12.2章节的具体内容。",
-      "suggestion" : "补充12.2章节的具体内容，确保试验程序描述的完整性和可执行性。",
-      "rule" : "G-2-Project_omissions"
+      "location" : "表 16-4",
+      "description" : "表 16-4中序号列全部缺失",
+      "suggestion" : "补充表 16-4中所有缺失的序号列",
+      "rule" : "G-16-pic_sheet"
     }, {
-      "severity" : "low",
-      "location" : "受试/陪试设备部分",
-      "description" : "陪试设备的具体信息仅提到“详见6.5节”，但文档中未提供6.5节的内容。",
-      "suggestion" : "提供6.5节的具体内容，明确陪试设备的详细信息。",
-      "rule" : "G-2-Project_omissions"
+      "location" : "表 16-4",
+      "description" : "表 16-4中部分设备的技术要求/精度列信息缺失",
+      "suggestion" : "补充表 16-4中所有缺失的技术要求/精度信息",
+      "rule" : "G-16-pic_sheet"
     }, {
-      "severity" : "medium",
+      "location" : "章节中的多个表格",
+      "description" : "表格中存在空白行，未填写任何信息",
+      "suggestion" : "删除所有空白行或补充完整相关信息",
+      "rule" : "G-16-pic_sheet"
+    }, {
       "location" : "图表 15",
       "description" : "缺少传感器安装位置的描述",
       "suggestion" : "补充传感器安装位置的具体描述",
       "rule" : "G-4-Pretest_preparation"
     }, {
-      "severity" : "medium",
       "location" : "试验设备、测试设备及要求部分",
-      "description" : "部分设备的技术要求/精度列留空，未给出具体要求",
+      "description" : "加速度传感器的校验方式未给出",
+      "suggestion" : "补充加速度传感器的校验方式",
+      "rule" : "G-10-Test equipment and certificates"
+    }, {
+      "location" : "试验设备、测试设备及要求部分",
+      "description" : "数字式振动控制器的校验方式未给出",
+      "suggestion" : "补充数字式振动控制器的校验方式",
+      "rule" : "G-10-Test equipment and certificates"
+    }, {
+      "location" : "试验程序部分",
+      "description" : "未提及试验前准备检查",
+      "suggestion" : "补充试验前准备检查的相关描述",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "试验设备、测试设备及要求",
+      "description" : "表格中序号列未填写序号",
+      "suggestion" : "补充完整表格中的序号列",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "试验布置和连接",
+      "description" : "引用的图表编号与实际提供的图表编号不一致",
+      "suggestion" : "更正引用的图表编号，确保与实际图表编号一致",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "试验设备、测试设备及要求",
+      "description" : "高低温湿热试验箱的校验方式未填写",
+      "suggestion" : "补充高低温湿热试验箱的校验方式",
+      "rule" : "G-10-Test equipment and certificates"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及试验前准备检查",
+      "suggestion" : "补充试验前准备检查的相关描述",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及功能模式检查",
+      "suggestion" : "补充功能模式检查的相关描述",
+      "rule" : "G-5-mode"
+    }, {
+      "location" : "试验目的",
+      "description" : "未提及具体的试验单位和试验场所",
+      "suggestion" : "补充具体的试验单位和试验场所信息",
+      "rule" : "G-1-test_unit"
+    }, {
+      "location" : "表 19-1：污染液的种类和液体温度表",
+      "description" : "表格中序号列未填写序号",
+      "suggestion" : "补充完整表格中的序号列",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "表 19-2：设备信息表",
+      "description" : "表格中序号列未填写序号",
+      "suggestion" : "补充完整表格中的序号列",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "试验设备、测试设备及要求",
+      "description" : "表格中包含的设备型号'5C6363-0815'未提供技术要求/精度",
+      "suggestion" : "补充设备型号'5C6363-0815'的技术要求/精度",
+      "rule" : "G-10-Test equipment and certificates"
+    }, {
+      "location" : "试验程序",
+      "description" : "未明确说明试验条件的具体内容",
+      "suggestion" : "在试验程序中明确试验条件的具体内容",
+      "rule" : "G-15-Test_conditions"
+    }, {
+      "location" : "试验要求",
+      "description" : "未明确提及试验单位和试验场所",
+      "suggestion" : "补充具体的试验单位和试验场所信息",
+      "rule" : "G-1-test_unit"
+    }, {
+      "location" : "试验设备、测试设备及要求",
+      "description" : "设备信息表中部分设备的技术要求/精度列显示为'/'，表示信息缺失",
+      "suggestion" : "补充完整所有设备的技术要求和精度信息",
+      "rule" : "G-10-Test equipment and certificates"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及试验前功能性能检查的相关描述",
+      "suggestion" : "补充试验前功能性能检查的描述",
+      "rule" : "G-3-functional_check"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及试验前准备检查的相关描述",
+      "suggestion" : "补充试验前准备检查的描述",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "受试/陪试设备",
+      "description" : "陪试设备的具体信息在6.5节提及，但本章节未给出具体内容",
+      "suggestion" : "在本章节补充陪试设备的详细信息",
+      "rule" : "G-11-auxiliary_facilities"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及循环/不同面试验的相关内容",
+      "suggestion" : "若涉及循环/不同面试验，需补充相关描述；若不涉及，则无需修改",
+      "rule" : "G-14-Cyclic/Different Surface Testing"
+    }, {
+      "location" : "试验要求",
+      "description" : "未明确试验条件的具体内容，如温度、湿度等",
+      "suggestion" : "在每个相关小节中明确试验条件的具体内容",
+      "rule" : "G-15-Test_conditions"
+    }, {
+      "location" : "表 21-2：可燃性试验受试样件清单",
+      "description" : "表格中部分条目未填写具体信息，如序号、图号/型号、材料、尺寸等列存在空白",
+      "suggestion" : "补充完整表格中缺失的信息",
+      "rule" : "G-11-auxiliary_facilities"
+    }, {
+      "location" : "表 21-3：设备信息表",
+      "description" : "表格中部分条目未填写具体信息，如序号、技术要求/精度等列存在空白",
+      "suggestion" : "补充完整表格中缺失的信息",
+      "rule" : "G-10-Test equipment and certificates"
+    }, {
+      "location" : "试验程序部分",
+      "description" : "未提及试验前准备检查的具体内容",
+      "suggestion" : "补充试验前准备检查的具体内容，确保符合试验规范要求",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "试验程序部分",
+      "description" : "未提及功能模式检查的具体内容",
+      "suggestion" : "补充功能模式检查的具体内容，确保符合试验规范要求",
+      "rule" : "G-5-mode"
+    }, {
+      "location" : "试验程序部分",
+      "description" : "未提及试验前功能性能检查的具体内容",
+      "suggestion" : "补充试验前功能性能检查的具体内容，确保符合试验规范要求",
+      "rule" : "G-3-functional_check"
+    }, {
+      "location" : "章节内容",
+      "description" : "未提及试验条件的具体内容",
+      "suggestion" : "补充试验条件的具体内容，确保其完整性和符合要求",
+      "rule" : "G-15-Test_conditions"
+    }, {
+      "location" : "表 22-1：加速度试验条件（核实量值）",
+      "description" : "表格中“结构试验量值”行的“右(Y)”列数值与前一列重复，应为3g而非3 g（存在多余的空格）",
+      "suggestion" : "修正表格中“结构试验量值”行的“右(Y)”列数值，去掉多余的空格",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "表 22-2：设备信息表",
+      "description" : "表格中序号列留空，应填写具体序号",
+      "suggestion" : "补充表格中序号列的具体序号",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "受试/陪试设备部分",
+      "description" : "提及“受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；陪试设备：详见6.5节；”但未提供6.1节和6.5节的具体内容",
+      "suggestion" : "提供6.1节和6.5节的具体内容，确保受试设备和陪试设备的构型状态描述完整",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "试验设备、测试设备及要求部分",
+      "description" : "提及“注：1.若选择的试验设备精度/量程比原试验设备等同或更优，则允许更换设备进行试验。”但未明确原试验设备的精度/量程信息",
+      "suggestion" : "补充原试验设备的精度/量程信息，以明确更换设备的依据",
+      "rule" : "G-10-Test equipment and certificates"
+    }, {
+      "location" : "试验程序部分",
+      "description" : "步骤c)中提及“保持产品在工作状态2”，但未解释工作状态2的具体含义",
+      "suggestion" : "明确工作状态2的具体含义，确保试验程序的明确性和可执行性",
+      "rule" : "G-3-functional_check"
+    }, {
+      "location" : "试验判据部分",
+      "description" : "提及“按12.2章节要求进行QPAT2-1检查”，但未提供12.2章节的具体内容",
+      "suggestion" : "提供12.2章节的具体内容，确保试验判据的明确性和可执行性",
+      "rule" : "G-3-functional_check"
+    }, {
+      "location" : "表格引用",
+      "description" : "引用的表格编号与实际提供的图表编号不一致",
+      "suggestion" : "应确保引用的表格编号与实际提供的图表编号一致",
+      "rule" : "G-16-pic_sheet"
+    }, {
+      "location" : "试验设备、测试设备及要求",
+      "description" : "表格中部分设备的技术要求/精度列留空，缺少具体参数信息",
       "suggestion" : "补充完整所有设备的技术要求/精度信息",
       "rule" : "G-10-Test equipment and certificates"
     }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "未明确说明工作状态2的具体含义",
-      "suggestion" : "明确工作状态2的具体含义和要求",
+      "location" : "受试/陪试设备",
+      "description" : "陪试设备的具体信息未提供，仅说明详见6.5节，但6.5节内容未给出",
+      "suggestion" : "提供陪试设备的具体信息或确保6.5节包含所需信息",
+      "rule" : "G-11-auxiliary_facilities"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及试验前功能性能检查，缺少试验前准备检查的相关描述",
+      "suggestion" : "补充试验前功能性能检查的相关描述",
+      "rule" : "G-3-functional_check"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及试验前准备检查，缺少试验前准备的相关描述",
+      "suggestion" : "补充试验前准备检查的相关描述",
+      "rule" : "G-4-Pretest_preparation"
+    }, {
+      "location" : "试验程序",
+      "description" : "未提及功能模式检查，缺少功能模式检查的相关描述",
+      "suggestion" : "补充功能模式检查的相关描述",
       "rule" : "G-5-mode"
-    }, {
-      "severity" : "low",
-      "location" : "振动曲线频率拐点表格",
-      "description" : "表格中存在列名重复，如'功率谱密度（g2/Hz）'列重复出现",
-      "suggestion" : "修正表格格式，避免列名重复",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "图表 16、图表 17、图表 18",
-      "description" : "图表引用未提供具体内容",
-      "suggestion" : "补充图表 16、图表 17、图表 18 的具体内容或说明",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "试验单位和试验场所",
-      "description" : "未明确提及试验单位和试验场所的具体信息",
-      "suggestion" : "补充试验单位和试验场所的具体信息",
-      "rule" : "G-1-test_unit"
-    }, {
-      "severity" : "low",
-      "location" : "受试/陪试设备部分",
-      "description" : "陪试设备和工作状态的详细描述引用了其他章节，但未在当前文档中给出具体内容",
-      "suggestion" : "在当前文档中补充陪试设备和工作状态的具体描述，或提供相关章节的详细内容",
-      "rule" : "G-4-Pretest_preparation"
-    }, {
-      "severity" : "medium",
-      "location" : "表 19-1：污染液的种类和液体温度表",
-      "description" : "表中序号列未填写具体序号，影响表格的规范性和可读性。",
-      "suggestion" : "补充完整表格中的序号列。",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "表 19-2：设备信息表",
-      "description" : "表中序号列未填写具体序号，影响表格的规范性和可读性。",
-      "suggestion" : "补充完整表格中的序号列。",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "受试/陪试设备部分",
-      "description" : "陪试设备具体信息未给出，仅提到详见6.5节，但文档中未包含6.5节内容。",
-      "suggestion" : "补充陪试设备的具体信息或提供6.5节的详细内容。",
-      "rule" : "G-1-test_unit"
-    }, {
-      "severity" : "medium",
-      "location" : "试验设备、测试设备及要求部分",
-      "description" : "表中序号列未填写具体序号，影响表格的规范性和可读性。",
-      "suggestion" : "补充完整表格中的序号列。",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "步骤a)中提到的图 19-1和图 19-2未提供，影响试验程序的可执行性。",
-      "suggestion" : "提供图 19-1和图 19-2的具体内容或详细描述。",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "试验判据部分",
-      "description" : "未明确说明QPAT1-1、QPAT2、QPAT3和QPAT4的具体检查内容和标准。",
-      "suggestion" : "补充QPAT1-1、QPAT2、QPAT3和QPAT4的具体检查内容和标准。",
-      "rule" : "G-3-functional_check"
-    }, {
-      "severity" : "medium",
-      "location" : "表 20-1：霉菌试验条件",
-      "description" : "表格中序号列未填写序号",
-      "suggestion" : "补充完整表格中的序号列",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "表 20-2：试验菌种",
-      "description" : "表格中序号列未填写序号",
-      "suggestion" : "补充完整表格中的序号列",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "表 20-3：设备信息表",
-      "description" : "表格中序号列未填写序号",
-      "suggestion" : "补充完整表格中的序号列",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "表 20-4：霉菌试验结果的等级评定",
-      "description" : "表格中序号列未填写序号",
-      "suggestion" : "补充完整表格中的序号列",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "试验设备、测试设备及要求部分",
-      "description" : "缺少对试验设备、测试设备的技术参数和校准证书的描述",
-      "suggestion" : "补充试验设备、测试设备的技术参数和校准证书信息",
-      "rule" : "G-10-Test equipment and certificates"
-    }, {
-      "severity" : "medium",
-      "location" : "受试/陪试设备部分",
-      "description" : "陪试设备描述不明确，未提供具体信息",
-      "suggestion" : "明确陪试设备的详细信息",
-      "rule" : "G-1-test_unit"
-    }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "缺少对试验环境搭建完成后的具体检查确认内容的描述",
-      "suggestion" : "补充试验环境搭建完成后的具体检查确认内容",
-      "rule" : "G-4-Pretest_preparation"
-    }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "缺少对受试设备功能性能检查的描述",
-      "suggestion" : "补充受试设备功能性能检查的描述",
-      "rule" : "G-3-functional_check"
-    }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "缺少对试验循环时机的描述",
-      "suggestion" : "补充试验循环时机的描述",
-      "rule" : "G-14-Cyclic/Different Surface Testing"
-    }, {
-      "severity" : "medium",
-      "location" : "受试/陪试设备部分",
-      "description" : "缺少受试设备的具体图号/型号和材料信息",
-      "suggestion" : "补充受试设备的具体图号/型号和材料信息",
-      "rule" : "G-9-EUT_supplier"
-    }, {
-      "severity" : "medium",
-      "location" : "试验设备、测试设备及要求部分",
-      "description" : "部分设备名称重复，且技术要求/精度部分存在格式问题",
-      "suggestion" : "核实并修正重复的设备名称，统一技术要求/精度部分的格式",
-      "rule" : "G-10-Test equipment and certificates"
-    }, {
-      "severity" : "low",
-      "location" : "试验程序部分",
-      "description" : "缺少具体的图表引用，如图表 21-1和图 21-2",
-      "suggestion" : "补充具体的图表引用，确保图表编号与实际图表一致",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "试验判据部分",
-      "description" : "缺少对试验条件的具体描述和明确性",
-      "suggestion" : "补充试验条件的具体描述，确保每个试验条件在小节中有明确对应内容",
-      "rule" : "G-15-Test_conditions"
-    }, {
-      "severity" : "medium",
-      "location" : "表 22-1：加速度试验条件（核实量值）",
-      "description" : "表中“左(-Y)”和“右(Y)”列的“结构试验量值”单元格内容重复，均为“3 g”",
-      "suggestion" : "核实并修正表中重复的内容，确保数据的准确性",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "## 受试/陪试设备",
-      "description" : "陪试设备的具体信息未给出，仅提到“详见6.5节”，但该章节内容未在文档中提供",
-      "suggestion" : "补充陪试设备的具体信息或提供6.5节的内容",
-      "rule" : "G-11-auxiliary_facilities"
-    }, {
-      "severity" : "medium",
-      "location" : "## 试验设备、测试设备及要求",
-      "description" : "表 22-2中序号列未填写任何序号，导致表格信息不完整",
-      "suggestion" : "补充表格中的序号列，确保表格信息的完整性",
-      "rule" : "G-11-auxiliary_facilities"
-    }, {
-      "severity" : "medium",
-      "location" : "## 试验布置和连接",
-      "description" : "引用的图表24和图表25未提供，无法核实加速度试验连接图和布置图的具体内容",
-      "suggestion" : "提供图表24和图表25的具体内容，确保文档的完整性",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "## 试验程序",
-      "description" : "步骤c)中提到的“工作状态2”未在文档中定义，表述不明确",
-      "suggestion" : "明确“工作状态2”的具体含义或提供相关定义",
-      "rule" : "G-15-Test_conditions"
-    }, {
-      "severity" : "medium",
-      "location" : "受试/陪试设备部分",
-      "description" : "陪试设备的具体信息未给出，仅提到详见6.5节，但该章节内容未在文档中提供。",
-      "suggestion" : "补充陪试设备的具体信息或确保6.5节内容的完整性。",
-      "rule" : "G-1-test_unit"
-    }, {
-      "severity" : "medium",
-      "location" : "试验设备、测试设备及要求部分",
-      "description" : "表格中部分设备的技术要求/精度列留空，如专用测试设备。",
-      "suggestion" : "补充完整所有设备的技术要求/精度信息。",
-      "rule" : "G-10-Test equipment and certificates"
-    }, {
-      "severity" : "low",
-      "location" : "试验布置和连接部分",
-      "description" : "引用的图表编号26和27未在文档中提供。",
-      "suggestion" : "确保引用的图表编号与实际图表编号一致，并提供相应的图表。",
-      "rule" : "G-16-pic_sheet"
-    }, {
-      "severity" : "medium",
-      "location" : "试验程序部分",
-      "description" : "试验程序中提到的附录A未在文档中提供。",
-      "suggestion" : "补充附录A的内容或确保其在文档中的完整性。",
-      "rule" : "G-14-Cyclic/Different Surface Testing"
     } ],
-    "totalIssues" : 52,
-    "overallScore" : 91,
+    "totalIssues" : 59,
     "totalChunks" : 10,
     "chunkResults" : [ {
       "result" : {
-        "overall_score" : 95,
-        "summary" : "本章节为温度变化试验的试验大纲，内容较为完整，涵盖了试验目的、要求、设备、布置连接、程序及判据等关键信息。但存在部分信息未明确或缺失的问题，需补充完善。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
-          "location" : "受试/陪试设备部分",
-          "description" : "受试设备构型状态、陪试设备、搭接要求、工作状态均引用其他章节，但未在本章节给出具体信息。",
-          "suggestion" : "补充6.1节、6.4节、6.5节相关内容，明确受试设备构型状态、陪试设备、搭接要求、工作状态的具体信息。",
-          "rule" : "G-1-test_unit"
-        }, {
-          "severity" : "medium",
-          "location" : "试验设备、测试设备及要求部分",
-          "description" : "表14-2中部分设备的技术要求/精度未给出具体数值。",
-          "suggestion" : "补充表14-2中专用测试设备的技术要求/精度信息。",
-          "rule" : "G-10-Test equipment and certificates"
-        }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "图14-1、图14-2、图14-3未提供，无法判断试验布置、连接、控制曲线是否合理。",
-          "suggestion" : "补充图14-1、图14-2、图14-3，明确试验布置、连接、控制曲线的具体要求。",
+          "location" : "试验要求",
+          "description" : "引用的表格编号表 14-1 未在文档中提供",
+          "suggestion" : "提供完整的表格 14-1 内容",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "low",
-          "location" : "试验程序部分",
-          "description" : "工作状态2的描述不明确，未给出具体定义。",
-          "suggestion" : "明确工作状态2的具体含义和要求。",
-          "rule" : "G-5-mode"
+          "location" : "试验设备、测试设备及要求",
+          "description" : "引用的表格编号表 14-2 未在文档中提供",
+          "suggestion" : "提供完整的表格 14-2 内容",
+          "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "low",
-          "location" : "试验判据部分",
-          "description" : "QPAT1-1、QPAT2、QPAT3和QPAT4检查的具体内容未给出。",
-          "suggestion" : "补充12.2章节中QPAT1-1、QPAT2、QPAT3和QPAT4检查的具体内容和要求。",
-          "rule" : "G-3-functional_check"
+          "location" : "试验布置和连接",
+          "description" : "引用的图表编号图 14-1 和图 14-2 未在文档中提供",
+          "suggestion" : "提供完整的图表 14-1 和图 14-2 内容",
+          "rule" : "G-16-pic_sheet"
+        }, {
+          "location" : "试验程序",
+          "description" : "引用的图表编号图 14-3 未在文档中提供",
+          "suggestion" : "提供完整的图表 14-3 内容",
+          "rule" : "G-16-pic_sheet"
+        }, {
+          "location" : "试验设备、测试设备及要求",
+          "description" : "表格中部分设备的技术要求/精度列信息缺失",
+          "suggestion" : "补充完整表格中所有设备的技术要求/精度信息",
+          "rule" : "G-10-Test equipment and certificates"
+        }, {
+          "location" : "受试/陪试设备",
+          "description" : "受试设备和陪试设备的详细构型、搭接要求、工作状态均引用其他章节，但未在文档中提供具体内容",
+          "suggestion" : "提供6.1节、6.4节和6.5节的具体内容或在文档中直接描述相关信息",
+          "rule" : "G-4-Pretest_preparation"
+        }, {
+          "location" : "试验程序",
+          "description" : "未提及试验前准备检查",
+          "suggestion" : "补充试验前的准备检查项目和标准",
+          "rule" : "G-4-Pretest_preparation"
         } ],
-        "passed_items" : [ "试验目的明确", "试验要求具体，引用了DO-160G标准", "设备信息表内容较完整，包括设备名称、用途、型号、技术要求等", "试验布置和连接描述较为详细", "受试设备、试验装置的制造符合性要求明确", "试验程序描述较为完整，包括试验控制曲线、步骤、检查要求等", "试验判据给出了具体的检查项目和通过/失败标准" ]
+        "passed_items" : [ ]
       },
       "chunk" : 1,
       "totalChunks" : 10,
-      "estimatedTokens" : 1897,
-      "chapterTitle" : "温度变化试验"
+      "estimatedTokens" : 1903,
+      "chapterTitle" : "1 温度变化试验"
     }, {
       "result" : {
-        "overall_score" : 90,
-        "summary" : "本章节为湿热试验部分，整体内容较为完整，但存在部分信息缺失和表述不明确的问题。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
-          "location" : "试验要求部分",
-          "description" : "缺少试验单位和试验场所的具体信息",
-          "suggestion" : "补充具体的试验单位和试验场所信息",
-          "rule" : "G-1-test_unit"
-        }, {
-          "severity" : "medium",
-          "location" : "表 15-1中的高温高湿阶段",
-          "description" : "未提供周期数的具体数值",
-          "suggestion" : "补充高温高湿阶段的周期数",
-          "rule" : "G-2-Project_omissions"
-        }, {
-          "severity" : "medium",
-          "location" : "表 15-1中的降温阶段",
-          "description" : "未提供周期数和试验允差的具体数值",
-          "suggestion" : "补充降温阶段的周期数和试验允差",
-          "rule" : "G-2-Project_omissions"
-        }, {
-          "severity" : "medium",
-          "location" : "试验设备、测试设备及要求部分",
-          "description" : "序号列缺失具体序号",
-          "suggestion" : "补充设备信息表中的序号列",
-          "rule" : "G-11-auxiliary_facilities"
-        }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "引用的图表编号未在文档中提供",
-          "suggestion" : "提供图表 15-1、15-2和15-3的具体内容或确认其在文档中的其他位置",
+          "location" : "试验要求",
+          "description" : "引用的表格15-1中“周期数”一栏在“高温高湿”行缺失数据",
+          "suggestion" : "补充“高温高湿”行的“周期数”数据",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "受试/陪试设备部分",
-          "description" : "陪试设备的具体信息未提供，仅提到详见6.5节",
-          "suggestion" : "补充陪试设备的具体信息或确认其在文档中的其他位置",
-          "rule" : "G-2-Project_omissions"
+          "location" : "试验设备、测试设备及要求",
+          "description" : "表格15-2中序号列缺失序号",
+          "suggestion" : "补充表格15-2中各行的序号",
+          "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "受试设备、试验装置（试验前）的制造符合性要求部分",
-          "description" : "引用的“6.试验产品/设备说明”和“12.1要求”未在文档中提供",
-          "suggestion" : "提供相关章节的具体内容或确认其在文档中的其他位置",
-          "rule" : "G-2-Project_omissions"
+          "location" : "试验程序",
+          "description" : "引用的图表4、图表5、图表6未提供",
+          "suggestion" : "提供缺失的图表4、图表5、图表6",
+          "rule" : "G-16-pic_sheet"
+        }, {
+          "location" : "试验要求",
+          "description" : "未提供试验单位信息",
+          "suggestion" : "补充具体的试验单位信息",
+          "rule" : "G-1-test_unit"
+        }, {
+          "location" : "试验要求",
+          "description" : "未提供试验场所信息",
+          "suggestion" : "补充具体的试验场所信息",
+          "rule" : "G-1-test_unit"
+        }, {
+          "location" : "试验程序",
+          "description" : "引用的'12.2章节表12-2'未在文档中提供",
+          "suggestion" : "提供缺失的'12.2章节表12-2'",
+          "rule" : "G-16-pic_sheet"
         } ],
-        "passed_items" : [ "试验目的明确", "试验要求部分内容较为完整", "受试/陪试设备描述较为清晰", "试验设备、测试设备及要求部分提供了设备信息", "试验布置和连接部分描述较为详细", "试验程序部分提供了详细的步骤和要求", "试验判据部分明确了试验前后的检查要求" ]
+        "passed_items" : [ "文字内容无误", "功能性能检查完善", "试验前准备检查完善", "功能模式检查完善", "EUT件号无误", "试验测试设备参数信息及校准证书无误", "辅助设备无误", "不涉及类比分析、相似性分析", "不涉及循环/不同面试验", "试验条件审查无误" ]
       },
       "chunk" : 2,
       "totalChunks" : 10,
-      "estimatedTokens" : 1792,
-      "chapterTitle" : "湿热"
+      "estimatedTokens" : 1794,
+      "chapterTitle" : "2 湿热"
     }, {
       "result" : {
-        "overall_score" : 90,
-        "summary" : "本章节主要涉及工作冲击和坠撞安全试验的详细要求和步骤，整体内容较为完整，但存在部分信息缺失和表述不明确的问题。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
+          "location" : "表 16-1",
+          "description" : "表格中+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息缺失",
+          "suggestion" : "补充+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息",
+          "rule" : "G-2-Project_omissions"
+        }, {
+          "location" : "表 16-2",
+          "description" : "表格中+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息缺失",
+          "suggestion" : "补充+Y/－Y和+Z/－Z方向的冲击波形、峰值加速度、持续时间、冲击次数信息",
+          "rule" : "G-2-Project_omissions"
+        }, {
+          "location" : "试验设备、测试设备及要求部分",
+          "description" : "设备信息表中序号列未填写任何序号，影响表格信息的完整性和条理性",
+          "suggestion" : "补充设备信息表中各设备的序号，确保表格信息的完整性和条理性",
+          "rule" : "G-2-Project_omissions"
+        }, {
           "location" : "表 16-1、表 16-2、表 16-3",
-          "description" : "部分表格内容缺失，如表 16-1 中 +Y/－Y 和 +Z/－Z 方向的试验条件未给出，表 16-2 中同样缺少 +Y/－Y 和 +Z/－Z 方向的试验条件。",
-          "suggestion" : "补充完整所有缺失的试验条件，确保表格信息的完整性。",
-          "rule" : "G-2-Project_omissions"
-        }, {
-          "severity" : "medium",
-          "location" : "表 16-4",
-          "description" : "设备信息表中序号列缺失，部分设备的技术要求/精度未给出。",
-          "suggestion" : "补充设备信息表中缺失的序号列，完善所有设备的技术要求/精度信息。",
-          "rule" : "G-2-Project_omissions"
-        }, {
-          "severity" : "low",
-          "location" : "图 16-1、图 16-2、图 16-3、图 16-4、图 16-5、图 16-6",
-          "description" : "引用的图表未提供，无法验证图表内容的准确性和完整性。",
-          "suggestion" : "提供所有引用的图表，确保图表内容与文档描述一致。",
+          "description" : "表格中存在空白单元格，未填写具体内容",
+          "suggestion" : "补充完整所有空白单元格，确保表格信息的完整性",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "试验程序描述中多次提到“按照12.2章节表12-2要求进行QPAT检查”，但文档中未提供12.2章节的具体内容。",
-          "suggestion" : "补充12.2章节的具体内容，确保试验程序描述的完整性和可执行性。",
-          "rule" : "G-2-Project_omissions"
+          "location" : "表 16-4",
+          "description" : "表 16-4中序号列全部缺失",
+          "suggestion" : "补充表 16-4中所有缺失的序号列",
+          "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "low",
-          "location" : "受试/陪试设备部分",
-          "description" : "陪试设备的具体信息仅提到“详见6.5节”，但文档中未提供6.5节的内容。",
-          "suggestion" : "提供6.5节的具体内容，明确陪试设备的详细信息。",
-          "rule" : "G-2-Project_omissions"
+          "location" : "表 16-4",
+          "description" : "表 16-4中部分设备的技术要求/精度列信息缺失",
+          "suggestion" : "补充表 16-4中所有缺失的技术要求/精度信息",
+          "rule" : "G-16-pic_sheet"
+        }, {
+          "location" : "章节中的多个表格",
+          "description" : "表格中存在空白行，未填写任何信息",
+          "suggestion" : "删除所有空白行或补充完整相关信息",
+          "rule" : "G-16-pic_sheet"
         } ],
-        "passed_items" : [ "章节结构清晰，试验目的和要求明确", "试验条件和步骤描述较为详细", "设备信息表提供了主要设备的型号和技术要求" ]
+        "passed_items" : [ ]
       },
       "chunk" : 3,
       "totalChunks" : 10,
       "estimatedTokens" : 3230,
-      "chapterTitle" : "工作冲击和坠撞安全"
+      "chapterTitle" : "3 工作冲击和坠撞安全"
     }, {
       "result" : {
-        "overall_score" : 95,
-        "summary" : "本章节主要涉及振动试验的详细要求和步骤，整体内容较为完整，但存在部分信息缺失和表述不明确的问题。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
           "location" : "图表 15",
           "description" : "缺少传感器安装位置的描述",
           "suggestion" : "补充传感器安装位置的具体描述",
           "rule" : "G-4-Pretest_preparation"
         }, {
-          "severity" : "medium",
           "location" : "试验设备、测试设备及要求部分",
-          "description" : "部分设备的技术要求/精度列留空，未给出具体要求",
-          "suggestion" : "补充完整所有设备的技术要求/精度信息",
+          "description" : "加速度传感器的校验方式未给出",
+          "suggestion" : "补充加速度传感器的校验方式",
           "rule" : "G-10-Test equipment and certificates"
         }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "未明确说明工作状态2的具体含义",
-          "suggestion" : "明确工作状态2的具体含义和要求",
-          "rule" : "G-5-mode"
+          "location" : "试验设备、测试设备及要求部分",
+          "description" : "数字式振动控制器的校验方式未给出",
+          "suggestion" : "补充数字式振动控制器的校验方式",
+          "rule" : "G-10-Test equipment and certificates"
         }, {
-          "severity" : "low",
-          "location" : "振动曲线频率拐点表格",
-          "description" : "表格中存在列名重复，如'功率谱密度（g2/Hz）'列重复出现",
-          "suggestion" : "修正表格格式，避免列名重复",
-          "rule" : "G-16-pic_sheet"
+          "location" : "试验程序部分",
+          "description" : "未提及试验前准备检查",
+          "suggestion" : "补充试验前准备检查的相关描述",
+          "rule" : "G-4-Pretest_preparation"
         } ],
-        "passed_items" : [ "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-9-EUT_supplier", "G-11-auxiliary_facilities", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions" ]
+        "passed_items" : [ "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-11-auxiliary_facilities", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions" ]
       },
       "chunk" : 4,
       "totalChunks" : 10,
-      "estimatedTokens" : 3206,
-      "chapterTitle" : "振动"
+      "estimatedTokens" : 3207,
+      "chapterTitle" : "4 振动"
     }, {
       "result" : {
-        "overall_score" : 90,
-        "summary" : "本章节主要涉及防水试验的相关内容，包括试验目的、要求、设备、布置、程序和判据等。整体上，文档内容较为完整，但存在一些需要改进的地方，如部分图表引用未提供具体内容，试验单位和试验场所信息未明确提及等。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
-          "location" : "图表 16、图表 17、图表 18",
-          "description" : "图表引用未提供具体内容",
-          "suggestion" : "补充图表 16、图表 17、图表 18 的具体内容或说明",
+          "location" : "试验设备、测试设备及要求",
+          "description" : "表格中序号列未填写序号",
+          "suggestion" : "补充完整表格中的序号列",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "试验单位和试验场所",
-          "description" : "未明确提及试验单位和试验场所的具体信息",
-          "suggestion" : "补充试验单位和试验场所的具体信息",
-          "rule" : "G-1-test_unit"
+          "location" : "试验布置和连接",
+          "description" : "引用的图表编号与实际提供的图表编号不一致",
+          "suggestion" : "更正引用的图表编号，确保与实际图表编号一致",
+          "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "low",
-          "location" : "受试/陪试设备部分",
-          "description" : "陪试设备和工作状态的详细描述引用了其他章节，但未在当前文档中给出具体内容",
-          "suggestion" : "在当前文档中补充陪试设备和工作状态的具体描述，或提供相关章节的详细内容",
+          "location" : "试验设备、测试设备及要求",
+          "description" : "高低温湿热试验箱的校验方式未填写",
+          "suggestion" : "补充高低温湿热试验箱的校验方式",
+          "rule" : "G-10-Test equipment and certificates"
+        }, {
+          "location" : "试验程序",
+          "description" : "未提及试验前准备检查",
+          "suggestion" : "补充试验前准备检查的相关描述",
           "rule" : "G-4-Pretest_preparation"
+        }, {
+          "location" : "试验程序",
+          "description" : "未提及功能模式检查",
+          "suggestion" : "补充功能模式检查的相关描述",
+          "rule" : "G-5-mode"
+        }, {
+          "location" : "试验目的",
+          "description" : "未提及具体的试验单位和试验场所",
+          "suggestion" : "补充具体的试验单位和试验场所信息",
+          "rule" : "G-1-test_unit"
         } ],
-        "passed_items" : [ "试验目的清晰明确", "试验要求具体，引用了相关标准", "试验设备、测试设备及要求描述详细，包括设备名称、用途、型号、技术要求等", "试验布置和连接描述具体，引用了相关图表", "受试设备、试验装置的制造符合性要求描述清晰", "试验程序描述详细，包括试验步骤和时间节点等", "试验判据明确，给出了具体的检查项目和要求" ]
+        "passed_items" : [ "防水试验连接示意图", "防水试验加热受试设备时布置图", "防水试验滴雨时布置图" ]
       },
       "chunk" : 5,
       "totalChunks" : 10,
-      "estimatedTokens" : 1601,
-      "chapterTitle" : "防水"
+      "estimatedTokens" : 1602,
+      "chapterTitle" : "5 防水"
     }, {
       "result" : {
-        "overall_score" : 90,
-        "summary" : "本章节主要涉及流体敏感性试验的详细要求和步骤，整体内容较为完整，但存在部分信息缺失和表述不明确的问题。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
           "location" : "表 19-1：污染液的种类和液体温度表",
-          "description" : "表中序号列未填写具体序号，影响表格的规范性和可读性。",
-          "suggestion" : "补充完整表格中的序号列。",
+          "description" : "表格中序号列未填写序号",
+          "suggestion" : "补充完整表格中的序号列",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
           "location" : "表 19-2：设备信息表",
-          "description" : "表中序号列未填写具体序号，影响表格的规范性和可读性。",
-          "suggestion" : "补充完整表格中的序号列。",
+          "description" : "表格中序号列未填写序号",
+          "suggestion" : "补充完整表格中的序号列",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "受试/陪试设备部分",
-          "description" : "陪试设备具体信息未给出，仅提到详见6.5节，但文档中未包含6.5节内容。",
-          "suggestion" : "补充陪试设备的具体信息或提供6.5节的详细内容。",
-          "rule" : "G-1-test_unit"
+          "location" : "试验设备、测试设备及要求",
+          "description" : "表格中包含的设备型号'5C6363-0815'未提供技术要求/精度",
+          "suggestion" : "补充设备型号'5C6363-0815'的技术要求/精度",
+          "rule" : "G-10-Test equipment and certificates"
         }, {
-          "severity" : "medium",
-          "location" : "试验设备、测试设备及要求部分",
-          "description" : "表中序号列未填写具体序号，影响表格的规范性和可读性。",
-          "suggestion" : "补充完整表格中的序号列。",
-          "rule" : "G-16-pic_sheet"
-        }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "步骤a)中提到的图 19-1和图 19-2未提供，影响试验程序的可执行性。",
-          "suggestion" : "提供图 19-1和图 19-2的具体内容或详细描述。",
-          "rule" : "G-16-pic_sheet"
-        }, {
-          "severity" : "medium",
-          "location" : "试验判据部分",
-          "description" : "未明确说明QPAT1-1、QPAT2、QPAT3和QPAT4的具体检查内容和标准。",
-          "suggestion" : "补充QPAT1-1、QPAT2、QPAT3和QPAT4的具体检查内容和标准。",
-          "rule" : "G-3-functional_check"
+          "location" : "试验程序",
+          "description" : "未明确说明试验条件的具体内容",
+          "suggestion" : "在试验程序中明确试验条件的具体内容",
+          "rule" : "G-15-Test_conditions"
         } ],
-        "passed_items" : [ "试验目的明确", "试验要求详细", "污染液的种类和液体温度表内容完整", "受试/陪试设备描述清晰", "试验设备、测试设备及要求详细", "试验布置和连接描述清晰", "受试设备、试验装置（试验前）的制造符合性要求明确", "试验程序步骤详细", "试验判据明确" ]
+        "passed_items" : [ "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-9-EUT_supplier", "G-11-auxiliary_facilities", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing" ]
       },
       "chunk" : 6,
       "totalChunks" : 10,
-      "estimatedTokens" : 1817,
-      "chapterTitle" : "流体敏感性"
+      "estimatedTokens" : 1818,
+      "chapterTitle" : "6 流体敏感性"
     }, {
       "result" : {
-        "overall_score" : 95,
-        "summary" : "本章节为霉菌试验部分，主要涉及试验目的、要求、条件、设备、布置、程序及判据等内容。整体上，文档内容较为完整，但存在部分细节问题需要修正。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
-          "location" : "表 20-1：霉菌试验条件",
-          "description" : "表格中序号列未填写序号",
-          "suggestion" : "补充完整表格中的序号列",
-          "rule" : "G-16-pic_sheet"
-        }, {
-          "severity" : "medium",
-          "location" : "表 20-2：试验菌种",
-          "description" : "表格中序号列未填写序号",
-          "suggestion" : "补充完整表格中的序号列",
-          "rule" : "G-16-pic_sheet"
-        }, {
-          "severity" : "medium",
-          "location" : "表 20-3：设备信息表",
-          "description" : "表格中序号列未填写序号",
-          "suggestion" : "补充完整表格中的序号列",
-          "rule" : "G-16-pic_sheet"
-        }, {
-          "severity" : "medium",
-          "location" : "表 20-4：霉菌试验结果的等级评定",
-          "description" : "表格中序号列未填写序号",
-          "suggestion" : "补充完整表格中的序号列",
-          "rule" : "G-16-pic_sheet"
-        }, {
-          "severity" : "medium",
-          "location" : "试验设备、测试设备及要求部分",
-          "description" : "缺少对试验设备、测试设备的技术参数和校准证书的描述",
-          "suggestion" : "补充试验设备、测试设备的技术参数和校准证书信息",
-          "rule" : "G-10-Test equipment and certificates"
-        }, {
-          "severity" : "medium",
-          "location" : "受试/陪试设备部分",
-          "description" : "陪试设备描述不明确，未提供具体信息",
-          "suggestion" : "明确陪试设备的详细信息",
+          "location" : "试验要求",
+          "description" : "未明确提及试验单位和试验场所",
+          "suggestion" : "补充具体的试验单位和试验场所信息",
           "rule" : "G-1-test_unit"
         }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "缺少对试验环境搭建完成后的具体检查确认内容的描述",
-          "suggestion" : "补充试验环境搭建完成后的具体检查确认内容",
-          "rule" : "G-4-Pretest_preparation"
+          "location" : "试验设备、测试设备及要求",
+          "description" : "设备信息表中部分设备的技术要求/精度列显示为'/'，表示信息缺失",
+          "suggestion" : "补充完整所有设备的技术要求和精度信息",
+          "rule" : "G-10-Test equipment and certificates"
         }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "缺少对受试设备功能性能检查的描述",
-          "suggestion" : "补充受试设备功能性能检查的描述",
+          "location" : "试验程序",
+          "description" : "未提及试验前功能性能检查的相关描述",
+          "suggestion" : "补充试验前功能性能检查的描述",
           "rule" : "G-3-functional_check"
         }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "缺少对试验循环时机的描述",
-          "suggestion" : "补充试验循环时机的描述",
+          "location" : "试验程序",
+          "description" : "未提及试验前准备检查的相关描述",
+          "suggestion" : "补充试验前准备检查的描述",
+          "rule" : "G-4-Pretest_preparation"
+        }, {
+          "location" : "受试/陪试设备",
+          "description" : "陪试设备的具体信息在6.5节提及，但本章节未给出具体内容",
+          "suggestion" : "在本章节补充陪试设备的详细信息",
+          "rule" : "G-11-auxiliary_facilities"
+        }, {
+          "location" : "试验程序",
+          "description" : "未提及循环/不同面试验的相关内容",
+          "suggestion" : "若涉及循环/不同面试验，需补充相关描述；若不涉及，则无需修改",
           "rule" : "G-14-Cyclic/Different Surface Testing"
+        }, {
+          "location" : "试验要求",
+          "description" : "未明确试验条件的具体内容，如温度、湿度等",
+          "suggestion" : "在每个相关小节中明确试验条件的具体内容",
+          "rule" : "G-15-Test_conditions"
         } ],
-        "passed_items" : [ "试验目的明确", "试验要求和条件描述清晰", "试验设备、测试设备及要求部分提供了设备信息", "受试/陪试设备部分提供了受试设备信息", "试验布置和连接部分描述了受试设备的布置要求", "受试设备、试验装置（试验前）的制造符合性要求部分提出了相关要求", "试验程序部分描述了试验的具体步骤", "试验判据部分明确了试验的评判标准" ]
+        "passed_items" : [ "霉菌试验条件表", "试验菌种表", "受试/陪试设备构型状态引用", "试验判据" ]
       },
       "chunk" : 7,
       "totalChunks" : 10,
       "estimatedTokens" : 2025,
-      "chapterTitle" : "霉菌"
+      "chapterTitle" : "7 霉菌"
     }, {
       "result" : {
-        "overall_score" : 90,
-        "summary" : "本章节主要涉及防火、可燃性试验的详细要求和步骤，整体内容较为完整，但存在部分信息缺失和表述不明确的问题。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
-          "location" : "受试/陪试设备部分",
-          "description" : "缺少受试设备的具体图号/型号和材料信息",
-          "suggestion" : "补充受试设备的具体图号/型号和材料信息",
-          "rule" : "G-9-EUT_supplier"
+          "location" : "表 21-2：可燃性试验受试样件清单",
+          "description" : "表格中部分条目未填写具体信息，如序号、图号/型号、材料、尺寸等列存在空白",
+          "suggestion" : "补充完整表格中缺失的信息",
+          "rule" : "G-11-auxiliary_facilities"
         }, {
-          "severity" : "medium",
-          "location" : "试验设备、测试设备及要求部分",
-          "description" : "部分设备名称重复，且技术要求/精度部分存在格式问题",
-          "suggestion" : "核实并修正重复的设备名称，统一技术要求/精度部分的格式",
+          "location" : "表 21-3：设备信息表",
+          "description" : "表格中部分条目未填写具体信息，如序号、技术要求/精度等列存在空白",
+          "suggestion" : "补充完整表格中缺失的信息",
           "rule" : "G-10-Test equipment and certificates"
         }, {
-          "severity" : "low",
           "location" : "试验程序部分",
-          "description" : "缺少具体的图表引用，如图表 21-1和图 21-2",
-          "suggestion" : "补充具体的图表引用，确保图表编号与实际图表一致",
-          "rule" : "G-16-pic_sheet"
+          "description" : "未提及试验前准备检查的具体内容",
+          "suggestion" : "补充试验前准备检查的具体内容，确保符合试验规范要求",
+          "rule" : "G-4-Pretest_preparation"
         }, {
-          "severity" : "medium",
-          "location" : "试验判据部分",
-          "description" : "缺少对试验条件的具体描述和明确性",
-          "suggestion" : "补充试验条件的具体描述，确保每个试验条件在小节中有明确对应内容",
+          "location" : "试验程序部分",
+          "description" : "未提及功能模式检查的具体内容",
+          "suggestion" : "补充功能模式检查的具体内容，确保符合试验规范要求",
+          "rule" : "G-5-mode"
+        }, {
+          "location" : "试验程序部分",
+          "description" : "未提及试验前功能性能检查的具体内容",
+          "suggestion" : "补充试验前功能性能检查的具体内容，确保符合试验规范要求",
+          "rule" : "G-3-functional_check"
+        }, {
+          "location" : "章节内容",
+          "description" : "未提及试验条件的具体内容",
+          "suggestion" : "补充试验条件的具体内容，确保其完整性和符合要求",
           "rule" : "G-15-Test_conditions"
         } ],
-        "passed_items" : [ "试验目的", "试验要求", "试验参数", "受试/陪试设备", "试验设备、测试设备及要求", "试验布置和连接", "受试设备、试验装置（试验前）的制造符合性要求", "试验程序", "试验判据" ]
+        "passed_items" : [ ]
       },
       "chunk" : 8,
       "totalChunks" : 10,
       "estimatedTokens" : 1897,
-      "chapterTitle" : "防火，可燃性"
+      "chapterTitle" : "8 防火，可燃性"
     }, {
       "result" : {
-        "overall_score" : 90,
-        "summary" : "本章节主要描述了加速度试验的目的、要求、设备信息、布置连接、制造符合性要求、程序及判据。大部分内容表述清晰，但存在部分信息缺失和表述不明确的问题。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
           "location" : "表 22-1：加速度试验条件（核实量值）",
-          "description" : "表中“左(-Y)”和“右(Y)”列的“结构试验量值”单元格内容重复，均为“3 g”",
-          "suggestion" : "核实并修正表中重复的内容，确保数据的准确性",
+          "description" : "表格中“结构试验量值”行的“右(Y)”列数值与前一列重复，应为3g而非3 g（存在多余的空格）",
+          "suggestion" : "修正表格中“结构试验量值”行的“右(Y)”列数值，去掉多余的空格",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "## 受试/陪试设备",
-          "description" : "陪试设备的具体信息未给出，仅提到“详见6.5节”，但该章节内容未在文档中提供",
-          "suggestion" : "补充陪试设备的具体信息或提供6.5节的内容",
-          "rule" : "G-11-auxiliary_facilities"
-        }, {
-          "severity" : "medium",
-          "location" : "## 试验设备、测试设备及要求",
-          "description" : "表 22-2中序号列未填写任何序号，导致表格信息不完整",
-          "suggestion" : "补充表格中的序号列，确保表格信息的完整性",
-          "rule" : "G-11-auxiliary_facilities"
-        }, {
-          "severity" : "medium",
-          "location" : "## 试验布置和连接",
-          "description" : "引用的图表24和图表25未提供，无法核实加速度试验连接图和布置图的具体内容",
-          "suggestion" : "提供图表24和图表25的具体内容，确保文档的完整性",
+          "location" : "表 22-2：设备信息表",
+          "description" : "表格中序号列留空，应填写具体序号",
+          "suggestion" : "补充表格中序号列的具体序号",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "## 试验程序",
-          "description" : "步骤c)中提到的“工作状态2”未在文档中定义，表述不明确",
-          "suggestion" : "明确“工作状态2”的具体含义或提供相关定义",
-          "rule" : "G-15-Test_conditions"
+          "location" : "受试/陪试设备部分",
+          "description" : "提及“受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；陪试设备：详见6.5节；”但未提供6.1节和6.5节的具体内容",
+          "suggestion" : "提供6.1节和6.5节的具体内容，确保受试设备和陪试设备的构型状态描述完整",
+          "rule" : "G-4-Pretest_preparation"
+        }, {
+          "location" : "试验设备、测试设备及要求部分",
+          "description" : "提及“注：1.若选择的试验设备精度/量程比原试验设备等同或更优，则允许更换设备进行试验。”但未明确原试验设备的精度/量程信息",
+          "suggestion" : "补充原试验设备的精度/量程信息，以明确更换设备的依据",
+          "rule" : "G-10-Test equipment and certificates"
+        }, {
+          "location" : "试验程序部分",
+          "description" : "步骤c)中提及“保持产品在工作状态2”，但未解释工作状态2的具体含义",
+          "suggestion" : "明确工作状态2的具体含义，确保试验程序的明确性和可执行性",
+          "rule" : "G-3-functional_check"
+        }, {
+          "location" : "试验判据部分",
+          "description" : "提及“按12.2章节要求进行QPAT2-1检查”，但未提供12.2章节的具体内容",
+          "suggestion" : "提供12.2章节的具体内容，确保试验判据的明确性和可执行性",
+          "rule" : "G-3-functional_check"
         } ],
-        "passed_items" : [ "试验目的表述清晰", "试验要求中对E/ISI-2集成式备用仪表的描述明确", "大部分设备信息和试验要求表述清晰", "试验程序和判据的描述较为详细" ]
+        "passed_items" : [ "G-1-test_unit", "G-2-Project_omissions", "G-5-mode", "G-9-EUT_supplier", "G-11-auxiliary_facilities", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions" ]
       },
       "chunk" : 9,
       "totalChunks" : 10,
       "estimatedTokens" : 1626,
-      "chapterTitle" : "加速度"
+      "chapterTitle" : "9 加速度"
     }, {
       "result" : {
-        "overall_score" : 90,
-        "summary" : "本章节主要涉及风车试验的详细要求和步骤，包括试验目的、要求、设备信息、布置连接、制造符合性要求、程序和判据。整体上，文档内容较为完整，但存在一些需要明确和修正的地方。",
+        "summary" : "本章节审查总结",
         "issues" : [ {
-          "severity" : "medium",
-          "location" : "受试/陪试设备部分",
-          "description" : "陪试设备的具体信息未给出，仅提到详见6.5节，但该章节内容未在文档中提供。",
-          "suggestion" : "补充陪试设备的具体信息或确保6.5节内容的完整性。",
-          "rule" : "G-1-test_unit"
-        }, {
-          "severity" : "medium",
-          "location" : "试验设备、测试设备及要求部分",
-          "description" : "表格中部分设备的技术要求/精度列留空，如专用测试设备。",
-          "suggestion" : "补充完整所有设备的技术要求/精度信息。",
-          "rule" : "G-10-Test equipment and certificates"
-        }, {
-          "severity" : "low",
-          "location" : "试验布置和连接部分",
-          "description" : "引用的图表编号26和27未在文档中提供。",
-          "suggestion" : "确保引用的图表编号与实际图表编号一致，并提供相应的图表。",
+          "location" : "表格引用",
+          "description" : "引用的表格编号与实际提供的图表编号不一致",
+          "suggestion" : "应确保引用的表格编号与实际提供的图表编号一致",
           "rule" : "G-16-pic_sheet"
         }, {
-          "severity" : "medium",
-          "location" : "试验程序部分",
-          "description" : "试验程序中提到的附录A未在文档中提供。",
-          "suggestion" : "补充附录A的内容或确保其在文档中的完整性。",
-          "rule" : "G-14-Cyclic/Different Surface Testing"
+          "location" : "试验设备、测试设备及要求",
+          "description" : "表格中部分设备的技术要求/精度列留空，缺少具体参数信息",
+          "suggestion" : "补充完整所有设备的技术要求/精度信息",
+          "rule" : "G-10-Test equipment and certificates"
+        }, {
+          "location" : "受试/陪试设备",
+          "description" : "陪试设备的具体信息未提供，仅说明详见6.5节，但6.5节内容未给出",
+          "suggestion" : "提供陪试设备的具体信息或确保6.5节包含所需信息",
+          "rule" : "G-11-auxiliary_facilities"
+        }, {
+          "location" : "试验程序",
+          "description" : "未提及试验前功能性能检查，缺少试验前准备检查的相关描述",
+          "suggestion" : "补充试验前功能性能检查的相关描述",
+          "rule" : "G-3-functional_check"
+        }, {
+          "location" : "试验程序",
+          "description" : "未提及试验前准备检查，缺少试验前准备的相关描述",
+          "suggestion" : "补充试验前准备检查的相关描述",
+          "rule" : "G-4-Pretest_preparation"
+        }, {
+          "location" : "试验程序",
+          "description" : "未提及功能模式检查，缺少功能模式检查的相关描述",
+          "suggestion" : "补充功能模式检查的相关描述",
+          "rule" : "G-5-mode"
         } ],
-        "passed_items" : [ "试验目的清晰明确", "试验要求详细，包括试验条件和参数", "受试/陪试设备描述较为完整", "试验设备、测试设备及要求部分提供了详细的设备信息", "试验布置和连接部分提供了布置图的引用", "受试设备、试验装置的制造符合性要求部分内容完整", "试验程序部分详细描述了试验步骤", "试验判据部分明确了试验的通过标准" ]
+        "passed_items" : [ "G-9-EUT_supplier", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions" ]
       },
       "chunk" : 10,
       "totalChunks" : 10,
       "estimatedTokens" : 1527,
-      "chapterTitle" : "风车"
+      "chapterTitle" : "10 风车"
     } ]
   }
 }
