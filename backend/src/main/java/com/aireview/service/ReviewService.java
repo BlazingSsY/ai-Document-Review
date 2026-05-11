@@ -7,6 +7,7 @@ import com.aireview.entity.ReviewTask;
 import com.aireview.entity.Rule;
 import com.aireview.repository.ReviewTaskMapper;
 import com.aireview.util.ChunkUtils;
+import com.aireview.util.RuleDispatcher;
 import com.aireview.util.RuleParser;
 import com.aireview.util.WordParser;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -283,18 +284,19 @@ public class ReviewService {
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                     "文档解析完成，共识别 " + chapters.size() + " 个章节", 15);
 
-            // 2. Build system prompt from scenario rules
+            // 2. Load and prepare scenario rules (parse metadata + strip frontmatter)
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在加载审查规则...", 20);
             List<Rule> rules = ruleService.getRulesByScenarioId(task.getScenarioId());
             if (rules.isEmpty()) {
                 throw new RuntimeException("审查场景中没有找到有效规则，场景ID: " + task.getScenarioId());
             }
-            List<String> ruleContents = rules.stream()
-                    .map(r -> RuleParser.parseContent(r.getContent(), r.getFileType()))
-                    .toList();
-            String systemPrompt = RuleParser.buildSystemPrompt(ruleContents);
+            List<RuleDispatcher.PreparedRule> preparedRules = RuleDispatcher.prepare(rules);
+            int globalCount = (int) preparedRules.stream().filter(RuleDispatcher.PreparedRule::isGlobal).count();
+            int sectionCount = (int) preparedRules.stream().filter(RuleDispatcher.PreparedRule::isSectionSpecific).count();
+            int docCount = (int) preparedRules.stream().filter(RuleDispatcher.PreparedRule::isDocumentSpecific).count();
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                    "已加载 " + rules.size() + " 条审查规则", 25);
+                    "已加载 " + rules.size() + " 条规则（通用 " + globalCount
+                            + " 条，专项 " + sectionCount + " 条，文档级 " + docCount + " 条）", 25);
 
             // 3. Get AI model config
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
@@ -305,10 +307,28 @@ public class ReviewService {
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                     "文档已切分为 " + chunks.size() + " 个片段，开始调用AI审查...", 30);
 
-            // Save chunk debug info to 切片结果.json for debugging
-            saveChunkDebugInfo(taskId, task.getFileName(), chapters, chunks);
+            // 5a. Pre-compute dispatch for every chunk so we can write the debug file
+            // BEFORE any AI call. This way a 429 / timeout on chunk 1 still leaves a
+            // diagnosable 切片结果.json on disk with the applied-rule traces.
+            List<RuleDispatcher.DispatchResult> dispatches = new ArrayList<>();
+            List<Map<String, Object>> chunkDispatchTraces = new ArrayList<>();
+            for (int i = 0; i < chunks.size(); i++) {
+                ChunkUtils.ChunkResult chunk = chunks.get(i);
+                RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
+                        chunk.getLabel(), chunk.getContent(), preparedRules);
+                dispatches.add(dispatch);
 
-            // 5. Process each chunk with retry
+                Map<String, Object> dispatchEntry = new LinkedHashMap<>();
+                dispatchEntry.put("chunk", i + 1);
+                dispatchEntry.put("chapterTitle", chunk.getLabel());
+                dispatchEntry.put("appliedRules", dispatch.getAppliedRuleNames());
+                dispatchEntry.put("matchTraces", dispatch.getMatchTraces());
+                chunkDispatchTraces.add(dispatchEntry);
+            }
+            // Write debug file early so partial failures stay diagnosable.
+            saveChunkDebugInfo(taskId, task.getFileName(), chapters, chunks, chunkDispatchTraces);
+
+            // 5b. Process each chunk with the pre-computed dispatch
             List<Map<String, Object>> chunkResults = new ArrayList<>();
             for (int i = 0; i < chunks.size(); i++) {
                 // Check cancellation before each chunk
@@ -318,12 +338,16 @@ public class ReviewService {
                 }
 
                 ChunkUtils.ChunkResult chunk = chunks.get(i);
+                RuleDispatcher.DispatchResult dispatch = dispatches.get(i);
                 int chunkNum = i + 1;
                 int progress = 30 + (int) ((double) chunkNum / chunks.size() * 60);
+
                 String progressMsg = "正在审查 [" + chunk.getLabel() + "] (" + chunkNum + "/" + chunks.size()
-                        + "，约" + chunk.getEstimatedTokens() + " tokens)...";
+                        + "，约" + chunk.getEstimatedTokens() + " tokens，命中规则 "
+                        + dispatch.getAppliedRules().size() + " 条)...";
                 webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, progressMsg, progress);
 
+                String systemPrompt = buildPromptForRules(dispatch.getAppliedRules());
                 String chunkContent = "章节: " + chunk.getLabel()
                         + " (" + chunkNum + "/" + chunks.size() + ")\n\n" + chunk.getContent();
                 String aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent);
@@ -333,6 +357,7 @@ public class ReviewService {
                 chunkResult.put("chapterTitle", chunk.getLabel());
                 chunkResult.put("totalChunks", chunks.size());
                 chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
+                chunkResult.put("appliedRules", dispatch.getAppliedRuleNames());
                 Map<String, Object> parsedResult = tryParseAiJson(aiResponse);
                 if (parsedResult != null) {
                     chunkResult.put("result", parsedResult);
@@ -348,6 +373,33 @@ public class ReviewService {
 
                 webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                         "[" + chunk.getLabel() + "] 审查完成", progress);
+            }
+
+            // 5.5 Document-level pass (only if there are document_specific rules to apply)
+            List<RuleDispatcher.PreparedRule> docRules = RuleDispatcher.documentLevelRules(preparedRules);
+            if (!docRules.isEmpty()) {
+                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                        "正在进行文档级综合审查 (" + docRules.size() + " 条)...", 92);
+                String docSystemPrompt = buildPromptForRules(docRules);
+                String docUserContent = buildDocumentLevelInput(chapters, chunkResults);
+                try {
+                    String docResponse = callWithRetry(modelConfig, docSystemPrompt, docUserContent);
+                    Map<String, Object> docParsed = tryParseAiJson(docResponse);
+                    if (docParsed == null) {
+                        docParsed = buildFallbackResult("全文综合审查", docResponse);
+                    }
+                    Map<String, Object> docChunk = new HashMap<>();
+                    docChunk.put("chunk", chunkResults.size() + 1);
+                    docChunk.put("chapterTitle", "全文综合审查（文档级规则）");
+                    docChunk.put("totalChunks", chunks.size() + 1);
+                    docChunk.put("estimatedTokens", ChunkUtils.estimateTokens(docUserContent));
+                    docChunk.put("appliedRules", docRules.stream()
+                            .map(r -> r.getRule().getRuleName()).toList());
+                    docChunk.put("result", docParsed);
+                    chunkResults.add(docChunk);
+                } catch (Exception docEx) {
+                    log.warn("Document-level review pass failed: {}", docEx.getMessage());
+                }
             }
 
             // 6. Aggregate results
@@ -378,10 +430,14 @@ public class ReviewService {
      * Writes full content (no truncation) to the bind-mounted ./output directory
      * so the file is directly accessible on the host machine.
      * Also writes a copy to the uploads volume as a backup.
+     *
+     * @param dispatchTraces  per-chunk record of which rules were applied and why; one entry
+     *                        per chunk, aligned with {@code chunks} by chunk number.
      */
     private void saveChunkDebugInfo(String taskId, String fileName,
                                      List<WordParser.Chapter> chapters,
-                                     List<ChunkUtils.ChunkResult> chunks) {
+                                     List<ChunkUtils.ChunkResult> chunks,
+                                     List<Map<String, Object>> dispatchTraces) {
         try {
             Map<String, Object> debug = new LinkedHashMap<>();
             debug.put("taskId", taskId);
@@ -404,7 +460,7 @@ public class ReviewService {
             }
             debug.put("chapters", chapterList);
 
-            // Chunk list with FULL content (no truncation)
+            // Chunk list with FULL content (no truncation), plus dispatch trace
             List<Map<String, Object>> chunkList = new ArrayList<>();
             for (int i = 0; i < chunks.size(); i++) {
                 ChunkUtils.ChunkResult chunk = chunks.get(i);
@@ -414,6 +470,11 @@ public class ReviewService {
                 m.put("estimatedTokens", chunk.getEstimatedTokens());
                 m.put("contentLength", chunk.getContent().length());
                 m.put("content", chunk.getContent());       // full content
+                if (dispatchTraces != null && i < dispatchTraces.size()) {
+                    Map<String, Object> trace = dispatchTraces.get(i);
+                    m.put("appliedRules", trace.get("appliedRules"));
+                    m.put("dispatchTrace", trace.get("matchTraces"));
+                }
                 chunkList.add(m);
             }
             debug.put("chunks", chunkList);
@@ -464,6 +525,62 @@ public class ReviewService {
         } catch (Exception e) {
             log.warn("Failed to save 审查结果.json: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Build a system prompt that contains only the rules picked by the dispatcher for the
+     * current chunk. Each rule is preceded by a small metadata header so the model can cite
+     * rule_code / severity / standard in its issues.
+     */
+    private String buildPromptForRules(List<RuleDispatcher.PreparedRule> rulesForChunk) {
+        if (rulesForChunk == null || rulesForChunk.isEmpty()) {
+            // Nothing matched. Send a minimal global-style prompt so we still get a JSON
+            // skeleton back; otherwise the AI may return free text and the chunk shows up
+            // as an "unparseable" fallback issue in the UI.
+            return RuleParser.buildSystemPrompt(List.of(
+                    "本片段未命中任何专项规则。请仅基于通用文档质量要求（错别字、引用一致性、字段完整性等）做轻量审查；"
+                            + "若没有问题，请在 passed_items 中说明，并保持 issues 为空数组。"));
+        }
+        List<String> bodies = new ArrayList<>();
+        List<String> headers = new ArrayList<>();
+        for (RuleDispatcher.PreparedRule pr : rulesForChunk) {
+            bodies.add(pr.getBody());
+            headers.add(RuleParser.buildRuleHeader(pr.getRule().getRuleName(), pr.getMetadata()));
+        }
+        return RuleParser.buildSystemPrompt(bodies, headers);
+    }
+
+    /**
+     * Compose the user message for the document-level review pass: chapter outline plus
+     * each per-chunk summary already returned by the model.
+     */
+    private String buildDocumentLevelInput(List<WordParser.Chapter> chapters,
+                                           List<Map<String, Object>> chunkResults) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("【文档章节目录】\n");
+        for (int i = 0; i < chapters.size(); i++) {
+            WordParser.Chapter ch = chapters.get(i);
+            String title = ch.getTitle() == null || ch.getTitle().isBlank()
+                    ? "(前言/无标题)" : ch.getTitle();
+            sb.append(i + 1).append(". ").append(title).append("\n");
+        }
+        sb.append("\n【各章节审查摘要】\n");
+        for (Map<String, Object> chunk : chunkResults) {
+            String title = String.valueOf(chunk.getOrDefault("chapterTitle", ""));
+            sb.append("- ").append(title).append("：");
+            Object result = chunk.get("result");
+            if (result instanceof Map<?, ?> resMap) {
+                Object summary = resMap.get("summary");
+                sb.append(summary == null ? "(无摘要)" : summary.toString());
+                Object issues = resMap.get("issues");
+                if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
+                    sb.append(" / 已发现问题 ").append(issueList.size()).append(" 条");
+                }
+            }
+            sb.append("\n");
+        }
+        sb.append("\n请基于全文目录与各章节摘要，按文档级规则给出综合判定。");
+        return sb.toString();
     }
 
     /**
@@ -620,15 +737,22 @@ public class ReviewService {
 
     /**
      * Aggregate chunk review results into a unified result.
+     * Adds severity / category breakdowns so the dashboard and Excel export can
+     * surface the extended issue fields produced by the new system prompt schema.
      */
     private Map<String, Object> aggregateResults(List<Map<String, Object>> chunkResults) {
-        Map<String, Object> aggregated = new HashMap<>();
+        Map<String, Object> aggregated = new LinkedHashMap<>();
         aggregated.put("totalChunks", chunkResults.size());
         aggregated.put("chunkResults", chunkResults);
 
-        // Try to compute an average score if available
         List<Integer> scores = new ArrayList<>();
         List<Object> allIssues = new ArrayList<>();
+        Map<String, Integer> severityCounts = new LinkedHashMap<>();
+        severityCounts.put("high", 0);
+        severityCounts.put("medium", 0);
+        severityCounts.put("low", 0);
+        severityCounts.put("unknown", 0);
+        Map<String, Integer> categoryCounts = new LinkedHashMap<>();
 
         for (Map<String, Object> chunk : chunkResults) {
             Object result = chunk.get("result");
@@ -640,8 +764,18 @@ public class ReviewService {
                     scores.add(((Number) score).intValue());
                 }
                 Object issues = resultMap.get("issues");
-                if (issues instanceof List) {
-                    allIssues.addAll((List<?>) issues);
+                if (issues instanceof List<?> issueList) {
+                    for (Object item : issueList) {
+                        allIssues.add(item);
+                        if (item instanceof Map<?, ?> issueMap) {
+                            String severity = normalizeSeverity(issueMap.get("severity"));
+                            severityCounts.merge(severity, 1, Integer::sum);
+                            Object cat = issueMap.get("category");
+                            if (cat != null && !String.valueOf(cat).isBlank()) {
+                                categoryCounts.merge(String.valueOf(cat), 1, Integer::sum);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -652,8 +786,22 @@ public class ReviewService {
         }
         aggregated.put("totalIssues", allIssues.size());
         aggregated.put("allIssues", allIssues);
+        aggregated.put("severityCounts", severityCounts);
+        aggregated.put("categoryCounts", categoryCounts);
 
         return aggregated;
+    }
+
+    private static String normalizeSeverity(Object raw) {
+        if (raw == null) return "unknown";
+        String s = raw.toString().trim().toLowerCase();
+        return switch (s) {
+            case "high", "高", "严重", "critical" -> "high";
+            case "medium", "中", "mid", "moderate" -> "medium";
+            case "low", "低", "minor" -> "low";
+            case "" -> "unknown";
+            default -> "unknown";
+        };
     }
 
     /**
@@ -703,16 +851,17 @@ public class ReviewService {
             dataStyle.setBorderLeft(BorderStyle.THIN);
             dataStyle.setBorderRight(BorderStyle.THIN);
 
-            // Create header row
+            // Create header row — added 严重程度 / 问题分类 / 规则编码 to match the extended
+            // issue schema (severity / category / rule_code). 判定依据 now combines the rule
+            // name with the evidence excerpt so reviewers can verify each finding inline.
             Row headerRow = sheet.createRow(0);
-            String[] headers = {"序号", "章节", "审查意见", "判定依据", "是否接受"};
+            String[] headers = {"序号", "章节", "严重程度", "问题分类", "规则编码", "审查意见", "判定依据", "是否接受"};
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = headerRow.createCell(i);
                 cell.setCellValue(headers[i]);
                 cell.setCellStyle(headerStyle);
             }
 
-            // Collect all issues with chapter info
             int rowNum = 1;
             Object chunkResultsObj = aiResult.get("chunkResults");
             if (chunkResultsObj instanceof List) {
@@ -730,46 +879,7 @@ public class ReviewService {
                             @SuppressWarnings("unchecked")
                             List<Map<String, Object>> issues = (List<Map<String, Object>>) issuesObj;
                             for (Map<String, Object> issue : issues) {
-                                Row row = sheet.createRow(rowNum);
-
-                                // 序号
-                                Cell numCell = row.createCell(0);
-                                numCell.setCellValue(rowNum);
-                                numCell.setCellStyle(dataStyle);
-
-                                // 章节：优先使用问题的 location 字段（已按一级>二级>三级路径生成），
-                                // 缺失时回退到 chunk 级的章节标题
-                                String location = issue.get("location") != null
-                                        ? issue.get("location").toString() : "";
-                                Cell chapterCell = row.createCell(1);
-                                chapterCell.setCellValue(!location.isEmpty() ? location : chapterTitle);
-                                chapterCell.setCellStyle(dataStyle);
-
-                                // 审查意见 (description + suggestion)
-                                String description = issue.get("description") != null
-                                        ? issue.get("description").toString() : "";
-                                String suggestion = issue.get("suggestion") != null
-                                        ? issue.get("suggestion").toString() : "";
-                                String opinion = description;
-                                if (!suggestion.isEmpty()) {
-                                    opinion += "\n建议：" + suggestion;
-                                }
-                                Cell opinionCell = row.createCell(2);
-                                opinionCell.setCellValue(opinion);
-                                opinionCell.setCellStyle(dataStyle);
-
-                                // 判定依据：对应的审查规则
-                                String rule = issue.get("rule") != null
-                                        ? issue.get("rule").toString() : "";
-                                Cell basisCell = row.createCell(3);
-                                basisCell.setCellValue(rule);
-                                basisCell.setCellStyle(dataStyle);
-
-                                // 是否接受 (空白)
-                                Cell acceptCell = row.createCell(4);
-                                acceptCell.setCellValue("");
-                                acceptCell.setCellStyle(dataStyle);
-
+                                writeIssueRow(sheet.createRow(rowNum), rowNum, issue, chapterTitle, dataStyle);
                                 rowNum++;
                             }
                         }
@@ -784,55 +894,83 @@ public class ReviewService {
                     @SuppressWarnings("unchecked")
                     List<Map<String, Object>> allIssues = (List<Map<String, Object>>) allIssuesObj;
                     for (Map<String, Object> issue : allIssues) {
-                        Row row = sheet.createRow(rowNum);
-
-                        Cell numCell = row.createCell(0);
-                        numCell.setCellValue(rowNum);
-                        numCell.setCellStyle(dataStyle);
-
-                        String location = issue.get("location") != null
-                                ? issue.get("location").toString() : "";
-                        Cell chapterCell = row.createCell(1);
-                        chapterCell.setCellValue(location);
-                        chapterCell.setCellStyle(dataStyle);
-
-                        String description = issue.get("description") != null
-                                ? issue.get("description").toString() : "";
-                        String suggestion = issue.get("suggestion") != null
-                                ? issue.get("suggestion").toString() : "";
-                        String opinion = description;
-                        if (!suggestion.isEmpty()) {
-                            opinion += "\n建议：" + suggestion;
-                        }
-                        Cell opinionCell = row.createCell(2);
-                        opinionCell.setCellValue(opinion);
-                        opinionCell.setCellStyle(dataStyle);
-
-                        String rule = issue.get("rule") != null
-                                ? issue.get("rule").toString() : "";
-                        Cell basisCell = row.createCell(3);
-                        basisCell.setCellValue(rule);
-                        basisCell.setCellStyle(dataStyle);
-
-                        Cell acceptCell = row.createCell(4);
-                        acceptCell.setCellValue("");
-                        acceptCell.setCellStyle(dataStyle);
-
+                        writeIssueRow(sheet.createRow(rowNum), rowNum, issue, "", dataStyle);
                         rowNum++;
                     }
                 }
             }
 
-            // Set column widths
+            // Column widths (8 columns now)
             sheet.setColumnWidth(0, 2000);   // 序号
             sheet.setColumnWidth(1, 6000);   // 章节
-            sheet.setColumnWidth(2, 15000);  // 审查意见
-            sheet.setColumnWidth(3, 12000);  // 判定依据
-            sheet.setColumnWidth(4, 4000);   // 是否接受
+            sheet.setColumnWidth(2, 2800);   // 严重程度
+            sheet.setColumnWidth(3, 3600);   // 问题分类
+            sheet.setColumnWidth(4, 4000);   // 规则编码
+            sheet.setColumnWidth(5, 14000);  // 审查意见
+            sheet.setColumnWidth(6, 12000);  // 判定依据
+            sheet.setColumnWidth(7, 3000);   // 是否接受
 
             workbook.write(out);
             return out.toByteArray();
         }
+    }
+
+    /**
+     * Write one issue into a sheet row. Columns:
+     *   0 序号 | 1 章节 | 2 严重程度 | 3 问题分类 | 4 规则编码 | 5 审查意见 | 6 判定依据 | 7 是否接受
+     *
+     * Falls back gracefully when older AI responses don't include severity/category/etc.
+     */
+    private static void writeIssueRow(Row row, int rowNum, Map<String, Object> issue,
+                                       String fallbackChapterTitle, CellStyle dataStyle) {
+        String location = strField(issue, "location");
+        String description = firstNonBlank(strField(issue, "description"), strField(issue, "explanation"));
+        String suggestion = strField(issue, "suggestion");
+        String rule = strField(issue, "rule");
+        String ruleCode = firstNonBlank(strField(issue, "rule_code"), strField(issue, "ruleCode"));
+        String severity = renderSeverity(strField(issue, "severity"));
+        String category = strField(issue, "category");
+        String evidence = strField(issue, "evidence");
+
+        String opinion = description;
+        if (!suggestion.isEmpty()) opinion += (opinion.isEmpty() ? "" : "\n") + "建议：" + suggestion;
+
+        String basis = rule;
+        if (!evidence.isEmpty()) basis += (basis.isEmpty() ? "" : "\n") + "判定依据：" + evidence;
+
+        cell(row, 0, String.valueOf(rowNum), dataStyle);
+        cell(row, 1, location.isEmpty() ? fallbackChapterTitle : location, dataStyle);
+        cell(row, 2, severity, dataStyle);
+        cell(row, 3, category, dataStyle);
+        cell(row, 4, ruleCode, dataStyle);
+        cell(row, 5, opinion, dataStyle);
+        cell(row, 6, basis, dataStyle);
+        cell(row, 7, "", dataStyle);
+    }
+
+    private static void cell(Row row, int idx, String value, CellStyle style) {
+        Cell c = row.createCell(idx);
+        c.setCellValue(value);
+        c.setCellStyle(style);
+    }
+
+    private static String strField(Map<String, Object> map, String key) {
+        Object v = map.get(key);
+        return v == null ? "" : v.toString();
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        return a == null || a.isBlank() ? (b == null ? "" : b) : a;
+    }
+
+    private static String renderSeverity(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        return switch (raw.trim().toLowerCase()) {
+            case "high", "高", "critical", "严重" -> "高";
+            case "medium", "中", "moderate" -> "中";
+            case "low", "低", "minor" -> "低";
+            default -> raw.trim();
+        };
     }
 
     private void updateTaskStatus(ReviewTask task, String status, String failReason) {

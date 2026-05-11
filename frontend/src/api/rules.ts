@@ -9,6 +9,30 @@ export interface Rule {
   libraryId?: number;
   updatedAt: string;
   isValid: boolean;
+
+  // Editable metadata. Auto-filled on upload (frontmatter / DO-160G auto-detection);
+  // overridable via PUT /api/v1/rules/{id}/metadata.
+  ruleCode?: string;
+  ruleType?: string;
+  documentType?: string;
+  standard?: string;
+  sections?: string[];
+  keywords?: string[];
+  severity?: string;
+  description?: string;
+  sourceFile?: string;
+}
+
+export interface RuleMetadataUpdate {
+  ruleName?: string;
+  ruleCode?: string;
+  ruleType?: string;
+  documentType?: string;
+  standard?: string;
+  sections?: string[];
+  keywords?: string[];
+  severity?: string;
+  description?: string;
 }
 
 export interface RuleLibrary {
@@ -47,9 +71,14 @@ export function getRuleDetail(id: number) {
 }
 
 export function uploadRule(formData: FormData) {
-  return request.post<ApiResponse<Rule>>('/rules/upload', formData, {
+  // Backend now returns a list (one rule file can expand into multiple rules)
+  return request.post<ApiResponse<Rule[]>>('/rules/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
+}
+
+export function updateRuleMetadata(id: number, payload: RuleMetadataUpdate) {
+  return request.put<ApiResponse<Rule>>(`/rules/${id}/metadata`, payload);
 }
 
 export function deleteRule(id: number) {

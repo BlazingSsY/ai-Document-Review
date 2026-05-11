@@ -3,8 +3,11 @@ package com.aireview.controller;
 import com.aireview.dto.ApiResponse;
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.RuleDTO;
+import com.aireview.dto.RuleMetadataUpdateRequest;
 import com.aireview.service.RuleService;
 import com.aireview.util.SecurityUtils;
+
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,18 +25,36 @@ public class RuleController {
 
     @PostMapping("/upload")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
-    public ApiResponse<RuleDTO> uploadRule(@RequestParam("file") MultipartFile file,
-                                           @RequestParam(required = false) Long libraryId,
-                                           Authentication authentication) {
+    public ApiResponse<List<RuleDTO>> uploadRule(@RequestParam("file") MultipartFile file,
+                                                 @RequestParam(required = false) Long libraryId,
+                                                 Authentication authentication) {
         try {
             Long userId = SecurityUtils.getUserId(authentication);
-            RuleDTO rule = ruleService.uploadRule(file, userId, libraryId);
-            return ApiResponse.success("规则上传成功", rule);
+            List<RuleDTO> rules = ruleService.uploadRuleAll(file, userId, libraryId);
+            String msg = rules.size() == 1
+                    ? "规则上传成功"
+                    : "规则上传成功，共解析 " + rules.size() + " 条规则";
+            return ApiResponse.success(msg, rules);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         } catch (Exception e) {
             log.error("Rule upload failed", e);
             return ApiResponse.error("规则上传失败: " + e.getMessage());
+        }
+    }
+
+    @PutMapping("/{id}/metadata")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<RuleDTO> updateMetadata(@PathVariable Long id,
+                                               @RequestBody RuleMetadataUpdateRequest req) {
+        try {
+            RuleDTO updated = ruleService.updateMetadata(id, req);
+            return ApiResponse.success("规则元信息已更新", updated);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to update rule metadata id={}", id, e);
+            return ApiResponse.error("更新失败: " + e.getMessage());
         }
     }
 

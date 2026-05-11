@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Space, Typography, Tag,
-  message, Popconfirm, Breadcrumb, Empty,
+  message, Popconfirm, Breadcrumb, Empty, Descriptions, Select,
 } from 'antd';
 import {
   PlusOutlined, EyeOutlined, DeleteOutlined, FolderOutlined,
-  ArrowLeftOutlined, FileTextOutlined,
+  ArrowLeftOutlined, FileTextOutlined, EditOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getRuleList, uploadRule, deleteRule, Rule, RuleLibrary,
+  getRuleList, uploadRule, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
   getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
 } from '../api/rules';
 import RuleUploader from '../components/RuleUploader';
@@ -18,6 +18,40 @@ import useAuthStore from '../store/authStore';
 
 const { Title, Paragraph, Text } = Typography;
 const { TextArea } = Input;
+
+const RULE_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+  global: { label: '通用', color: 'default' },
+  section_specific: { label: '专项', color: 'geekblue' },
+  document_specific: { label: '文档级', color: 'purple' },
+  output: { label: '输出规范', color: 'cyan' },
+};
+
+const SEVERITY_LABELS: Record<string, { label: string; color: string }> = {
+  high: { label: '高', color: 'red' },
+  medium: { label: '中', color: 'orange' },
+  low: { label: '低', color: 'green' },
+};
+
+function renderRuleTypeTag(ruleType?: string) {
+  if (!ruleType) return <Tag>通用</Tag>;
+  const meta = RULE_TYPE_LABELS[ruleType.toLowerCase()];
+  return <Tag color={meta?.color || 'default'}>{meta?.label || ruleType}</Tag>;
+}
+
+function renderSeverityTag(severity?: string) {
+  if (!severity) return <Text type="secondary" style={{ fontSize: 12 }}>-</Text>;
+  const meta = SEVERITY_LABELS[severity.toLowerCase()];
+  return <Tag color={meta?.color || 'default'}>{meta?.label || severity}</Tag>;
+}
+
+function hasRuleMetadata(rule: Rule): boolean {
+  return Boolean(
+    rule.ruleCode || rule.ruleType || rule.documentType || rule.standard
+      || (rule.sections && rule.sections.length > 0)
+      || (rule.keywords && rule.keywords.length > 0)
+      || rule.severity
+  );
+}
 
 function RuleListPage() {
   const user = useAuthStore((s) => s.user);
@@ -46,6 +80,10 @@ function RuleListPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadForm] = Form.useForm();
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingRule, setEditingRule] = useState<Rule | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editForm] = Form.useForm();
 
   // Fetch libraries
   const fetchLibraries = async () => {
@@ -107,14 +145,54 @@ function RuleListPage() {
       const formData = new FormData();
       formData.append('file', uploadFile);
       formData.append('libraryId', String(currentLibrary.id));
-      await uploadRule(formData);
-      message.success('规则上传成功');
+      const res = await uploadRule(formData);
+      const created = res.data?.data ?? [];
+      const n = Array.isArray(created) ? created.length : 0;
+      message.success(n > 1 ? `规则上传成功，共解析 ${n} 条规则` : '规则上传成功');
       setUploadModalOpen(false);
       setUploadFile(null);
       uploadForm.resetFields();
       fetchRules();
     } catch { /* handled */ }
     finally { setUploading(false); }
+  };
+
+  const openEdit = (rule: Rule) => {
+    setEditingRule(rule);
+    editForm.setFieldsValue({
+      ruleName: rule.ruleName,
+      ruleCode: rule.ruleCode || '',
+      ruleType: rule.ruleType || 'global',
+      severity: rule.severity || 'medium',
+      standard: rule.standard || '',
+      sections: rule.sections || [],
+      keywords: rule.keywords || [],
+      description: rule.description || '',
+    });
+    setEditModalOpen(true);
+  };
+
+  const handleSaveEdit = async (values: Record<string, unknown>) => {
+    if (!editingRule) return;
+    setSavingEdit(true);
+    try {
+      await updateRuleMetadata(editingRule.id, {
+        ruleName: values.ruleName as string,
+        ruleCode: (values.ruleCode as string) || '',
+        ruleType: values.ruleType as string,
+        severity: values.severity as string,
+        standard: (values.standard as string) || '',
+        sections: (values.sections as string[]) || [],
+        keywords: (values.keywords as string[]) || [],
+        description: (values.description as string) || '',
+      });
+      message.success('元信息已保存');
+      setEditModalOpen(false);
+      setEditingRule(null);
+      editForm.resetFields();
+      fetchRules();
+    } catch { /* handled */ }
+    finally { setSavingEdit(false); }
   };
 
   const handlePreview = (rule: Rule) => {
@@ -180,25 +258,62 @@ function RuleListPage() {
   // Rule list columns
   const ruleColumns: ColumnsType<Rule> = [
     {
-      title: '规则名称', key: 'ruleName', width: 200,
+      title: '规则名称', key: 'ruleName', width: 220,
       render: (_, record) => (
-        <Space>
-          <FileTextOutlined style={{ color: '#1677ff' }} />
-          <Text>{record.ruleName}</Text>
+        <Space direction="vertical" size={0}>
+          <Space>
+            <FileTextOutlined style={{ color: '#1677ff' }} />
+            <Text>{record.ruleName}</Text>
+          </Space>
+          {record.ruleCode && (
+            <Text type="secondary" style={{ fontSize: 11 }}>{record.ruleCode}</Text>
+          )}
         </Space>
       ),
     },
-    { title: '文件类型', dataIndex: 'fileType', key: 'fileType', width: 100 },
     {
-      title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 180,
+      title: '类型', key: 'ruleType', width: 110,
+      render: (_, record) => renderRuleTypeTag(record.ruleType),
+    },
+    {
+      title: '严重程度', key: 'severity', width: 90,
+      render: (_, record) => renderSeverityTag(record.severity),
+    },
+    {
+      title: '适用范围', key: 'scope', width: 220,
+      render: (_, record) => {
+        const items: string[] = [];
+        if (record.standard) items.push(`标准：${record.standard}`);
+        if (record.sections && record.sections.length > 0) items.push(`章节：${record.sections.join('、')}`);
+        if (record.keywords && record.keywords.length > 0) items.push(`关键词：${record.keywords.join('、')}`);
+        if (items.length === 0) return <Text type="secondary" style={{ fontSize: 12 }}>全文档</Text>;
+        return (
+          <Space direction="vertical" size={0}>
+            {items.map((it) => <Text key={it} style={{ fontSize: 12 }}>{it}</Text>)}
+          </Space>
+        );
+      },
+    },
+    {
+      title: '来源文件', dataIndex: 'sourceFile', key: 'sourceFile', width: 150,
+      ellipsis: true,
+      render: (text?: string) => text ? <Text type="secondary" style={{ fontSize: 12 }}>{text}</Text> : '-',
+    },
+    { title: '文件类型', dataIndex: 'fileType', key: 'fileType', width: 80 },
+    {
+      title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 150,
       render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
     },
     {
-      title: '操作', key: 'action', width: 150,
+      title: '操作', key: 'action', width: 200, fixed: 'right',
       render: (_, record) => (
-        <Space>
+        <Space size={4}>
           <Button type="link" size="small" icon={<EyeOutlined />}
             onClick={() => handlePreview(record)}>预览</Button>
+          {canManage && (
+            <Button type="link" size="small" icon={<EditOutlined />}
+              onClick={() => openEdit(record)}>编辑</Button>
+          )}
           {canManage && (
             <Popconfirm title="确定要删除此规则吗？" onConfirm={() => handleDeleteRule(record.id)}
               okText="确定" cancelText="取消">
@@ -317,9 +432,43 @@ function RuleListPage() {
       {/* Preview Modal */}
       <Modal title={`规则预览 - ${previewRule?.ruleName || ''}`} open={previewModalOpen}
         onCancel={() => setPreviewModalOpen(false)}
-        footer={<Button onClick={() => setPreviewModalOpen(false)}>关闭</Button>} width={700}>
+        footer={<Button onClick={() => setPreviewModalOpen(false)}>关闭</Button>} width={780}>
         {previewRule && (
           <div>
+            {hasRuleMetadata(previewRule) && (
+              <>
+                <Title level={5}>规则元信息</Title>
+                <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
+                  {previewRule.ruleCode && (
+                    <Descriptions.Item label="规则编号">{previewRule.ruleCode}</Descriptions.Item>
+                  )}
+                  <Descriptions.Item label="规则类型">{renderRuleTypeTag(previewRule.ruleType)}</Descriptions.Item>
+                  {previewRule.severity && (
+                    <Descriptions.Item label="严重程度">{renderSeverityTag(previewRule.severity)}</Descriptions.Item>
+                  )}
+                  {previewRule.standard && (
+                    <Descriptions.Item label="适用标准">{previewRule.standard}</Descriptions.Item>
+                  )}
+                  {previewRule.documentType && (
+                    <Descriptions.Item label="文档类型">{previewRule.documentType}</Descriptions.Item>
+                  )}
+                  {previewRule.sections && previewRule.sections.length > 0 && (
+                    <Descriptions.Item label="目标章节" span={2}>
+                      <Space wrap>
+                        {previewRule.sections.map((s) => <Tag key={s}>{s}</Tag>)}
+                      </Space>
+                    </Descriptions.Item>
+                  )}
+                  {previewRule.keywords && previewRule.keywords.length > 0 && (
+                    <Descriptions.Item label="匹配关键词" span={2}>
+                      <Space wrap>
+                        {previewRule.keywords.map((k) => <Tag color="blue" key={k}>{k}</Tag>)}
+                      </Space>
+                    </Descriptions.Item>
+                  )}
+                </Descriptions>
+              </>
+            )}
             <Title level={5}>规则内容</Title>
             <Card size="small" style={{ maxHeight: 400, overflow: 'auto', background: '#fafafa', marginBottom: 16 }}>
               <Paragraph>
@@ -330,6 +479,71 @@ function RuleListPage() {
             </Card>
           </div>
         )}
+      </Modal>
+
+      {/* Edit Metadata Modal */}
+      <Modal
+        title={`编辑规则元信息 - ${editingRule?.ruleName || ''}`}
+        open={editModalOpen}
+        onCancel={() => { setEditModalOpen(false); setEditingRule(null); editForm.resetFields(); }}
+        footer={null}
+        destroyOnClose
+        width={680}
+      >
+        <Form form={editForm} layout="vertical" onFinish={handleSaveEdit}>
+          <Form.Item name="ruleName" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
+            <Input placeholder="例如 G-7-temperature_test" />
+          </Form.Item>
+          <Form.Item name="ruleCode" label="规则编号">
+            <Input placeholder="例如 DO160G-13-001（可选）" />
+          </Form.Item>
+          <Form.Item name="ruleType" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
+            <Select
+              options={[
+                { label: '通用规则（应用到所有章节）', value: 'global' },
+                { label: '专项规则（按章节匹配触发）', value: 'section_specific' },
+                { label: '文档级规则（全文综合审查）', value: 'document_specific' },
+                { label: '输出规范规则', value: 'output' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="severity" label="严重程度">
+            <Select
+              options={[
+                { label: '高', value: 'high' },
+                { label: '中', value: 'medium' },
+                { label: '低', value: 'low' },
+              ]}
+              allowClear
+            />
+          </Form.Item>
+          <Form.Item name="standard" label="适用标准">
+            <Input placeholder="例如 DO-160G（可选）" />
+          </Form.Item>
+          <Form.Item
+            name="sections"
+            label="目标章节"
+            extra="标准的章节编号（如 13、15、4.5）。按回车输入多个；仅 section_specific 规则会按此匹配文档一级标题"
+          >
+            <Select mode="tags" tokenSeparators={[',', '，', ' ']} placeholder="回车确认每个章节号" />
+          </Form.Item>
+          <Form.Item
+            name="keywords"
+            label="匹配关键词"
+            extra="出现在文档一级标题中即认为该专项规则适用，如 霉菌、Fungus"
+          >
+            <Select mode="tags" tokenSeparators={[',', '，']} placeholder="回车确认每个关键词" />
+          </Form.Item>
+          <Form.Item name="description" label="规则简述">
+            <Input.TextArea rows={3} placeholder="便于在列表中识别该规则的一句话描述" />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => { setEditModalOpen(false); setEditingRule(null); }}>取消</Button>
+              <Button type="primary" htmlType="submit" loading={savingEdit}>保存</Button>
+            </Space>
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

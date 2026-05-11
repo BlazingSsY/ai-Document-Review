@@ -157,6 +157,17 @@ public class RuleParser {
      * @return combined system prompt
      */
     public static String buildSystemPrompt(List<String> ruleContents) {
+        return buildSystemPrompt(ruleContents, null);
+    }
+
+    /**
+     * Build a system prompt with per-rule metadata (rule_code, severity, ...) inlined
+     * before each rule body. {@code ruleHeaders.size()} must equal {@code ruleContents.size()};
+     * each header is rendered as a small front-matter block above its rule body.
+     *
+     * Passing {@code null} headers falls back to the legacy unannotated layout.
+     */
+    public static String buildSystemPrompt(List<String> ruleContents, List<String> ruleHeaders) {
         if (ruleContents == null || ruleContents.isEmpty()) {
             return "你是一名专业的文档审查员，请严格按照检查标准审查提供的文档内容，使用中文回复。";
         }
@@ -174,10 +185,14 @@ public class RuleParser {
         sp.append("      \"location\": \"问题所在的章节路径（按下面的章节定位规则填写）\",\n");
         sp.append("      \"description\": \"问题描述\",\n");
         sp.append("      \"suggestion\": \"修改建议\",\n");
-        sp.append("      \"rule\": \"对应的审查规则名称\"\n");
+        sp.append("      \"rule\": \"对应的审查规则名称（必填）\",\n");
+        sp.append("      \"rule_code\": \"命中的规则编号，若规则未提供则留空\",\n");
+        sp.append("      \"severity\": \"high | medium | low，若规则未声明默认 medium\",\n");
+        sp.append("      \"category\": \"问题分类，例如 格式、完整性、标准符合性、逻辑一致性\",\n");
+        sp.append("      \"evidence\": \"判定依据：摘录支持该结论的原文片段或表格行\"\n");
         sp.append("    }\n");
         sp.append("  ],\n");
-        sp.append("  \"passed_items\": [\"通过的检查项列表\"]\n");
+        sp.append("  \"passed_items\": [\"通过或不适用的检查项\"]\n");
         sp.append("}\n\n");
 
         sp.append("【章节定位规则（location 字段必须遵守）】\n");
@@ -206,10 +221,42 @@ public class RuleParser {
 
         for (int i = 0; i < ruleContents.size(); i++) {
             sp.append("--- 规则 ").append(i + 1).append(" ---\n");
+            if (ruleHeaders != null && i < ruleHeaders.size()) {
+                String header = ruleHeaders.get(i);
+                if (header != null && !header.isBlank()) {
+                    sp.append(header).append("\n");
+                }
+            }
             sp.append(ruleContents.get(i)).append("\n\n");
         }
 
         return sp.toString();
+    }
+
+    /**
+     * Render a small metadata header for a single rule, to be placed above its body inside
+     * the system prompt. Returns an empty string when no metadata is present so the layout
+     * stays clean for legacy rules.
+     */
+    public static String buildRuleHeader(String ruleName, RuleMetadata meta) {
+        if (meta == null) {
+            return ruleName != null && !ruleName.isBlank() ? "[规则名称] " + ruleName : "";
+        }
+        StringBuilder sb = new StringBuilder();
+        if (ruleName != null && !ruleName.isBlank()) sb.append("[规则名称] ").append(ruleName).append("\n");
+        if (meta.getRuleCode() != null && !meta.getRuleCode().isBlank())
+            sb.append("[规则编号] ").append(meta.getRuleCode()).append("\n");
+        if (meta.getRuleType() != null && !meta.getRuleType().isBlank())
+            sb.append("[规则类型] ").append(meta.getRuleType()).append("\n");
+        if (meta.getStandard() != null && !meta.getStandard().isBlank())
+            sb.append("[适用标准] ").append(meta.getStandard()).append("\n");
+        if (meta.getSections() != null && !meta.getSections().isEmpty())
+            sb.append("[适用章节] ").append(String.join("、", meta.getSections())).append("\n");
+        if (meta.getKeywords() != null && !meta.getKeywords().isEmpty())
+            sb.append("[关键词] ").append(String.join("、", meta.getKeywords())).append("\n");
+        if (meta.getSeverity() != null && !meta.getSeverity().isBlank())
+            sb.append("[严重程度] ").append(meta.getSeverity()).append("\n");
+        return sb.toString().trim();
     }
 
     /**

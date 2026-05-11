@@ -43,6 +43,23 @@ function extractIssues(aiResult: Record<string, unknown> | null): Array<Record<s
   return [];
 }
 
+const SEVERITY_TAG: Record<string, { label: string; color: string }> = {
+  high: { label: '高', color: 'red' },
+  medium: { label: '中', color: 'orange' },
+  low: { label: '低', color: 'green' },
+};
+
+function severityTag(raw: unknown): { label: string; color: string } | null {
+  if (!raw) return null;
+  const key = String(raw).trim().toLowerCase();
+  if (SEVERITY_TAG[key]) return SEVERITY_TAG[key];
+  // Allow Chinese passthrough
+  if (key === '高' || key === 'critical' || key === '严重') return SEVERITY_TAG.high;
+  if (key === '中' || key === 'moderate') return SEVERITY_TAG.medium;
+  if (key === '低' || key === 'minor') return SEVERITY_TAG.low;
+  return { label: String(raw), color: 'default' };
+}
+
 function normalizeStatus(status: string): string {
   return status?.toLowerCase() || 'pending';
 }
@@ -225,6 +242,9 @@ function ReviewWorkspacePage() {
   const issues = extractIssues(task.aiResult);
   const overallScore = task.aiResult?.overallScore as number | undefined;
   const totalChunks = task.aiResult?.totalChunks as number | undefined;
+  const severityCounts = (task.aiResult?.severityCounts || {}) as Record<string, number>;
+  const categoryCounts = (task.aiResult?.categoryCounts || {}) as Record<string, number>;
+  const chunkResults = (task.aiResult?.chunkResults || []) as Array<Record<string, unknown>>;
   const isProcessing = status === 'processing';
 
   return (
@@ -301,6 +321,9 @@ function ReviewWorkspacePage() {
                   : issue.originalText ? String(issue.originalText) : '';
                 const suggestion = issue.suggestion ? String(issue.suggestion) : '';
                 const rule = issue.rule ? String(issue.rule) : '';
+                const ruleCode = (issue.rule_code || issue.ruleCode) ? String(issue.rule_code || issue.ruleCode) : '';
+                const evidence = issue.evidence ? String(issue.evidence) : '';
+                const sev = severityTag(issue.severity);
                 return (
                   <Card
                     key={idx}
@@ -308,9 +331,11 @@ function ReviewWorkspacePage() {
                     className="finding-card"
                     style={{ marginBottom: 8 }}
                   >
-                    {(category || rule) && (
+                    {(category || rule || ruleCode || sev) && (
                       <Space style={{ marginBottom: 4 }} wrap>
+                        {sev && <Tag color={sev.color}>严重程度：{sev.label}</Tag>}
                         {category && <Tag>{category}</Tag>}
+                        {ruleCode && <Tag color="purple">{ruleCode}</Tag>}
                         {rule && <Tag color="blue">{rule}</Tag>}
                       </Space>
                     )}
@@ -330,6 +355,12 @@ function ReviewWorkspacePage() {
                       <div className="suggestion-text">
                         <Text type="secondary" style={{ fontSize: 12 }}>建议：</Text>
                         {suggestion}
+                      </div>
+                    )}
+                    {evidence && (
+                      <div style={{ marginTop: 4 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>判定依据：</Text>
+                        <span style={{ fontSize: 12, color: '#595959' }}>{evidence}</span>
                       </div>
                     )}
                   </Card>
@@ -354,8 +385,56 @@ function ReviewWorkspacePage() {
                   <div>文档分块数：<Text strong>{totalChunks}</Text></div>
                 )}
                 <div>发现问题数：<Text strong>{issues.length}</Text></div>
+                {(severityCounts.high || severityCounts.medium || severityCounts.low || severityCounts.unknown) ? (
+                  <Space wrap size={4}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>严重程度分布：</Text>
+                    {(severityCounts.high ?? 0) > 0 && <Tag color="red">高 {severityCounts.high}</Tag>}
+                    {(severityCounts.medium ?? 0) > 0 && <Tag color="orange">中 {severityCounts.medium}</Tag>}
+                    {(severityCounts.low ?? 0) > 0 && <Tag color="green">低 {severityCounts.low}</Tag>}
+                    {(severityCounts.unknown ?? 0) > 0 && <Tag>未标注 {severityCounts.unknown}</Tag>}
+                  </Space>
+                ) : null}
+                {Object.keys(categoryCounts).length > 0 && (
+                  <Space wrap size={4}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>分类分布：</Text>
+                    {Object.entries(categoryCounts).map(([k, v]) => (
+                      <Tag key={k}>{k} {v}</Tag>
+                    ))}
+                  </Space>
+                )}
               </Space>
             </Card>
+
+            {chunkResults.length > 0 && (
+              <Card size="small" title="规则调度" style={{ marginBottom: 12 }}>
+                <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                  {chunkResults.map((cr, idx) => {
+                    const applied = (cr.appliedRules || []) as string[];
+                    const title = (cr.chapterTitle as string) || `片段 ${idx + 1}`;
+                    return (
+                      <div key={idx} style={{ marginBottom: 6, fontSize: 12 }}>
+                        <Text strong>{title}</Text>
+                        <span style={{ color: '#8c8c8c' }}>：命中 {applied.length} 条</span>
+                        {applied.length > 0 && (
+                          <div style={{ marginTop: 2 }}>
+                            <Space wrap size={2}>
+                              {applied.slice(0, 6).map((name) => (
+                                <Tag key={name} style={{ fontSize: 11 }}>{name}</Tag>
+                              ))}
+                              {applied.length > 6 && (
+                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                  +{applied.length - 6}
+                                </Text>
+                              )}
+                            </Space>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
             {task.failReason && (
               <Card size="small" style={{ borderColor: '#ff4d4f', marginBottom: 12 }}>
                 <Text type="danger">失败原因：{task.failReason}</Text>

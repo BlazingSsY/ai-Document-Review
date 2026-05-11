@@ -26,8 +26,30 @@ CREATE TABLE IF NOT EXISTS rules (
     creator_id      BIGINT          NOT NULL REFERENCES users(id),
     library_id      BIGINT          REFERENCES rule_libraries(id) ON DELETE CASCADE,
     updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    is_valid        BOOLEAN         NOT NULL DEFAULT TRUE
+    is_valid        BOOLEAN         NOT NULL DEFAULT TRUE,
+    -- Editable metadata: filled in from content frontmatter on upload, can be
+    -- overridden by the user via the rule edit modal.
+    rule_code       VARCHAR(100),
+    rule_type       VARCHAR(40),
+    document_type   VARCHAR(100),
+    standard        VARCHAR(100),
+    sections        JSONB,
+    keywords        JSONB,
+    severity        VARCHAR(20),
+    description     TEXT,
+    source_file     VARCHAR(255)
 );
+
+-- Rolling migration: add metadata columns if upgrading from a pre-metadata schema.
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS rule_code     VARCHAR(100);
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS rule_type     VARCHAR(40);
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS document_type VARCHAR(100);
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS standard      VARCHAR(100);
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS sections      JSONB;
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS keywords      JSONB;
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS severity      VARCHAR(20);
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS description   TEXT;
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS source_file   VARCHAR(255);
 
 CREATE TABLE IF NOT EXISTS scenarios (
     id              BIGSERIAL       PRIMARY KEY,

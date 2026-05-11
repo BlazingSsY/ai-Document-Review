@@ -2,8 +2,11 @@ package com.aireview.service;
 
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.RuleDTO;
+import com.aireview.dto.RuleMetadataUpdateRequest;
 import com.aireview.entity.Rule;
 import com.aireview.repository.RuleMapper;
+import com.aireview.util.MultiRuleParser;
+import com.aireview.util.RuleMetadata;
 import com.aireview.util.RuleParser;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -18,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,11 +40,16 @@ public class RuleService {
     /**
      * Upload and parse a rule file (.md or .json).
      *
-     * @param file      the uploaded rule file
-     * @param creatorId the user ID of the uploader
-     * @return the created rule DTO
+     * Behaviour:
+     *   - For .md files and single-rule .json files, exactly one {@link Rule} row is created.
+     *   - For .json files containing a multi-rule container (e.g. prompts.json's
+     *     {@code section_prompts}), one row per sub-rule is created. The uploaded file is
+     *     still saved to disk once.
+     *
+     * The returned list always contains at least one entry. Callers can use
+     * {@link #uploadRule(MultipartFile, Long, Long)} for the single-rule legacy signature.
      */
-    public RuleDTO uploadRule(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
+    public List<RuleDTO> uploadRuleAll(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null) {
             throw new IllegalArgumentException("File name is required");
@@ -51,34 +60,60 @@ public class RuleService {
             throw new IllegalArgumentException("Unsupported rule file format. Only .md and .json are supported.");
         }
 
-        // Read file content
         String content = new String(file.getBytes(), StandardCharsets.UTF_8);
 
-        // Validate rule content
         List<String> errors = RuleParser.validate(content, fileType);
         if (!errors.isEmpty()) {
             throw new IllegalArgumentException("Rule validation failed: " + String.join("; ", errors));
         }
 
-        // Save file to disk
+        // Persist original file once to disk (handy for debugging / re-export).
         Path uploadDir = Path.of(rulesDir);
         Files.createDirectories(uploadDir);
         String savedFileName = UUID.randomUUID() + "_" + originalFilename;
         Path savedPath = uploadDir.resolve(savedFileName);
         Files.write(savedPath, file.getBytes());
 
-        Rule rule = new Rule();
-        rule.setRuleName(originalFilename.replaceAll("\\.[^.]+$", ""));
-        rule.setFileType(fileType);
-        rule.setContent(content); // Store raw file content; parsing happens at review time
-        rule.setCreatorId(creatorId);
-        rule.setLibraryId(libraryId);
-        rule.setUpdatedAt(LocalDateTime.now());
-        rule.setIsValid(true);
-        ruleMapper.insert(rule);
+        // Split into one-or-more parsed rules.
+        List<MultiRuleParser.ParsedRule> parsed = MultiRuleParser.parse(originalFilename, fileType, content);
+        List<RuleDTO> out = new ArrayList<>();
+        for (MultiRuleParser.ParsedRule pr : parsed) {
+            Rule rule = new Rule();
+            rule.setRuleName(pr.getName());
+            rule.setFileType(pr.getFileType());
+            rule.setContent(pr.getContent());
+            rule.setCreatorId(creatorId);
+            rule.setLibraryId(libraryId);
+            rule.setUpdatedAt(LocalDateTime.now());
+            rule.setIsValid(true);
+            rule.setSourceFile(originalFilename);
+            RuleMetadata meta = pr.getMetadata();
+            if (meta != null) {
+                rule.setRuleCode(meta.getRuleCode());
+                rule.setRuleType(meta.getRuleType());
+                rule.setDocumentType(meta.getDocumentType());
+                rule.setStandard(meta.getStandard());
+                rule.setSections(emptyToNull(meta.getSections()));
+                rule.setKeywords(emptyToNull(meta.getKeywords()));
+                rule.setSeverity(meta.getSeverity());
+            }
+            rule.setDescription(pr.getDescription());
+            ruleMapper.insert(rule);
+            out.add(toDTO(rule));
+        }
+        log.info("Rule file '{}' expanded into {} rule row(s) (creator={}, library={})",
+                originalFilename, out.size(), creatorId, libraryId);
+        return out;
+    }
 
-        log.info("Rule uploaded: {} by user {}", originalFilename, creatorId);
-        return toDTO(rule);
+    /** Back-compatible single-rule upload used by callers that don't yet expect multi-rule responses. */
+    public RuleDTO uploadRule(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
+        List<RuleDTO> all = uploadRuleAll(file, creatorId, libraryId);
+        return all.isEmpty() ? null : all.get(0);
+    }
+
+    private static <T> List<T> emptyToNull(List<T> list) {
+        return list == null || list.isEmpty() ? null : list;
     }
 
     /**
@@ -133,9 +168,47 @@ public class RuleService {
 
     /**
      * Get all rules associated with a scenario.
+     *
+     * Loads IDs via the join query, then materialises full entities through
+     * {@code selectBatchIds(...)} so MyBatis-Plus's {@code autoResultMap=true} kicks in
+     * and the JSONB {@code sections}/{@code keywords} columns are deserialised via their
+     * per-field typeHandlers. Without this two-step lookup, plain {@code @Select} SQL
+     * returns null for those columns and the dispatcher mis-classifies every rule as global.
      */
     public List<Rule> getRulesByScenarioId(Long scenarioId) {
-        return ruleMapper.findByScenarioId(scenarioId);
+        List<Long> ids = ruleMapper.findIdsByScenarioId(scenarioId);
+        if (ids == null || ids.isEmpty()) return new ArrayList<>();
+        return ruleMapper.selectBatchIds(ids);
+    }
+
+    /**
+     * Update editable metadata on a rule. Null fields are ignored; an empty list explicitly
+     * clears that field. The rule's {@code content} is never modified here.
+     */
+    public RuleDTO updateMetadata(Long id, RuleMetadataUpdateRequest req) {
+        Rule rule = ruleMapper.selectById(id);
+        if (rule == null) {
+            throw new IllegalArgumentException("Rule not found: " + id);
+        }
+        if (req.getRuleName() != null && !req.getRuleName().isBlank()) rule.setRuleName(req.getRuleName().trim());
+        if (req.getRuleCode() != null)     rule.setRuleCode(blankToNull(req.getRuleCode()));
+        if (req.getRuleType() != null)     rule.setRuleType(blankToNull(req.getRuleType()));
+        if (req.getDocumentType() != null) rule.setDocumentType(blankToNull(req.getDocumentType()));
+        if (req.getStandard() != null)     rule.setStandard(blankToNull(req.getStandard()));
+        if (req.getSections() != null)     rule.setSections(emptyToNull(req.getSections()));
+        if (req.getKeywords() != null)     rule.setKeywords(emptyToNull(req.getKeywords()));
+        if (req.getSeverity() != null)     rule.setSeverity(blankToNull(req.getSeverity()));
+        if (req.getDescription() != null)  rule.setDescription(blankToNull(req.getDescription()));
+        rule.setUpdatedAt(LocalDateTime.now());
+        ruleMapper.updateById(rule);
+        log.info("Rule {} metadata updated: code={}, type={}, sections={}, keywords={}, severity={}",
+                id, rule.getRuleCode(), rule.getRuleType(), rule.getSections(),
+                rule.getKeywords(), rule.getSeverity());
+        return toDTO(rule);
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     private RuleDTO toDTO(Rule rule) {
@@ -165,6 +238,40 @@ public class RuleService {
             }
         }
         dto.setContent(content);
+        dto.setDescription(rule.getDescription());
+        dto.setSourceFile(rule.getSourceFile());
+
+        // Prefer DB columns (these reflect any user edits via the rule edit modal).
+        dto.setRuleCode(rule.getRuleCode());
+        dto.setRuleType(rule.getRuleType());
+        dto.setDocumentType(rule.getDocumentType());
+        dto.setStandard(rule.getStandard());
+        dto.setSections(rule.getSections());
+        dto.setKeywords(rule.getKeywords());
+        dto.setSeverity(rule.getSeverity());
+
+        // Backfill from content frontmatter if DB columns are still empty (handles rules
+        // uploaded before the columns existed). These backfills are NOT persisted here —
+        // they only enrich the DTO so the listing UI can show something useful.
+        if (content != null && !content.isBlank()) {
+            boolean anyMetaInDb = dto.getRuleCode() != null || dto.getRuleType() != null
+                    || dto.getStandard() != null
+                    || (dto.getSections() != null && !dto.getSections().isEmpty())
+                    || (dto.getKeywords() != null && !dto.getKeywords().isEmpty())
+                    || dto.getSeverity() != null;
+            if (!anyMetaInDb) {
+                RuleMetadata meta = RuleMetadata.parse(content, rule.getFileType());
+                if (dto.getRuleCode() == null)   dto.setRuleCode(meta.getRuleCode());
+                if (dto.getRuleType() == null)   dto.setRuleType(meta.getRuleType());
+                if (dto.getDocumentType() == null) dto.setDocumentType(meta.getDocumentType());
+                if (dto.getStandard() == null)   dto.setStandard(meta.getStandard());
+                if (dto.getSections() == null && meta.getSections() != null && !meta.getSections().isEmpty())
+                    dto.setSections(meta.getSections());
+                if (dto.getKeywords() == null && meta.getKeywords() != null && !meta.getKeywords().isEmpty())
+                    dto.setKeywords(meta.getKeywords());
+                if (dto.getSeverity() == null)   dto.setSeverity(meta.getSeverity());
+            }
+        }
         return dto;
     }
 
