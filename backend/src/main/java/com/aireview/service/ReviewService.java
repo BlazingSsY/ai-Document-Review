@@ -333,23 +333,16 @@ public class ReviewService {
                 chunkResult.put("chapterTitle", chunk.getLabel());
                 chunkResult.put("totalChunks", chunks.size());
                 chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
-                try {
-                    // Strip markdown code block markers if present (```json ... ```)
-                    String cleaned = aiResponse.trim();
-                    if (cleaned.startsWith("```")) {
-                        int firstNewline = cleaned.indexOf('\n');
-                        if (firstNewline > 0) {
-                            cleaned = cleaned.substring(firstNewline + 1);
-                        }
-                        if (cleaned.endsWith("```")) {
-                            cleaned = cleaned.substring(0, cleaned.length() - 3).trim();
-                        }
-                    }
-                    Map<String, Object> parsedResult = objectMapper.readValue(cleaned, Map.class);
+                Map<String, Object> parsedResult = tryParseAiJson(aiResponse);
+                if (parsedResult != null) {
                     chunkResult.put("result", parsedResult);
-                } catch (JsonProcessingException e) {
-                    log.warn("AI响应不是有效JSON，以原始文本存储: {}", e.getMessage());
-                    chunkResult.put("result", aiResponse);
+                } else {
+                    // Even after best-effort extraction the response still isn't JSON.
+                    // Wrap the raw text into a minimal issues structure so downstream
+                    // aggregation and the Excel export still produce something usable.
+                    log.warn("AI响应无法解析为JSON，已包装为原始文本issue: 长度={}",
+                            aiResponse != null ? aiResponse.length() : 0);
+                    chunkResult.put("result", buildFallbackResult(chunk.getLabel(), aiResponse));
                 }
                 chunkResults.add(chunkResult);
 
@@ -500,6 +493,132 @@ public class ReviewService {
     }
 
     /**
+     * Best-effort parse of an AI response into a JSON object Map.
+     * Handles common deviations from strict-JSON output that custom-provider models
+     * tend to produce: leading prose, trailing reasoning text, ```json ... ``` fences,
+     * stray escapes, etc. Returns null only if no parseable {...} object can be located.
+     */
+    private Map<String, Object> tryParseAiJson(String aiResponse) {
+        if (aiResponse == null) return null;
+        String text = aiResponse.trim();
+        if (text.isEmpty()) return null;
+
+        // 1) Strip a single fenced code block (```json ... ``` or ``` ... ```) if the
+        //    whole response is wrapped in one.
+        if (text.startsWith("```")) {
+            int firstNewline = text.indexOf('\n');
+            if (firstNewline > 0) {
+                text = text.substring(firstNewline + 1);
+            }
+            int closingFence = text.lastIndexOf("```");
+            if (closingFence >= 0) {
+                text = text.substring(0, closingFence);
+            }
+            text = text.trim();
+        }
+
+        // 2) Direct parse attempt.
+        Map<String, Object> direct = parseJsonSilently(text);
+        if (direct != null) return direct;
+
+        // 3) Extract the first balanced {...} object from the (possibly noisy) text.
+        //    Custom providers often surround JSON with explanatory prose or
+        //    "<think>...</think>" reasoning blocks.
+        String extracted = extractFirstJsonObject(text);
+        if (extracted != null) {
+            Map<String, Object> parsed = parseJsonSilently(extracted);
+            if (parsed != null) return parsed;
+        }
+
+        // 4) As a last resort, look inside any embedded ```json fence.
+        int fenceStart = text.indexOf("```json");
+        if (fenceStart >= 0) {
+            int contentStart = text.indexOf('\n', fenceStart);
+            int fenceEnd = text.indexOf("```", contentStart > 0 ? contentStart : fenceStart + 7);
+            if (contentStart > 0 && fenceEnd > contentStart) {
+                String inner = text.substring(contentStart + 1, fenceEnd).trim();
+                Map<String, Object> parsed = parseJsonSilently(inner);
+                if (parsed != null) return parsed;
+                String innerExtract = extractFirstJsonObject(inner);
+                if (innerExtract != null) {
+                    Map<String, Object> p2 = parseJsonSilently(innerExtract);
+                    if (p2 != null) return p2;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseJsonSilently(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            Object obj = objectMapper.readValue(json, Object.class);
+            if (obj instanceof Map) return (Map<String, Object>) obj;
+        } catch (JsonProcessingException ignored) {
+            // fall through
+        }
+        return null;
+    }
+
+    /**
+     * Find the first balanced JSON object substring in the given text. Skips characters
+     * inside string literals (so braces inside quoted strings are not mis-counted) and
+     * tolerates escaped characters.
+     */
+    private String extractFirstJsonObject(String text) {
+        int start = text.indexOf('{');
+        if (start < 0) return null;
+        int depth = 0;
+        boolean inString = false;
+        boolean escape = false;
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (inString) {
+                if (c == '\\') escape = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Build a minimal issues structure from an unparseable AI response so the chunk
+     * still surfaces in the UI and the Excel export instead of silently disappearing.
+     */
+    private Map<String, Object> buildFallbackResult(String chapterLabel, String rawText) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("summary", "AI返回内容无法解析为JSON，已保留原始文本");
+        Map<String, Object> issue = new LinkedHashMap<>();
+        issue.put("location", chapterLabel != null ? chapterLabel : "");
+        issue.put("description", "模型未按要求返回JSON格式，原始响应：\n"
+                + (rawText == null ? "" : rawText.trim()));
+        issue.put("suggestion", "请在【模型管理】中确认该模型是否支持指令跟随，或调低 temperature 后重试");
+        issue.put("rule", "解析失败");
+        List<Map<String, Object>> issues = new ArrayList<>();
+        issues.add(issue);
+        result.put("issues", issues);
+        result.put("passed_items", new ArrayList<>());
+        return result;
+    }
+
+    /**
      * Aggregate chunk review results into a unified result.
      */
     private Map<String, Object> aggregateResults(List<Map<String, Object>> chunkResults) {
@@ -618,9 +737,12 @@ public class ReviewService {
                                 numCell.setCellValue(rowNum);
                                 numCell.setCellStyle(dataStyle);
 
-                                // 章节
+                                // 章节：优先使用问题的 location 字段（已按一级>二级>三级路径生成），
+                                // 缺失时回退到 chunk 级的章节标题
+                                String location = issue.get("location") != null
+                                        ? issue.get("location").toString() : "";
                                 Cell chapterCell = row.createCell(1);
-                                chapterCell.setCellValue(chapterTitle);
+                                chapterCell.setCellValue(!location.isEmpty() ? location : chapterTitle);
                                 chapterCell.setCellStyle(dataStyle);
 
                                 // 审查意见 (description + suggestion)
@@ -636,19 +758,11 @@ public class ReviewService {
                                 opinionCell.setCellValue(opinion);
                                 opinionCell.setCellStyle(dataStyle);
 
-                                // 判定依据 (location + rule)
-                                String location = issue.get("location") != null
-                                        ? issue.get("location").toString() : "";
+                                // 判定依据：对应的审查规则
                                 String rule = issue.get("rule") != null
                                         ? issue.get("rule").toString() : "";
-                                StringBuilder basis = new StringBuilder();
-                                if (!location.isEmpty()) basis.append("位置：").append(location);
-                                if (!rule.isEmpty()) {
-                                    if (basis.length() > 0) basis.append("\n");
-                                    basis.append("规则：").append(rule);
-                                }
                                 Cell basisCell = row.createCell(3);
-                                basisCell.setCellValue(basis.toString());
+                                basisCell.setCellValue(rule);
                                 basisCell.setCellStyle(dataStyle);
 
                                 // 是否接受 (空白)
@@ -676,20 +790,28 @@ public class ReviewService {
                         numCell.setCellValue(rowNum);
                         numCell.setCellStyle(dataStyle);
 
+                        String location = issue.get("location") != null
+                                ? issue.get("location").toString() : "";
                         Cell chapterCell = row.createCell(1);
-                        chapterCell.setCellValue("");
+                        chapterCell.setCellValue(location);
                         chapterCell.setCellStyle(dataStyle);
 
                         String description = issue.get("description") != null
                                 ? issue.get("description").toString() : "";
+                        String suggestion = issue.get("suggestion") != null
+                                ? issue.get("suggestion").toString() : "";
+                        String opinion = description;
+                        if (!suggestion.isEmpty()) {
+                            opinion += "\n建议：" + suggestion;
+                        }
                         Cell opinionCell = row.createCell(2);
-                        opinionCell.setCellValue(description);
+                        opinionCell.setCellValue(opinion);
                         opinionCell.setCellStyle(dataStyle);
 
-                        String location = issue.get("location") != null
-                                ? issue.get("location").toString() : "";
+                        String rule = issue.get("rule") != null
+                                ? issue.get("rule").toString() : "";
                         Cell basisCell = row.createCell(3);
-                        basisCell.setCellValue(location);
+                        basisCell.setCellValue(rule);
                         basisCell.setCellStyle(dataStyle);
 
                         Cell acceptCell = row.createCell(4);

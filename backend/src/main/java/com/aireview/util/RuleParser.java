@@ -171,7 +171,7 @@ public class RuleParser {
         sp.append("  \"summary\": \"本章节审查总结（中文）\",\n");
         sp.append("  \"issues\": [\n");
         sp.append("    {\n");
-        sp.append("      \"location\": \"问题所在位置（引用原文或表格位置）\",\n");
+        sp.append("      \"location\": \"问题所在的章节路径（按下面的章节定位规则填写）\",\n");
         sp.append("      \"description\": \"问题描述\",\n");
         sp.append("      \"suggestion\": \"修改建议\",\n");
         sp.append("      \"rule\": \"对应的审查规则名称\"\n");
@@ -179,6 +179,18 @@ public class RuleParser {
         sp.append("  ],\n");
         sp.append("  \"passed_items\": [\"通过的检查项列表\"]\n");
         sp.append("}\n\n");
+
+        sp.append("【章节定位规则（location 字段必须遵守）】\n");
+        sp.append("用户消息开头会以 \"章节: <一级标题>\" 的形式给出当前片段所属的一级章节标题；正文中可能还包含 Markdown 形式的二级标题（## 标题）和三级标题（### 标题）。\n");
+        sp.append("location 字段必须明确指出问题所在的章节，按以下优先级填写：\n");
+        sp.append("  1. 若问题位于某个三级标题（### 开头）所在小节内，location 必须写成 \"<一级标题> > <二级标题> > <三级标题>\"；\n");
+        sp.append("  2. 若该位置没有三级标题，但存在二级标题（## 开头），location 必须写成 \"<一级标题> > <二级标题>\"；\n");
+        sp.append("  3. 若既没有二级标题也没有三级标题，location 必须直接填写一级标题（即 \"章节:\" 后给出的标题原文）。\n");
+        sp.append("注意事项：\n");
+        sp.append("  - 标题文本必须与原文逐字一致，包含原有的编号（如 \"1 温度变化试验\"、\"## 试验要求\" 中的 \"试验要求\"），不得自行编造、缩写或翻译；\n");
+        sp.append("  - 各级标题之间统一使用 \" > \"（空格-大于号-空格）分隔；\n");
+        sp.append("  - 严禁仅写 \"原文\"、\"表格中\"、\"上文\" 等模糊位置，也不要把表格名/图编号当作 location 单独填写——具体的表/图引用请放到 description 中；\n");
+        sp.append("  - 如果某条问题贯穿多个小节，请选择问题首次出现的最深一级标题作为 location。\n\n");
 
         sp.append("【注意事项】\n");
         sp.append("1. 仅输出JSON，不要添加任何markdown代码块标记或其他文字\n");
