@@ -190,6 +190,46 @@ body {
   border-radius: 8px;
 }
 
+/* Ensure tables with horizontal scroll never overflow their card container.
+   Used by the rule list page (resizable columns + scroll.x). */
+.rule-table-card .ant-card-body {
+  padding: 16px;
+  overflow: hidden;
+}
+
+.rule-table-card .ant-table-wrapper,
+.rule-table-card .ant-spin-nested-loading {
+  max-width: 100%;
+}
+
+/* Show the horizontal scrollbar gently so users discover it. */
+.rule-table-card .ant-table-content,
+.rule-table-card .ant-table-body {
+  scrollbar-width: thin;
+  scrollbar-color: #d9d9d9 transparent;
+}
+
+.rule-table-card .ant-table-content::-webkit-scrollbar,
+.rule-table-card .ant-table-body::-webkit-scrollbar {
+  height: 8px;
+}
+
+.rule-table-card .ant-table-content::-webkit-scrollbar-thumb,
+.rule-table-card .ant-table-body::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 4px;
+}
+
+.rule-table-card .ant-table-content::-webkit-scrollbar-thumb:hover,
+.rule-table-card .ant-table-body::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
+}
+
+/* Subtle dotted line on resize handles so the affordance is visible. */
+.rule-table-card .ant-table-thead > tr > th {
+  user-select: none;
+}
+
 /* ==================== Action Cards (Dashboard) ==================== */
 
 .action-card {

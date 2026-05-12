@@ -43,23 +43,6 @@ function extractIssues(aiResult: Record<string, unknown> | null): Array<Record<s
   return [];
 }
 
-const SEVERITY_TAG: Record<string, { label: string; color: string }> = {
-  high: { label: '高', color: 'red' },
-  medium: { label: '中', color: 'orange' },
-  low: { label: '低', color: 'green' },
-};
-
-function severityTag(raw: unknown): { label: string; color: string } | null {
-  if (!raw) return null;
-  const key = String(raw).trim().toLowerCase();
-  if (SEVERITY_TAG[key]) return SEVERITY_TAG[key];
-  // Allow Chinese passthrough
-  if (key === '高' || key === 'critical' || key === '严重') return SEVERITY_TAG.high;
-  if (key === '中' || key === 'moderate') return SEVERITY_TAG.medium;
-  if (key === '低' || key === 'minor') return SEVERITY_TAG.low;
-  return { label: String(raw), color: 'default' };
-}
-
 function normalizeStatus(status: string): string {
   return status?.toLowerCase() || 'pending';
 }
@@ -323,7 +306,6 @@ function ReviewWorkspacePage() {
                 const rule = issue.rule ? String(issue.rule) : '';
                 const ruleCode = (issue.rule_code || issue.ruleCode) ? String(issue.rule_code || issue.ruleCode) : '';
                 const evidence = issue.evidence ? String(issue.evidence) : '';
-                const sev = severityTag(issue.severity);
                 return (
                   <Card
                     key={idx}
@@ -331,9 +313,8 @@ function ReviewWorkspacePage() {
                     className="finding-card"
                     style={{ marginBottom: 8 }}
                   >
-                    {(category || rule || ruleCode || sev) && (
+                    {(category || rule || ruleCode) && (
                       <Space style={{ marginBottom: 4 }} wrap>
-                        {sev && <Tag color={sev.color}>严重程度：{sev.label}</Tag>}
                         {category && <Tag>{category}</Tag>}
                         {ruleCode && <Tag color="purple">{ruleCode}</Tag>}
                         {rule && <Tag color="blue">{rule}</Tag>}

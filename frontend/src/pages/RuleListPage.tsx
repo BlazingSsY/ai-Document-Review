@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Space, Typography, Tag,
-  message, Popconfirm, Breadcrumb, Empty, Descriptions, Select,
+  message, Popconfirm, Breadcrumb, Empty, Descriptions, Select, Tooltip,
 } from 'antd';
 import {
   PlusOutlined, EyeOutlined, DeleteOutlined, FolderOutlined,
   ArrowLeftOutlined, FileTextOutlined, EditOutlined,
 } from '@ant-design/icons';
-import type { ColumnsType } from 'antd/es/table';
+import type { ColumnsType, ColumnType } from 'antd/es/table';
 import {
   getRuleList, uploadRule, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
   getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
@@ -26,22 +26,10 @@ const RULE_TYPE_LABELS: Record<string, { label: string; color: string }> = {
   output: { label: '输出规范', color: 'cyan' },
 };
 
-const SEVERITY_LABELS: Record<string, { label: string; color: string }> = {
-  high: { label: '高', color: 'red' },
-  medium: { label: '中', color: 'orange' },
-  low: { label: '低', color: 'green' },
-};
-
 function renderRuleTypeTag(ruleType?: string) {
   if (!ruleType) return <Tag>通用</Tag>;
   const meta = RULE_TYPE_LABELS[ruleType.toLowerCase()];
   return <Tag color={meta?.color || 'default'}>{meta?.label || ruleType}</Tag>;
-}
-
-function renderSeverityTag(severity?: string) {
-  if (!severity) return <Text type="secondary" style={{ fontSize: 12 }}>-</Text>;
-  const meta = SEVERITY_LABELS[severity.toLowerCase()];
-  return <Tag color={meta?.color || 'default'}>{meta?.label || severity}</Tag>;
 }
 
 function hasRuleMetadata(rule: Rule): boolean {
@@ -49,9 +37,65 @@ function hasRuleMetadata(rule: Rule): boolean {
     rule.ruleCode || rule.ruleType || rule.documentType || rule.standard
       || (rule.sections && rule.sections.length > 0)
       || (rule.keywords && rule.keywords.length > 0)
-      || rule.severity
   );
 }
+
+interface ResizableHeaderCellProps extends React.HTMLAttributes<HTMLTableCellElement> {
+  width?: number;
+  onResize?: (newWidth: number) => void;
+}
+
+const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
+  width, onResize, style, children, ...restProps
+}) => {
+  const startX = useRef(0);
+  const startWidth = useRef(0);
+  const moveRef = useRef<(e: MouseEvent) => void>();
+  const upRef = useRef<() => void>();
+
+  if (!onResize || width === undefined) {
+    return <th {...restProps} style={style}>{children}</th>;
+  }
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    startX.current = e.clientX;
+    startWidth.current = width;
+    document.body.style.userSelect = 'none';
+    moveRef.current = (ev: MouseEvent) => {
+      const next = Math.max(60, startWidth.current + (ev.clientX - startX.current));
+      onResize(next);
+    };
+    upRef.current = () => {
+      if (moveRef.current) document.removeEventListener('mousemove', moveRef.current);
+      if (upRef.current) document.removeEventListener('mouseup', upRef.current);
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', moveRef.current);
+    document.addEventListener('mouseup', upRef.current);
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  return (
+    <th {...restProps} style={{ ...style, position: 'relative' }}>
+      {children}
+      <span
+        onMouseDown={onMouseDown}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: 'absolute',
+          right: -4,
+          top: 0,
+          bottom: 0,
+          width: 8,
+          cursor: 'col-resize',
+          zIndex: 2,
+          userSelect: 'none',
+        }}
+      />
+    </th>
+  );
+};
 
 function RuleListPage() {
   const user = useAuthStore((s) => s.user);
@@ -163,7 +207,6 @@ function RuleListPage() {
       ruleName: rule.ruleName,
       ruleCode: rule.ruleCode || '',
       ruleType: rule.ruleType || 'global',
-      severity: rule.severity || 'medium',
       standard: rule.standard || '',
       sections: rule.sections || [],
       keywords: rule.keywords || [],
@@ -180,7 +223,6 @@ function RuleListPage() {
         ruleName: values.ruleName as string,
         ruleCode: (values.ruleCode as string) || '',
         ruleType: values.ruleType as string,
-        severity: values.severity as string,
         standard: (values.standard as string) || '',
         sections: (values.sections as string[]) || [],
         keywords: (values.keywords as string[]) || [],
@@ -255,10 +297,25 @@ function RuleListPage() {
     },
   ];
 
+  // Resizable column widths — persisted per-column key.
+  const DEFAULT_COL_WIDTHS: Record<string, number> = {
+    ruleName: 200,
+    ruleType: 90,
+    scope: 220,
+    sourceFile: 140,
+    updatedAt: 150,
+    action: 120,
+  };
+  const [colWidths, setColWidths] = useState<Record<string, number>>(DEFAULT_COL_WIDTHS);
+
+  const handleColumnResize = (key: string) => (newWidth: number) => {
+    setColWidths((prev) => ({ ...prev, [key]: newWidth }));
+  };
+
   // Rule list columns
   const ruleColumns: ColumnsType<Rule> = [
     {
-      title: '规则名称', key: 'ruleName', width: 220,
+      title: '规则名称', key: 'ruleName',
       render: (_, record) => (
         <Space direction="vertical" size={0}>
           <Space>
@@ -272,58 +329,75 @@ function RuleListPage() {
       ),
     },
     {
-      title: '类型', key: 'ruleType', width: 110,
+      title: '类型', key: 'ruleType',
       render: (_, record) => renderRuleTypeTag(record.ruleType),
     },
     {
-      title: '严重程度', key: 'severity', width: 90,
-      render: (_, record) => renderSeverityTag(record.severity),
-    },
-    {
-      title: '适用范围', key: 'scope', width: 220,
+      title: '适用范围', key: 'scope',
       render: (_, record) => {
-        const items: string[] = [];
-        if (record.standard) items.push(`标准：${record.standard}`);
-        if (record.sections && record.sections.length > 0) items.push(`章节：${record.sections.join('、')}`);
-        if (record.keywords && record.keywords.length > 0) items.push(`关键词：${record.keywords.join('、')}`);
-        if (items.length === 0) return <Text type="secondary" style={{ fontSize: 12 }}>全文档</Text>;
+        if (!record.keywords || record.keywords.length === 0) {
+          return <Text type="secondary" style={{ fontSize: 12 }}>全文档</Text>;
+        }
         return (
-          <Space direction="vertical" size={0}>
-            {items.map((it) => <Text key={it} style={{ fontSize: 12 }}>{it}</Text>)}
+          <Space wrap size={4}>
+            {record.keywords.map((k) => (
+              <Tag key={k} color="blue" style={{ marginInlineEnd: 0 }}>{k}</Tag>
+            ))}
           </Space>
         );
       },
     },
     {
-      title: '来源文件', dataIndex: 'sourceFile', key: 'sourceFile', width: 150,
+      title: '来源文件', dataIndex: 'sourceFile', key: 'sourceFile',
       ellipsis: true,
       render: (text?: string) => text ? <Text type="secondary" style={{ fontSize: 12 }}>{text}</Text> : '-',
     },
-    { title: '文件类型', dataIndex: 'fileType', key: 'fileType', width: 80 },
     {
-      title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 150,
+      title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt',
       render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
     },
     {
-      title: '操作', key: 'action', width: 200, fixed: 'right',
+      title: '操作', key: 'action',
       render: (_, record) => (
         <Space size={4}>
-          <Button type="link" size="small" icon={<EyeOutlined />}
-            onClick={() => handlePreview(record)}>预览</Button>
+          <Tooltip title="预览">
+            <Button type="text" size="small" icon={<EyeOutlined />}
+              onClick={() => handlePreview(record)} />
+          </Tooltip>
           {canManage && (
-            <Button type="link" size="small" icon={<EditOutlined />}
-              onClick={() => openEdit(record)}>编辑</Button>
+            <Tooltip title="编辑">
+              <Button type="text" size="small" icon={<EditOutlined />}
+                onClick={() => openEdit(record)} />
+            </Tooltip>
           )}
           {canManage && (
             <Popconfirm title="确定要删除此规则吗？" onConfirm={() => handleDeleteRule(record.id)}
               okText="确定" cancelText="取消">
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              <Tooltip title="删除">
+                <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+              </Tooltip>
             </Popconfirm>
           )}
         </Space>
       ),
     },
   ];
+
+  // Attach current width + onHeaderCell for the resizable header component.
+  const resizableRuleColumns: ColumnsType<Rule> = ruleColumns.map((col) => {
+    const key = (col as ColumnType<Rule>).key as string;
+    const width = colWidths[key];
+    return {
+      ...col,
+      width,
+      onHeaderCell: () => ({
+        width,
+        onResize: handleColumnResize(key),
+      } as React.HTMLAttributes<HTMLElement>),
+    };
+  });
+
+  const ruleTableScrollX = Object.values(colWidths).reduce((a, b) => a + b, 0);
 
   // LIBRARY LIST VIEW
   if (!currentLibrary) {
@@ -394,7 +468,7 @@ function RuleListPage() {
         )}
       </div>
 
-      <Card>
+      <Card className="rule-table-card">
         {rules.length === 0 && !ruleLoading ? (
           <Empty description="该规则库暂无规则">
             {canManage && (
@@ -402,7 +476,15 @@ function RuleListPage() {
             )}
           </Empty>
         ) : (
-          <Table columns={ruleColumns} dataSource={rules} rowKey="id" loading={ruleLoading}
+          <Table
+            columns={resizableRuleColumns}
+            dataSource={rules}
+            rowKey="id"
+            loading={ruleLoading}
+            size="middle"
+            tableLayout="fixed"
+            components={{ header: { cell: ResizableHeaderCell } }}
+            scroll={{ x: ruleTableScrollX }}
             pagination={{
               current: rulePage, pageSize: PAGE_SIZE, total: ruleTotal,
               showTotal: (t) => `共 ${t} 条规则`, onChange: (p) => setRulePage(p), showSizeChanger: false,
@@ -443,14 +525,8 @@ function RuleListPage() {
                     <Descriptions.Item label="规则编号">{previewRule.ruleCode}</Descriptions.Item>
                   )}
                   <Descriptions.Item label="规则类型">{renderRuleTypeTag(previewRule.ruleType)}</Descriptions.Item>
-                  {previewRule.severity && (
-                    <Descriptions.Item label="严重程度">{renderSeverityTag(previewRule.severity)}</Descriptions.Item>
-                  )}
                   {previewRule.standard && (
                     <Descriptions.Item label="适用标准">{previewRule.standard}</Descriptions.Item>
-                  )}
-                  {previewRule.documentType && (
-                    <Descriptions.Item label="文档类型">{previewRule.documentType}</Descriptions.Item>
                   )}
                   {previewRule.sections && previewRule.sections.length > 0 && (
                     <Descriptions.Item label="目标章节" span={2}>
@@ -507,16 +583,6 @@ function RuleListPage() {
               ]}
             />
           </Form.Item>
-          <Form.Item name="severity" label="严重程度">
-            <Select
-              options={[
-                { label: '高', value: 'high' },
-                { label: '中', value: 'medium' },
-                { label: '低', value: 'low' },
-              ]}
-              allowClear
-            />
-          </Form.Item>
           <Form.Item name="standard" label="适用标准">
             <Input placeholder="例如 DO-160G（可选）" />
           </Form.Item>
@@ -529,8 +595,8 @@ function RuleListPage() {
           </Form.Item>
           <Form.Item
             name="keywords"
-            label="匹配关键词"
-            extra="出现在文档一级标题中即认为该专项规则适用，如 霉菌、Fungus"
+            label="适用范围"
+            extra="自定义关键词，回车确认。提交审查时会与上传文档的一级标题进行匹配，命中即认为该规则适用于该章节"
           >
             <Select mode="tags" tokenSeparators={[',', '，']} placeholder="回车确认每个关键词" />
           </Form.Item>

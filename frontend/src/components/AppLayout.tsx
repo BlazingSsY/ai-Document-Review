@@ -10,6 +10,8 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   TeamOutlined,
+  AppstoreOutlined,
+  ProfileOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import useAuthStore from '../store/authStore';
@@ -44,7 +46,15 @@ function AppLayout() {
 
   const menuItems: MenuProps['items'] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
-    { key: '/rules', icon: <FileTextOutlined />, label: '规则与场景' },
+    {
+      key: 'rules-and-scenarios',
+      icon: <FileTextOutlined />,
+      label: '规则与场景',
+      children: [
+        { key: '/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
+        { key: '/rules', icon: <ProfileOutlined />, label: '审查规则' },
+      ],
+    },
     { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
     ...(isSupervisor ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }] : []),
   ];
@@ -66,6 +76,9 @@ function AppLayout() {
   ];
 
   const selectedKey = '/' + location.pathname.split('/')[1];
+  const openKeys = (selectedKey === '/rules' || selectedKey === '/scenarios')
+    ? ['rules-and-scenarios']
+    : [];
   const roleTag = ROLE_TAG[role] || ROLE_TAG.user;
 
   return (
@@ -105,6 +118,7 @@ function AppLayout() {
         <Menu
           mode="inline"
           selectedKeys={[selectedKey]}
+          defaultOpenKeys={openKeys}
           items={menuItems}
           onClick={handleMenuClick}
           style={{ background: 'transparent', borderRight: 'none', marginTop: 8 }}

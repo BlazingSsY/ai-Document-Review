@@ -113,20 +113,35 @@ public class RuleDispatcher {
             Set<String> matchedKeywords = new LinkedHashSet<>();
             Set<String> matchedSections = new LinkedHashSet<>();
 
-            if (meta == null || meta.isGlobal()) {
-                reason = "global";
-            } else if (meta.isDocumentSpecific()) {
+            if (meta != null && meta.isDocumentSpecific()) {
                 // Document-level rules are NOT applied per chunk; they get a separate pass.
                 continue;
-            } else if (meta.isSectionSpecific()) {
+            }
+
+            boolean hasKeywords = meta != null && meta.getKeywords() != null && !meta.getKeywords().isEmpty();
+            boolean hasSections = meta != null && meta.getSections() != null && !meta.getSections().isEmpty();
+
+            if (meta != null && meta.isSectionSpecific()) {
                 matchedKeywords.addAll(findMatches(titleHay, meta.getKeywords()));
                 matchedSections.addAll(findSectionMatches(chapterTitle, meta.getSections()));
                 if (matchedKeywords.isEmpty() && matchedSections.isEmpty()) {
                     continue; // skip — not applicable to this chunk
                 }
                 reason = "section_specific";
+            } else if (hasKeywords || hasSections) {
+                // Any rule with explicit scope keywords/sections is filtered by first-level
+                // title match, regardless of rule_type. This makes the UI's "适用范围" column
+                // behave intuitively: setting keywords confines the rule to matching chapters.
+                matchedKeywords.addAll(findMatches(titleHay, meta.getKeywords()));
+                matchedSections.addAll(findSectionMatches(chapterTitle, meta.getSections()));
+                if (matchedKeywords.isEmpty() && matchedSections.isEmpty()) {
+                    continue;
+                }
+                reason = "scoped_by_keyword";
+            } else if (meta == null || meta.isGlobal()) {
+                reason = "global";
             } else {
-                // Unknown type → treat as global so a typo doesn't silently drop the rule
+                // Unknown type with no scope → treat as global so a typo doesn't silently drop the rule
                 reason = "fallback_global";
             }
 

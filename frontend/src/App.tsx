@@ -3,7 +3,8 @@ import ProtectedRoute from './components/ProtectedRoute';
 import AppLayout from './components/AppLayout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
-import RuleScenarioPage from './pages/RuleScenarioPage';
+import RuleListPage from './pages/RuleListPage';
+import ScenarioListPage from './pages/ScenarioListPage';
 import ReviewWorkspacePage from './pages/ReviewWorkspacePage';
 import ModelConfigPage from './pages/ModelConfigPage';
 import ProfilePage from './pages/ProfilePage';
@@ -23,8 +24,8 @@ function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="rules" element={<RuleScenarioPage />} />
-        <Route path="scenarios" element={<RuleScenarioPage />} />
+        <Route path="rules" element={<RuleListPage />} />
+        <Route path="scenarios" element={<ScenarioListPage />} />
         <Route path="review" element={<Navigate to="/dashboard" replace />} />
         <Route path="review/:taskId" element={<ReviewWorkspacePage />} />
         <Route path="models" element={<ModelConfigPage />} />
