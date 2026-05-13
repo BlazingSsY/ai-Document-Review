@@ -24,16 +24,10 @@ import {
 import { getReviewDetail, reReview, exportReviewExcel, ReviewTask } from '../api/reviews';
 import { STATUS_LABELS } from '../utils/constants';
 import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
+import useLogStore, { LogEntry } from '../store/logStore';
 import '../styles/reviewWorkspace.css';
 
 const { Title, Text, Paragraph } = Typography;
-
-interface LogEntry {
-  time: string;
-  level: 'info' | 'error' | 'success' | 'warning';
-  message: string;
-  progress?: number;
-}
 
 /** Extract issues from the backend aiResult structure */
 function extractIssues(aiResult: Record<string, unknown> | null): Array<Record<string, unknown>> {
@@ -49,14 +43,6 @@ function normalizeStatus(status: string): string {
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function getLogLevelForStatus(status: string): LogEntry['level'] {
-  const s = status?.toUpperCase();
-  if (s === 'COMPLETED') return 'success';
-  if (s === 'FAILED') return 'error';
-  if (s === 'CANCELLED') return 'warning';
-  return 'info';
 }
 
 const LOG_LEVEL_STYLES: Record<string, { color: string; bg: string }> = {
@@ -78,15 +64,18 @@ function ReviewWorkspacePage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [task, setTask] = useState<ReviewTask | null>(null);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const logs = useLogStore((s) => (taskId ? s.logsByTask[taskId] || [] : []));
+  const appendLog = useLogStore((s) => s.appendLog);
+  const clearLogs = useLogStore((s) => s.clearLogs);
   const [wsProgress, setWsProgress] = useState<number>(0);
   const [reReviewing, setReReviewing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((level: LogEntry['level'], message: string, progress?: number) => {
-    setLogs((prev) => [...prev, { time: formatTime(new Date()), level, message, progress }]);
-  }, []);
+    if (!taskId) return;
+    appendLog(taskId, { time: formatTime(new Date()), level, message, progress });
+  }, [taskId, appendLog]);
 
   const fetchDetail = useCallback(async () => {
     if (!taskId) return;
@@ -95,18 +84,23 @@ function ReviewWorkspacePage() {
       const res = await getReviewDetail(taskId);
       const t = res.data.data;
       setTask(t);
-      // Add initial log based on current status
-      const s = t.status?.toUpperCase();
-      if (s === 'PENDING') {
-        addLog('info', '任务已创建，等待处理...');
-      } else if (s === 'PROCESSING') {
-        addLog('info', '任务正在处理中，已连接实时日志...');
-      } else if (s === 'COMPLETED') {
-        addLog('success', '任务已完成');
-      } else if (s === 'FAILED') {
-        addLog('error', `任务失败：${t.failReason || '未知错误'}`);
-      } else if (s === 'CANCELLED') {
-        addLog('warning', '任务已被取消');
+      // Only seed an initial log entry the FIRST time we see this task. On
+      // re-entry from the dashboard, the persisted log timeline already covers
+      // the task's history — re-adding a "已完成" line here would just clutter it.
+      const existing = useLogStore.getState().logsByTask[taskId];
+      if (!existing || existing.length === 0) {
+        const s = t.status?.toUpperCase();
+        if (s === 'PENDING') {
+          addLog('info', '任务已创建，等待处理...');
+        } else if (s === 'PROCESSING') {
+          addLog('info', '任务正在处理中，已连接实时日志...');
+        } else if (s === 'COMPLETED') {
+          addLog('success', '任务已完成');
+        } else if (s === 'FAILED') {
+          addLog('error', `任务失败：${t.failReason || '未知错误'}`);
+        } else if (s === 'CANCELLED') {
+          addLog('warning', '任务已被取消');
+        }
       }
     } catch {
       addLog('error', '加载任务详情失败');
@@ -122,8 +116,9 @@ function ReviewWorkspacePage() {
       const res = await reReview(taskId);
       const newId = res.data.data.id;
       message.success('重新审查任务已提交');
-      // Reset logs and state before navigating to new task
-      setLogs([]);
+      // Drop the old task's logs from the store (they belong to a different task ID)
+      // and reset transient UI state before navigating.
+      clearLogs(taskId);
       setWsProgress(0);
       setTask(null);
       navigate(`/review/${newId}`, { replace: true });
@@ -163,27 +158,24 @@ function ReviewWorkspacePage() {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  // Subscribe to WebSocket for real-time updates
-  // Also reset logs when taskId changes (e.g. after re-review navigation)
+  // Subscribe to WebSocket for progress updates and terminal-state refresh.
+  // We deliberately do NOT clear the persisted log buffer here — the user
+  // expects logs to survive navigating back to the dashboard and returning.
+  // Re-review uses a different task ID and already clears the previous task's logs.
+  // Log entries themselves are appended by the global subscriber in AppLayout,
+  // so this handler only drives page-local state (progress bar + task refresh).
   useEffect(() => {
     if (!taskId) return;
 
-    setLogs([]);
     setWsProgress(0);
     taskWebSocket.connect();
 
     const handler = (data: TaskProgressMessage) => {
-      const level = getLogLevelForStatus(data.status);
-      const msg = data.message || `状态更新: ${data.status}`;
-      addLog(level, msg, data.progress);
       if (data.progress !== undefined) {
         setWsProgress(data.progress);
       }
-
-      // Refresh task data on terminal states
       const s = data.status?.toUpperCase();
       if (s === 'COMPLETED' || s === 'FAILED' || s === 'CANCELLED') {
-        // Re-fetch to get final result
         setTimeout(async () => {
           try {
             const res = await getReviewDetail(taskId);
@@ -197,7 +189,7 @@ function ReviewWorkspacePage() {
     return () => {
       taskWebSocket.unsubscribe(taskId, handler);
     };
-  }, [taskId, addLog]);
+  }, [taskId]);
 
   useEffect(() => {
     fetchDetail();
@@ -442,6 +434,7 @@ function ReviewWorkspacePage() {
             {/* Real-time Log Window */}
             <Card
               size="small"
+              className="log-card"
               title={
                 <Space>
                   {isProcessing ? <LoadingOutlined spin style={{ color: '#1677ff' }} /> : <InfoCircleOutlined />}
@@ -451,13 +444,11 @@ function ReviewWorkspacePage() {
                   </Tag>
                 </Space>
               }
-              style={{ marginBottom: 12 }}
               styles={{ body: { padding: 0 } }}
             >
               <div
                 className="log-window"
                 style={{
-                  height: 240,
                   overflowY: 'auto',
                   background: '#fafafa',
                   padding: '4px 0',

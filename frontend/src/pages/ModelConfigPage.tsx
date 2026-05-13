@@ -16,7 +16,7 @@ import {
   message,
   Popconfirm,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, QuestionCircleOutlined, ApiOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getModelList,
@@ -24,6 +24,7 @@ import {
   updateModel,
   deleteModel,
   toggleModel,
+  testModelConnection,
   AIModel,
   CreateModelParams,
 } from '../api/models';
@@ -41,6 +42,8 @@ function ModelConfigPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [isCustomProvider, setIsCustomProvider] = useState(false);
+  const [testingId, setTestingId] = useState<number | null>(null);
+  const [testingInForm, setTestingInForm] = useState(false);
 
   const fetchModels = async () => {
     setLoading(true);
@@ -139,6 +142,73 @@ function ModelConfigPage() {
     }
   };
 
+  const handleTestRow = async (model: AIModel) => {
+    setTestingId(model.id);
+    try {
+      const res = await testModelConnection({ id: model.id });
+      const data = res.data?.data;
+      Modal.success({
+        title: `「${model.name}」连接成功`,
+        content: (
+          <div style={{ fontSize: 13 }}>
+            <div>解析后的请求地址：<code>{data?.resolvedUrl}</code></div>
+            <div style={{ marginTop: 6 }}>响应耗时：{data?.latencyMs} ms</div>
+            {data?.reply && (
+              <div style={{ marginTop: 6 }}>模型回复（截断）：{data.reply}</div>
+            )}
+          </div>
+        ),
+      });
+    } catch (e: unknown) {
+      const errMsg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || (e as Error)?.message
+        || '请检查地址、API Key 与模型标识';
+      Modal.error({ title: `「${model.name}」连接失败`, content: errMsg });
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const handleTestInForm = async () => {
+    try {
+      const values = await form.validateFields([
+        'name', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey',
+      ]);
+      const provider = values.providerSelect === '__custom__'
+        ? (values.providerCustom as string)
+        : (values.providerSelect as string);
+      setTestingInForm(true);
+      const res = await testModelConnection({
+        id: editingModel?.id,
+        name: values.name as string,
+        provider,
+        modelKey: values.modelKey as string,
+        apiEndpoint: values.apiEndpoint as string,
+        apiKey: values.apiKey as string,
+      });
+      const data = res.data?.data;
+      Modal.success({
+        title: '连接成功',
+        content: (
+          <div style={{ fontSize: 13 }}>
+            <div>解析后的请求地址：<code>{data?.resolvedUrl}</code></div>
+            <div style={{ marginTop: 6 }}>响应耗时：{data?.latencyMs} ms</div>
+            {data?.reply && (
+              <div style={{ marginTop: 6 }}>模型回复（截断）：{data.reply}</div>
+            )}
+          </div>
+        ),
+      });
+    } catch (e: unknown) {
+      const errMsg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || (e as Error)?.message
+        || '请检查地址、API Key 与模型标识';
+      Modal.error({ title: '连接失败', content: errMsg });
+    } finally {
+      setTestingInForm(false);
+    }
+  };
+
   const columns: ColumnsType<AIModel> = [
     {
       title: '模型名称',
@@ -199,9 +269,18 @@ function ModelConfigPage() {
     {
       title: '操作',
       key: 'action',
-      width: 140,
+      width: 220,
       render: (_, record) => (
         <Space>
+          <Button
+            type="link"
+            size="small"
+            icon={<ThunderboltOutlined />}
+            loading={testingId === record.id}
+            onClick={() => handleTestRow(record)}
+          >
+            测试
+          </Button>
           <Button
             type="link"
             size="small"
@@ -315,8 +394,9 @@ function ModelConfigPage() {
             name="apiEndpoint"
             label="API 地址"
             rules={[{ required: true, message: '请输入 API 地址' }]}
+            extra="只需填写到 v1，例：https://api.minimaxi.com/v1，系统会自动补全 /chat/completions 路径"
           >
-            <Input placeholder="例：https://api.openai.com/v1" />
+            <Input placeholder="例：https://api.minimaxi.com/v1" />
           </Form.Item>
           <Form.Item
             name="apiKey"
@@ -353,13 +433,22 @@ function ModelConfigPage() {
           <Form.Item name="enabled" label="启用状态" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="禁用" />
           </Form.Item>
-          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
-            <Space>
-              <Button onClick={() => setModalOpen(false)}>取消</Button>
-              <Button type="primary" htmlType="submit" loading={saving}>
-                {editingModel ? '更新' : '创建'}
+          <Form.Item style={{ marginBottom: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Button
+                icon={<ApiOutlined />}
+                loading={testingInForm}
+                onClick={handleTestInForm}
+              >
+                测试连接
               </Button>
-            </Space>
+              <Space>
+                <Button onClick={() => setModalOpen(false)}>取消</Button>
+                <Button type="primary" htmlType="submit" loading={saving}>
+                  {editingModel ? '更新' : '创建'}
+                </Button>
+              </Space>
+            </div>
           </Form.Item>
         </Form>
       </Modal>

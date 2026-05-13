@@ -23,7 +23,6 @@ import java.util.stream.Collectors;
  *      rule_code: DO160G-13-001
  *      rule_type: section_specific
  *      applies_to:
- *        standard: DO-160G
  *        sections: ["13"]
  *        keywords: ["霉菌", "Fungus"]
  *      severity: high
@@ -48,7 +47,6 @@ public class RuleMetadata {
     /** {@code global} (default), {@code section_specific}, {@code document_specific}, {@code output}. */
     private String ruleType = TYPE_GLOBAL;
     private String documentType;
-    private String standard;
     /** Standard chapter numbers / document section numbers this rule targets (e.g. ["13", "15"]). */
     private List<String> sections = new ArrayList<>();
     /** Free-form keywords used to match against chunk title / body for dispatch. */
@@ -169,24 +167,32 @@ public class RuleMetadata {
         switch (k) {
             case "scenario" -> meta.scenario = v;
             case "rule_code", "rulecode", "code" -> meta.ruleCode = v;
-            case "rule_type", "ruletype", "type" -> meta.ruleType = v.toLowerCase(Locale.ROOT);
+            case "rule_type", "ruletype", "type" -> meta.ruleType = normalizeRuleTypeValue(v);
             case "document_type", "documenttype" -> meta.documentType = v;
-            case "standard" -> meta.standard = v;
             case "severity" -> meta.severity = v.toLowerCase(Locale.ROOT);
             case "enabled" -> meta.enabled = !("false".equalsIgnoreCase(v) || "0".equals(v));
             case "sections", "target_sections" -> meta.sections = parseArray(v);
-            case "keywords" -> meta.keywords = parseArray(v);
+            case "keywords", "scope" -> meta.keywords = parseArray(v);
             default -> { /* ignore unknown keys */ }
         }
+    }
+
+    /** Map Chinese / English rule_type aliases ("通用", "专项", "global", "section_specific", ...) to the canonical TYPE_* constants. */
+    static String normalizeRuleTypeValue(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim().toLowerCase(Locale.ROOT);
+        if (s.isEmpty()) return null;
+        if (s.contains("通用") || s.equals("global") || s.equals("general")) return TYPE_GLOBAL;
+        if (s.contains("专项") || s.contains("section") || s.contains("specific")) return TYPE_SECTION_SPECIFIC;
+        if (s.contains("文档") || s.equals("document") || s.equals("document_specific")) return TYPE_DOCUMENT_SPECIFIC;
+        if (s.contains("输出") || s.equals("output")) return TYPE_OUTPUT;
+        return s;
     }
 
     private static void applyAppliesTo(RuleMetadata meta, String key, String value) {
         String k = key.toLowerCase(Locale.ROOT);
         String v = unquote(value);
         switch (k) {
-            case "standard" -> {
-                if (meta.standard == null || meta.standard.isBlank()) meta.standard = v;
-            }
             case "document_type", "documenttype" -> {
                 if (meta.documentType == null || meta.documentType.isBlank()) meta.documentType = v;
             }
@@ -239,9 +245,15 @@ public class RuleMetadata {
             if (obj == null) return;
             applyJsonField(meta, obj, "scenario");
             applyJsonField(meta, obj, "rule_code");
+            // Accept either `rule_type` or `type` (and capitalised variants).
             applyJsonField(meta, obj, "rule_type");
+            if (meta.ruleType == null && obj.containsKey("type")) {
+                meta.ruleType = normalizeRuleTypeValue(obj.getString("type"));
+            }
+            if (meta.ruleType == null && obj.containsKey("Type")) {
+                meta.ruleType = normalizeRuleTypeValue(obj.getString("Type"));
+            }
             applyJsonField(meta, obj, "document_type");
-            applyJsonField(meta, obj, "standard");
             applyJsonField(meta, obj, "severity");
             if (obj.containsKey("enabled")) {
                 meta.enabled = obj.getBooleanValue("enabled");
@@ -253,17 +265,29 @@ public class RuleMetadata {
                 for (int i = 0; i < sections.size(); i++) list.add(String.valueOf(sections.get(i)));
                 meta.sections = list;
             }
+            // Keywords: also accept `scope` (canonical) / `Scope` field as an alias.
             JSONArray keywords = obj.getJSONArray("keywords");
+            if (keywords == null) keywords = obj.getJSONArray("scope");
+            if (keywords == null) keywords = obj.getJSONArray("Scope");
             if (keywords != null) {
                 List<String> list = new ArrayList<>();
                 for (int i = 0; i < keywords.size(); i++) list.add(String.valueOf(keywords.get(i)));
                 meta.keywords = list;
+            } else if (meta.keywords.isEmpty()) {
+                // scope may be a single string ("霉菌, 温度") rather than a JSON array.
+                Object scalarScope = obj.get("scope");
+                if (scalarScope == null) scalarScope = obj.get("Scope");
+                if (scalarScope instanceof String s && !s.isBlank()) {
+                    List<String> list = new ArrayList<>();
+                    for (String part : s.split("[,，、;；/\\s]+")) {
+                        String t = part.trim();
+                        if (!t.isEmpty() && !list.contains(t)) list.add(t);
+                    }
+                    if (!list.isEmpty()) meta.keywords = list;
+                }
             }
             JSONObject appliesTo = obj.getJSONObject("applies_to");
             if (appliesTo != null) {
-                if (meta.standard == null || meta.standard.isBlank()) {
-                    meta.standard = appliesTo.getString("standard");
-                }
                 if (meta.documentType == null || meta.documentType.isBlank()) {
                     meta.documentType = appliesTo.getString("document_type");
                 }
@@ -299,9 +323,8 @@ public class RuleMetadata {
         switch (key) {
             case "scenario" -> meta.scenario = v;
             case "rule_code" -> meta.ruleCode = v;
-            case "rule_type" -> meta.ruleType = v.toLowerCase(Locale.ROOT);
+            case "rule_type" -> meta.ruleType = normalizeRuleTypeValue(v);
             case "document_type" -> meta.documentType = v;
-            case "standard" -> meta.standard = v;
             case "severity" -> meta.severity = v.toLowerCase(Locale.ROOT);
             default -> { }
         }

@@ -211,7 +211,8 @@ public class RuleParser {
         sp.append("1. 仅输出JSON，不要添加任何markdown代码块标记或其他文字\n");
         sp.append("2. 所有审查结论和描述使用中文\n");
         sp.append("3. 对每条审查规则都给出明确结论（通过或不通过）\n");
-        sp.append("4. 如果文档中包含HTML表格，请仔细审查表格内容的准确性和完整性，并遵循以下表格阅读规则：\n");
+        sp.append("4. 如果用户消息中出现 \"=== 以下为本章节引用的其他章节内容 ===\" 这样的分隔块，那一段是被本章节正文引用的其他章节的原文。它仅用于帮助你理解上下文（例如核对引用是否一致、术语是否对应），不要把当前章节的审查规则直接套用到这些被引用章节上，也不要在审查结果里报告它们自身的格式或合规问题。\n");
+        sp.append("5. 如果文档中包含HTML表格，请仔细审查表格内容的准确性和完整性，并遵循以下表格阅读规则：\n");
         sp.append("   - 单元格内容为单独的 \"/\"、\"-\"、\"—\"、\"无\"、\"N/A\" 时，表示该项不适用或不涉及，属于已规范填写，不应判定为内容缺失或信息遗漏；\n");
         sp.append("   - 表格使用 HTML 的 rowspan/colspan 属性表示合并单元格。带有 rowspan=\"N\" 的单元格的内容同时适用于其下方 N-1 行的对应位置；带有 colspan=\"N\" 的单元格内容同时适用于其右侧 N-1 列的对应位置。判断行内容是否完整时，必须将合并单元格的值视为已填写，不要因为某行视觉上少几个 <td> 就认为缺失数据；\n");
         sp.append("   - 如果一行只有一个 <td> 且包含\"注\"、\"备注\"、\"说明\"等开头，通常是横跨整行的注释行，属于补充说明，不应作为表格主体数据缺失依据；\n");
@@ -248,8 +249,6 @@ public class RuleParser {
             sb.append("[规则编号] ").append(meta.getRuleCode()).append("\n");
         if (meta.getRuleType() != null && !meta.getRuleType().isBlank())
             sb.append("[规则类型] ").append(meta.getRuleType()).append("\n");
-        if (meta.getStandard() != null && !meta.getStandard().isBlank())
-            sb.append("[适用标准] ").append(meta.getStandard()).append("\n");
         if (meta.getSections() != null && !meta.getSections().isEmpty())
             sb.append("[适用章节] ").append(String.join("、", meta.getSections())).append("\n");
         if (meta.getKeywords() != null && !meta.getKeywords().isEmpty())

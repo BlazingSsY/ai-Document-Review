@@ -14,7 +14,6 @@ public class RuleMetadataUpdateRequest {
     private String ruleCode;
     private String ruleType;
     private String documentType;
-    private String standard;
     private List<String> sections;
     private List<String> keywords;
     private String severity;

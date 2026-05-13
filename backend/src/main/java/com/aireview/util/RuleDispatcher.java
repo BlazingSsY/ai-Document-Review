@@ -81,7 +81,6 @@ public class RuleDispatcher {
         if (rule.getRuleCode() != null && !rule.getRuleCode().isBlank()) meta.setRuleCode(rule.getRuleCode());
         if (rule.getRuleType() != null && !rule.getRuleType().isBlank()) meta.setRuleType(rule.getRuleType());
         if (rule.getDocumentType() != null && !rule.getDocumentType().isBlank()) meta.setDocumentType(rule.getDocumentType());
-        if (rule.getStandard() != null && !rule.getStandard().isBlank()) meta.setStandard(rule.getStandard());
         if (rule.getSections() != null && !rule.getSections().isEmpty()) meta.setSections(rule.getSections());
         if (rule.getKeywords() != null && !rule.getKeywords().isEmpty()) meta.setKeywords(rule.getKeywords());
         if (rule.getSeverity() != null && !rule.getSeverity().isBlank()) meta.setSeverity(rule.getSeverity());
@@ -91,8 +90,20 @@ public class RuleDispatcher {
     /**
      * Choose the rules to apply to a particular chunk.
      *
+     * Policy (matches user requirement task #4):
+     *   - 通用 (global) rules: applied to EVERY chunk regardless of Scope. They
+     *     run as part of every per-chapter prompt so the model still sees them
+     *     bundled with any matching specific rules.
+     *   - 专项 (section_specific) rules: applied ONLY when the chunk's H1 title
+     *     matches one of the rule's Scope keywords or section numbers. Specific
+     *     rules with no matching chapter anywhere in the document never hit any
+     *     chunk and are therefore not uploaded to the LLM at all.
+     *   - 文档级 (document_specific) rules: handled by a separate pass.
+     *
      * @param chapterTitle e.g. "13 霉菌试验"
-     * @param chapterBody  parsed Markdown / HTML body of the chunk
+     * @param chapterBody  parsed Markdown / HTML body of the chunk (currently
+     *                     unused by the matcher — title-only matching prevents
+     *                     false positives from figure captions / numeric values)
      */
     public static DispatchResult dispatchForChunk(String chapterTitle,
                                                   String chapterBody,
@@ -101,10 +112,7 @@ public class RuleDispatcher {
         List<String> appliedNames = new ArrayList<>();
         List<Map<String, Object>> traces = new ArrayList<>();
 
-        // Per requirement: section + keyword matching only inspects the chapter's
-        // first-level heading (the title produced by WordParser.parseChapters). This
-        // prevents body noise like "[图表 13]", figure captions, or numeric values
-        // from triggering false section_specific hits.
+        // Match against the chapter's first-level heading only.
         String titleHay = Objects.toString(chapterTitle, "").toLowerCase(Locale.ROOT);
 
         for (PreparedRule p : prepared) {
@@ -118,31 +126,20 @@ public class RuleDispatcher {
                 continue;
             }
 
-            boolean hasKeywords = meta != null && meta.getKeywords() != null && !meta.getKeywords().isEmpty();
-            boolean hasSections = meta != null && meta.getSections() != null && !meta.getSections().isEmpty();
-
             if (meta != null && meta.isSectionSpecific()) {
+                // Specific rules require an H1 match to be included.
                 matchedKeywords.addAll(findMatches(titleHay, meta.getKeywords()));
                 matchedSections.addAll(findSectionMatches(chapterTitle, meta.getSections()));
                 if (matchedKeywords.isEmpty() && matchedSections.isEmpty()) {
-                    continue; // skip — not applicable to this chunk
+                    continue; // skip — not applicable to this chapter
                 }
                 reason = "section_specific";
-            } else if (hasKeywords || hasSections) {
-                // Any rule with explicit scope keywords/sections is filtered by first-level
-                // title match, regardless of rule_type. This makes the UI's "适用范围" column
-                // behave intuitively: setting keywords confines the rule to matching chapters.
-                matchedKeywords.addAll(findMatches(titleHay, meta.getKeywords()));
-                matchedSections.addAll(findSectionMatches(chapterTitle, meta.getSections()));
-                if (matchedKeywords.isEmpty() && matchedSections.isEmpty()) {
-                    continue;
-                }
-                reason = "scoped_by_keyword";
-            } else if (meta == null || meta.isGlobal()) {
-                reason = "global";
             } else {
-                // Unknown type with no scope → treat as global so a typo doesn't silently drop the rule
-                reason = "fallback_global";
+                // global / output / unknown types → applied to every chunk so the
+                // model always sees common quality criteria alongside any matching
+                // specific rule. This also reduces token use vs. issuing a
+                // separate global-only AI call per chunk.
+                reason = (meta == null || meta.isGlobal()) ? "global" : "fallback_global";
             }
 
             applied.add(p);

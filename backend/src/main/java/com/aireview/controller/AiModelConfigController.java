@@ -93,6 +93,28 @@ public class AiModelConfigController {
         }
     }
 
+    /**
+     * Probe a model's API connectivity. Used by the "测试连接" button in the
+     * model config UI. Accepts the same DTO as create/update so it can be
+     * called BEFORE saving (to validate a new config) or against an existing
+     * record (the {@code id} field, when present, lets us recover the stored
+     * API key when the UI sent the masked placeholder back).
+     */
+    @PostMapping("/test-connection")
+    public ApiResponse<Map<String, Object>> testConnection(@RequestBody AiModelConfigDTO dto) {
+        try {
+            com.aireview.entity.AiModelConfig persisted = dto.getId() != null
+                    ? aiModelService.getEntityById(dto.getId()) : null;
+            Map<String, Object> result = aiModelService.testConnection(dto, persisted);
+            return ApiResponse.success("连接成功", result);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.warn("Test connection failed: {}", e.getMessage());
+            return ApiResponse.error("连接失败: " + e.getMessage());
+        }
+    }
+
     @PutMapping("/{id}/toggle")
     public ApiResponse<Void> toggle(@PathVariable Long id, @RequestBody Map<String, Boolean> body) {
         try {

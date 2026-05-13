@@ -61,3 +61,18 @@ export function deleteModel(id: number) {
 export function toggleModel(id: number, enabled: boolean) {
   return request.put<ApiResponse<null>>(`/models/${id}/toggle`, { enabled });
 }
+
+export interface TestConnectionResult {
+  ok: boolean;
+  resolvedUrl: string;
+  latencyMs: number;
+  reply: string;
+}
+
+export interface TestConnectionParams extends Partial<CreateModelParams> {
+  id?: number;
+}
+
+export function testModelConnection(params: TestConnectionParams) {
+  return request.post<ApiResponse<TestConnectionResult>>('/models/test-connection', params);
+}

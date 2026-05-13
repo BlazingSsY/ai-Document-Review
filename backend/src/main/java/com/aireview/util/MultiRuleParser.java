@@ -145,11 +145,105 @@ public class MultiRuleParser {
         String content = md.toString().trim();
         if (content.isEmpty()) return null;
 
-        // Auto-detect metadata from the body content + the key itself.
-        RuleMetadata meta = autoDetectMetadata(key, content, body);
+        // Authoritative metadata comes from the rule file's explicit `type` and
+        // `Scope` fields (case-insensitive). When present these completely
+        // override the heuristic detection — auto-detection runs only when the
+        // file does not declare them, preserving compatibility with older packs.
+        RuleMetadata meta = readDeclaredMetadata(key, body);
+        if (meta == null) {
+            meta = autoDetectMetadata(key, content, body);
+        }
         String description = extractDescription(key, body);
 
         return new ParsedRule(key, "md", content, meta, description);
+    }
+
+    /**
+     * Read explicit {@code type} and {@code scope} fields from a sub-rule body.
+     * Returns {@code null} when neither field is present so the caller can fall
+     * back to heuristic detection.
+     *
+     * <p>Recognised values:
+     * <ul>
+     *   <li>{@code type}: "通用" / "global" → {@link RuleMetadata#TYPE_GLOBAL};
+     *       "专项" / "section" / "section_specific" → {@link RuleMetadata#TYPE_SECTION_SPECIFIC};
+     *       "文档级" / "document" / "document_specific" → {@link RuleMetadata#TYPE_DOCUMENT_SPECIFIC};
+     *       "输出" / "output" → {@link RuleMetadata#TYPE_OUTPUT}.</li>
+     *   <li>{@code scope}: a single string (split on Chinese/English commas / 顿号 / spaces)
+     *       or a JSON array. Each element becomes a keyword used to match against the document's
+     *       first-level headings during dispatch.</li>
+     * </ul>
+     */
+    private static RuleMetadata readDeclaredMetadata(String key, JSONObject body) {
+        Object typeObj = firstPresent(body, "type", "Type", "TYPE", "rule_type", "ruleType");
+        Object scopeObj = firstPresent(body, "scope", "Scope", "SCOPE", "applies_to_scope");
+        if (typeObj == null && scopeObj == null) return null;
+
+        RuleMetadata meta = new RuleMetadata();
+        if (key != null) meta.setRuleCode(key);
+
+        if (typeObj != null) {
+            String normalized = normalizeRuleType(String.valueOf(typeObj));
+            if (normalized != null) meta.setRuleType(normalized);
+        }
+
+        List<String> scopeList = parseScopeValue(scopeObj);
+        if (!scopeList.isEmpty()) {
+            meta.setKeywords(scopeList);
+        }
+
+        // Severity defaults parallel the autoDetect path so downstream behaviour is consistent.
+        meta.setSeverity(meta.isSectionSpecific() ? "high" : "medium");
+        return meta;
+    }
+
+    private static Object firstPresent(JSONObject obj, String... keys) {
+        for (String k : keys) {
+            if (obj.containsKey(k)) {
+                Object v = obj.get(k);
+                if (v != null) return v;
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeRuleType(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim().toLowerCase(Locale.ROOT);
+        if (s.isEmpty()) return null;
+        if (s.contains("通用") || s.equals("global") || s.equals("general")) {
+            return RuleMetadata.TYPE_GLOBAL;
+        }
+        if (s.contains("专项") || s.contains("section") || s.contains("specific")) {
+            return RuleMetadata.TYPE_SECTION_SPECIFIC;
+        }
+        if (s.contains("文档") || s.equals("document") || s.equals("document_specific")) {
+            return RuleMetadata.TYPE_DOCUMENT_SPECIFIC;
+        }
+        if (s.contains("输出") || s.equals("output")) {
+            return RuleMetadata.TYPE_OUTPUT;
+        }
+        return s;
+    }
+
+    private static List<String> parseScopeValue(Object value) {
+        List<String> out = new ArrayList<>();
+        if (value == null) return out;
+        if (value instanceof JSONArray arr) {
+            for (int i = 0; i < arr.size(); i++) {
+                String s = arr.getString(i);
+                if (s != null && !s.isBlank() && !out.contains(s.trim())) {
+                    out.add(s.trim());
+                }
+            }
+            return out;
+        }
+        // String form: split on commas, 中文逗号, 顿号, semicolons, slashes, or whitespace runs.
+        for (String part : String.valueOf(value).split("[,，、;；/\\s]+")) {
+            String t = part.trim();
+            if (!t.isEmpty() && !out.contains(t)) out.add(t);
+        }
+        return out;
     }
 
     private static String joinPromptLines(Object value) {
@@ -169,7 +263,6 @@ public class MultiRuleParser {
             // Fallback to content-based auto-detection
             RuleMetadata auto = autoDetectMetadata(originalFilename, content, null);
             if (meta.getRuleCode() == null) meta.setRuleCode(auto.getRuleCode());
-            if (meta.getStandard() == null) meta.setStandard(auto.getStandard());
             if (meta.getSections() == null || meta.getSections().isEmpty()) meta.setSections(auto.getSections());
             if (meta.getKeywords() == null || meta.getKeywords().isEmpty()) meta.setKeywords(auto.getKeywords());
             if (meta.getRuleType() == null || meta.getRuleType().isBlank()) meta.setRuleType(auto.getRuleType());
@@ -200,31 +293,22 @@ public class MultiRuleParser {
 
         // Find every "DO-160 第N章" or "X.Y条" near a "DO-160" mention.
         Set<String> sections = new LinkedHashSet<>();
-        boolean mentionsDo160 = false;
 
         Matcher m1 = Pattern.compile("(?i)DO[\\s\\-－]?160[A-Z]?\\s*第\\s*(\\d+)\\s*章").matcher(content);
-        while (m1.find()) { sections.add(m1.group(1)); mentionsDo160 = true; }
+        while (m1.find()) sections.add(m1.group(1));
 
         Matcher m1b = Pattern.compile("(?i)DO[\\s\\-－]?160[A-Z]?\\s*第\\s*(\\d+)\\s*节").matcher(content);
-        while (m1b.find()) { sections.add(m1b.group(1)); mentionsDo160 = true; }
+        while (m1b.find()) sections.add(m1b.group(1));
 
-        Matcher m2 = Pattern.compile("(?i)\\b(?:section|chapter|clause)\\s+(\\d+)\\s*(?:of)?\\s*(?:do[\\s\\-－]?160)?").matcher(content);
-        while (m2.find()) {
-            String s = m2.group(1);
-            // Only accept English section references when DO-160 is mentioned somewhere
-            // in the content; otherwise "section 4" might mean something unrelated.
-            if (contentMentionsDo160(content)) { sections.add(s); mentionsDo160 = true; }
-        }
-
-        // 子条目 "4.5.1条" / "8.5条" - 当全文出现 DO-160 / RTCA 时认为它们是标准条目
+        // English section references are only trusted when the content actually
+        // mentions DO-160 — otherwise "section 4" could refer to anything.
         if (contentMentionsDo160(content)) {
-            mentionsDo160 = true;
+            Matcher m2 = Pattern.compile("(?i)\\b(?:section|chapter|clause)\\s+(\\d+)\\s*(?:of)?\\s*(?:do[\\s\\-－]?160)?").matcher(content);
+            while (m2.find()) sections.add(m2.group(1));
+
+            // 子条目 "4.5.1条" / "8.5条"
             Matcher m3 = Pattern.compile("(\\d+)\\.\\d+(?:\\.\\d+)?\\s*条").matcher(content);
             while (m3.find()) sections.add(m3.group(1));
-        }
-
-        if (mentionsDo160) {
-            meta.setStandard("DO-160G");
         }
 
         if (!sections.isEmpty()) {

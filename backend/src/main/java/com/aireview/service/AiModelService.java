@@ -99,6 +99,12 @@ public class AiModelService {
         log.info("AI model config {} {}", config.getModelName(), enabled ? "enabled" : "disabled");
     }
 
+    /** Look up a stored config by ID for the test endpoint to recover a masked API key. */
+    public AiModelConfig getEntityById(Long id) {
+        if (id == null) return null;
+        return aiModelConfigMapper.selectById(id);
+    }
+
     public AiModelConfig getEnabledModel(String modelName) {
         LambdaQueryWrapper<AiModelConfig> query = new LambdaQueryWrapper<>();
         query.eq(AiModelConfig::getModelName, modelName)
@@ -108,6 +114,56 @@ public class AiModelService {
             throw new IllegalArgumentException("AI model not found or disabled: " + modelName);
         }
         return config;
+    }
+
+    /**
+     * Probe an AI model configuration by issuing a tiny chat-completion request
+     * with a 30-second timeout. Returns the resolved URL plus a short snippet
+     * of the model's reply on success; throws a descriptive RuntimeException
+     * with the HTTP status / body on failure so the UI can surface the cause.
+     *
+     * <p>The request shape is intentionally minimal (1 system + 1 user message,
+     * 16-token cap) to minimise cost when the model is real.
+     */
+    public Map<String, Object> testConnection(AiModelConfigDTO dto, AiModelConfig persistedFallback) throws Exception {
+        AiModelConfig probe = new AiModelConfig();
+        probe.setModelName(dto.getName() != null ? dto.getName() : "test-probe");
+        probe.setProvider(dto.getProvider() != null ? dto.getProvider() : "openai");
+        probe.setModelKey(dto.getModelKey() != null && !dto.getModelKey().isBlank()
+                ? dto.getModelKey() : probe.getModelName());
+        probe.setEndpoint(dto.getApiEndpoint());
+        // Allow editing an existing record without re-typing the API key: when the UI sends
+        // an empty / masked key, fall back to the stored key on the persisted record.
+        String key = dto.getApiKey();
+        if ((key == null || key.isBlank() || key.contains("****")) && persistedFallback != null) {
+            key = persistedFallback.getApiKey();
+        }
+        probe.setApiKey(key);
+        probe.setMaxTokens(16);
+        probe.setTemperature(0.0);
+        probe.setTimeout(30);
+        probe.setIsEnabled(true);
+
+        if (probe.getEndpoint() == null || probe.getEndpoint().isBlank()) {
+            throw new IllegalArgumentException("API 地址不能为空");
+        }
+        if (probe.getApiKey() == null || probe.getApiKey().isBlank() || probe.getApiKey().contains("****")) {
+            throw new IllegalArgumentException("API Key 无效或已被脱敏，请重新填写后再测试");
+        }
+
+        long start = System.currentTimeMillis();
+        String reply = callAiModel(probe, "你是一个用于连接性测试的助手，请用一个汉字回答 \"好\"。",
+                "ping");
+        long elapsed = System.currentTimeMillis() - start;
+
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("resolvedUrl", buildFullApiUrl(probe));
+        result.put("latencyMs", elapsed);
+        String snippet = reply == null ? "" : reply.trim();
+        if (snippet.length() > 80) snippet = snippet.substring(0, 80) + "...";
+        result.put("reply", snippet);
+        return result;
     }
 
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent) throws Exception {
@@ -207,20 +263,20 @@ public class AiModelService {
         if (endpoint == null || endpoint.trim().isEmpty()) {
             throw new IllegalArgumentException("API endpoint cannot be empty");
         }
-        
+
         String provider = config.getProvider() != null ? config.getProvider().toLowerCase() : "openai";
         String baseUrl = endpoint.trim();
-        
+
         // 确保URL以http开头
         if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
             baseUrl = "https://" + baseUrl;
         }
-        
+
         // 移除末尾的斜杠
         if (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
-        
+
         // 根据提供商添加API路径
         switch (provider) {
             case "openai":
@@ -251,10 +307,21 @@ public class AiModelService {
                 } else {
                     return baseUrl;
                 }
-            case "custom":
             default:
-                // 对于自定义或其他提供商，假设用户输入的是完整URL
-                return baseUrl;
+                // 对于自定义或其他第三方供应商：用户只需输入到 ".../v1"，
+                // 我们自动补全为 OpenAI-兼容的 /chat/completions 路径。
+                if (baseUrl.contains("/chat/completions")) {
+                    return baseUrl;
+                }
+                if (baseUrl.endsWith("/v1")) {
+                    return baseUrl + "/chat/completions";
+                }
+                if (baseUrl.contains("/v1/")) {
+                    // 已经包含 /v1/xxx 等子路径，直接使用
+                    return baseUrl;
+                }
+                // 既不含 /v1 也不含 /chat/completions：补全完整路径
+                return baseUrl + "/v1/chat/completions";
         }
     }
 

@@ -6,6 +6,7 @@ import com.aireview.entity.AiModelConfig;
 import com.aireview.entity.ReviewTask;
 import com.aireview.entity.Rule;
 import com.aireview.repository.ReviewTaskMapper;
+import com.aireview.util.ChapterReferenceResolver;
 import com.aireview.util.ChunkUtils;
 import com.aireview.util.RuleDispatcher;
 import com.aireview.util.RuleParser;
@@ -348,8 +349,18 @@ public class ReviewService {
                 webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, progressMsg, progress);
 
                 String systemPrompt = buildPromptForRules(dispatch.getAppliedRules());
+
+                // Detect cross-references like "见第X章" / "参见 4.5 节" and append
+                // the referenced chapters' content as supporting context. The
+                // delimiter block tells the model not to apply the current
+                // chapter's rules to those referenced sections.
+                java.util.Set<Integer> refIdx = ChapterReferenceResolver
+                        .findReferencedChapters(chunk.getContent(), chunk.getLabel(), chapters);
+                String supporting = ChapterReferenceResolver.renderSupportingContext(refIdx, chapters);
+
                 String chunkContent = "章节: " + chunk.getLabel()
-                        + " (" + chunkNum + "/" + chunks.size() + ")\n\n" + chunk.getContent();
+                        + " (" + chunkNum + "/" + chunks.size() + ")\n\n" + chunk.getContent()
+                        + supporting;
                 String aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent);
 
                 Map<String, Object> chunkResult = new HashMap<>();

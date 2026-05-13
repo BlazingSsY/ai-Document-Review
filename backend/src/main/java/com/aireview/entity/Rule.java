@@ -35,7 +35,6 @@ public class Rule {
     private String ruleCode;
     private String ruleType;        // global / section_specific / document_specific / output
     private String documentType;
-    private String standard;
 
     @TableField(typeHandler = PgJsonbStringListTypeHandler.class)
     private List<String> sections;

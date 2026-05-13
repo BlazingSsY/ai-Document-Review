@@ -15,7 +15,6 @@ export interface Rule {
   ruleCode?: string;
   ruleType?: string;
   documentType?: string;
-  standard?: string;
   sections?: string[];
   keywords?: string[];
   severity?: string;
@@ -28,7 +27,6 @@ export interface RuleMetadataUpdate {
   ruleCode?: string;
   ruleType?: string;
   documentType?: string;
-  standard?: string;
   sections?: string[];
   keywords?: string[];
   severity?: string;

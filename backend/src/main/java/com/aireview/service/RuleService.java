@@ -92,7 +92,6 @@ public class RuleService {
                 rule.setRuleCode(meta.getRuleCode());
                 rule.setRuleType(meta.getRuleType());
                 rule.setDocumentType(meta.getDocumentType());
-                rule.setStandard(meta.getStandard());
                 rule.setSections(emptyToNull(meta.getSections()));
                 rule.setKeywords(emptyToNull(meta.getKeywords()));
                 rule.setSeverity(meta.getSeverity());
@@ -194,7 +193,6 @@ public class RuleService {
         if (req.getRuleCode() != null)     rule.setRuleCode(blankToNull(req.getRuleCode()));
         if (req.getRuleType() != null)     rule.setRuleType(blankToNull(req.getRuleType()));
         if (req.getDocumentType() != null) rule.setDocumentType(blankToNull(req.getDocumentType()));
-        if (req.getStandard() != null)     rule.setStandard(blankToNull(req.getStandard()));
         if (req.getSections() != null)     rule.setSections(emptyToNull(req.getSections()));
         if (req.getKeywords() != null)     rule.setKeywords(emptyToNull(req.getKeywords()));
         if (req.getSeverity() != null)     rule.setSeverity(blankToNull(req.getSeverity()));
@@ -245,7 +243,6 @@ public class RuleService {
         dto.setRuleCode(rule.getRuleCode());
         dto.setRuleType(rule.getRuleType());
         dto.setDocumentType(rule.getDocumentType());
-        dto.setStandard(rule.getStandard());
         dto.setSections(rule.getSections());
         dto.setKeywords(rule.getKeywords());
         dto.setSeverity(rule.getSeverity());
@@ -255,7 +252,6 @@ public class RuleService {
         // they only enrich the DTO so the listing UI can show something useful.
         if (content != null && !content.isBlank()) {
             boolean anyMetaInDb = dto.getRuleCode() != null || dto.getRuleType() != null
-                    || dto.getStandard() != null
                     || (dto.getSections() != null && !dto.getSections().isEmpty())
                     || (dto.getKeywords() != null && !dto.getKeywords().isEmpty())
                     || dto.getSeverity() != null;
@@ -264,7 +260,6 @@ public class RuleService {
                 if (dto.getRuleCode() == null)   dto.setRuleCode(meta.getRuleCode());
                 if (dto.getRuleType() == null)   dto.setRuleType(meta.getRuleType());
                 if (dto.getDocumentType() == null) dto.setDocumentType(meta.getDocumentType());
-                if (dto.getStandard() == null)   dto.setStandard(meta.getStandard());
                 if (dto.getSections() == null && meta.getSections() != null && !meta.getSections().isEmpty())
                     dto.setSections(meta.getSections());
                 if (dto.getKeywords() == null && meta.getKeywords() != null && !meta.getKeywords().isEmpty())

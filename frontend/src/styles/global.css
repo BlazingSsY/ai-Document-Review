@@ -303,10 +303,16 @@ body {
   color: #1a1a2e !important;
 }
 
-.ant-layout-sider .ant-menu-item .ant-menu-item-icon {
+.ant-layout-sider .ant-menu-item .ant-menu-item-icon,
+.ant-layout-sider .ant-menu-submenu-title .ant-menu-item-icon {
   color: #4a7cba !important;
 }
 
-.ant-layout-sider .ant-menu-item-selected .ant-menu-item-icon {
+.ant-layout-sider .ant-menu-item-selected .ant-menu-item-icon,
+.ant-layout-sider .ant-menu-submenu-selected > .ant-menu-submenu-title .ant-menu-item-icon {
   color: #1677ff !important;
+}
+
+.ant-layout-sider .ant-menu-submenu-title {
+  color: #1a1a2e !important;
 }

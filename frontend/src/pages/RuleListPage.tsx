@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Space, Typography, Tag,
   message, Popconfirm, Breadcrumb, Empty, Descriptions, Select, Tooltip,
@@ -7,7 +7,7 @@ import {
   PlusOutlined, EyeOutlined, DeleteOutlined, FolderOutlined,
   ArrowLeftOutlined, FileTextOutlined, EditOutlined,
 } from '@ant-design/icons';
-import type { ColumnsType, ColumnType } from 'antd/es/table';
+import type { ColumnsType } from 'antd/es/table';
 import {
   getRuleList, uploadRule, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
   getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
@@ -34,68 +34,24 @@ function renderRuleTypeTag(ruleType?: string) {
 
 function hasRuleMetadata(rule: Rule): boolean {
   return Boolean(
-    rule.ruleCode || rule.ruleType || rule.documentType || rule.standard
+    rule.ruleCode || rule.ruleType || rule.documentType
       || (rule.sections && rule.sections.length > 0)
       || (rule.keywords && rule.keywords.length > 0)
   );
 }
 
-interface ResizableHeaderCellProps extends React.HTMLAttributes<HTMLTableCellElement> {
-  width?: number;
-  onResize?: (newWidth: number) => void;
-}
-
-const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
-  width, onResize, style, children, ...restProps
-}) => {
-  const startX = useRef(0);
-  const startWidth = useRef(0);
-  const moveRef = useRef<(e: MouseEvent) => void>();
-  const upRef = useRef<() => void>();
-
-  if (!onResize || width === undefined) {
-    return <th {...restProps} style={style}>{children}</th>;
-  }
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    startX.current = e.clientX;
-    startWidth.current = width;
-    document.body.style.userSelect = 'none';
-    moveRef.current = (ev: MouseEvent) => {
-      const next = Math.max(60, startWidth.current + (ev.clientX - startX.current));
-      onResize(next);
-    };
-    upRef.current = () => {
-      if (moveRef.current) document.removeEventListener('mousemove', moveRef.current);
-      if (upRef.current) document.removeEventListener('mouseup', upRef.current);
-      document.body.style.userSelect = '';
-    };
-    document.addEventListener('mousemove', moveRef.current);
-    document.addEventListener('mouseup', upRef.current);
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  return (
-    <th {...restProps} style={{ ...style, position: 'relative' }}>
-      {children}
-      <span
-        onMouseDown={onMouseDown}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          right: -4,
-          top: 0,
-          bottom: 0,
-          width: 8,
-          cursor: 'col-resize',
-          zIndex: 2,
-          userSelect: 'none',
-        }}
-      />
-    </th>
-  );
-};
+// Fixed column widths for the rule list table. Resizing was removed because
+// state-driven resize triggered subtle layout glitches under AntD's fixed-layout
+// table; widths chosen here keep all header titles on one line and give the
+// frequently-scanned 规则名称 / 适用范围 / 更新时间 columns extra room.
+const RULE_COL_WIDTHS = {
+  ruleName: 240,
+  ruleType: 90,
+  scope: 280,
+  sourceFile: 160,
+  updatedAt: 200,
+  action: 130,
+} as const;
 
 function RuleListPage() {
   const user = useAuthStore((s) => s.user);
@@ -109,6 +65,8 @@ function RuleListPage() {
   const [createLibModalOpen, setCreateLibModalOpen] = useState(false);
   const [creatingLib, setCreatingLib] = useState(false);
   const [libForm] = Form.useForm();
+  const [selectedLibIds, setSelectedLibIds] = useState<React.Key[]>([]);
+  const [batchDeletingLibs, setBatchDeletingLibs] = useState(false);
 
   // Current library (null = show library list)
   const [currentLibrary, setCurrentLibrary] = useState<RuleLibrary | null>(null);
@@ -128,6 +86,8 @@ function RuleListPage() {
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editForm] = Form.useForm();
+  const [selectedRuleIds, setSelectedRuleIds] = useState<React.Key[]>([]);
+  const [batchDeletingRules, setBatchDeletingRules] = useState(false);
 
   // Fetch libraries
   const fetchLibraries = async () => {
@@ -181,6 +141,29 @@ function RuleListPage() {
     } catch { /* handled */ }
   };
 
+  const handleBatchDeleteLibraries = async () => {
+    if (selectedLibIds.length === 0) return;
+    setBatchDeletingLibs(true);
+    let success = 0;
+    let failed = 0;
+    for (const id of selectedLibIds) {
+      try {
+        await deleteRuleLibrary(Number(id));
+        success += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setBatchDeletingLibs(false);
+    setSelectedLibIds([]);
+    if (failed === 0) {
+      message.success(`已删除 ${success} 个规则库`);
+    } else {
+      message.warning(`成功 ${success} 个，失败 ${failed} 个`);
+    }
+    fetchLibraries();
+  };
+
   // Rule operations
   const handleUpload = async () => {
     if (!uploadFile || !currentLibrary) { message.warning('请选择规则文件'); return; }
@@ -207,7 +190,6 @@ function RuleListPage() {
       ruleName: rule.ruleName,
       ruleCode: rule.ruleCode || '',
       ruleType: rule.ruleType || 'global',
-      standard: rule.standard || '',
       sections: rule.sections || [],
       keywords: rule.keywords || [],
       description: rule.description || '',
@@ -223,7 +205,6 @@ function RuleListPage() {
         ruleName: values.ruleName as string,
         ruleCode: (values.ruleCode as string) || '',
         ruleType: values.ruleType as string,
-        standard: (values.standard as string) || '',
         sections: (values.sections as string[]) || [],
         keywords: (values.keywords as string[]) || [],
         description: (values.description as string) || '',
@@ -248,6 +229,29 @@ function RuleListPage() {
       message.success('规则已删除');
       fetchRules();
     } catch { /* handled */ }
+  };
+
+  const handleBatchDeleteRules = async () => {
+    if (selectedRuleIds.length === 0) return;
+    setBatchDeletingRules(true);
+    let success = 0;
+    let failed = 0;
+    for (const id of selectedRuleIds) {
+      try {
+        await deleteRule(Number(id));
+        success += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setBatchDeletingRules(false);
+    setSelectedRuleIds([]);
+    if (failed === 0) {
+      message.success(`已删除 ${success} 条规则`);
+    } else {
+      message.warning(`成功 ${success} 条，失败 ${failed} 条`);
+    }
+    fetchRules();
   };
 
   const enterLibrary = (lib: RuleLibrary) => {
@@ -297,25 +301,30 @@ function RuleListPage() {
     },
   ];
 
-  // Resizable column widths — persisted per-column key.
-  const DEFAULT_COL_WIDTHS: Record<string, number> = {
-    ruleName: 200,
-    ruleType: 90,
-    scope: 220,
-    sourceFile: 140,
-    updatedAt: 150,
-    action: 120,
-  };
-  const [colWidths, setColWidths] = useState<Record<string, number>>(DEFAULT_COL_WIDTHS);
+  // Aggregate every scope keyword in the current library's rule list so the
+  // edit modal can offer them as ready-made options. Users can still type a
+  // new one (mode="tags"). Deduplicated, alphabetised for stable rendering.
+  const libraryScopeOptions = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rules) {
+      (r.keywords || []).forEach((k) => {
+        const trimmed = (k || '').trim();
+        if (trimmed) set.add(trimmed);
+      });
+    }
+    return Array.from(set).sort().map((v) => ({ label: v, value: v }));
+  }, [rules]);
 
-  const handleColumnResize = (key: string) => (newWidth: number) => {
-    setColWidths((prev) => ({ ...prev, [key]: newWidth }));
+  // Rule list columns. Widths are fixed (see RULE_COL_WIDTHS). `whiteSpace:
+  // nowrap` on each header cell guarantees the title sits on one line.
+  const noWrapHeader: React.HTMLAttributes<HTMLElement> = {
+    style: { whiteSpace: 'nowrap' },
   };
-
-  // Rule list columns
   const ruleColumns: ColumnsType<Rule> = [
     {
       title: '规则名称', key: 'ruleName',
+      width: RULE_COL_WIDTHS.ruleName,
+      onHeaderCell: () => noWrapHeader,
       render: (_, record) => (
         <Space direction="vertical" size={0}>
           <Space>
@@ -330,10 +339,14 @@ function RuleListPage() {
     },
     {
       title: '类型', key: 'ruleType',
+      width: RULE_COL_WIDTHS.ruleType,
+      onHeaderCell: () => noWrapHeader,
       render: (_, record) => renderRuleTypeTag(record.ruleType),
     },
     {
       title: '适用范围', key: 'scope',
+      width: RULE_COL_WIDTHS.scope,
+      onHeaderCell: () => noWrapHeader,
       render: (_, record) => {
         if (!record.keywords || record.keywords.length === 0) {
           return <Text type="secondary" style={{ fontSize: 12 }}>全文档</Text>;
@@ -349,15 +362,21 @@ function RuleListPage() {
     },
     {
       title: '来源文件', dataIndex: 'sourceFile', key: 'sourceFile',
+      width: RULE_COL_WIDTHS.sourceFile,
       ellipsis: true,
+      onHeaderCell: () => noWrapHeader,
       render: (text?: string) => text ? <Text type="secondary" style={{ fontSize: 12 }}>{text}</Text> : '-',
     },
     {
       title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt',
+      width: RULE_COL_WIDTHS.updatedAt,
+      onHeaderCell: () => noWrapHeader,
       render: (text: string) => text ? new Date(text).toLocaleString('zh-CN') : '-',
     },
     {
       title: '操作', key: 'action',
+      width: RULE_COL_WIDTHS.action,
+      onHeaderCell: () => noWrapHeader,
       render: (_, record) => (
         <Space size={4}>
           <Tooltip title="预览">
@@ -383,21 +402,7 @@ function RuleListPage() {
     },
   ];
 
-  // Attach current width + onHeaderCell for the resizable header component.
-  const resizableRuleColumns: ColumnsType<Rule> = ruleColumns.map((col) => {
-    const key = (col as ColumnType<Rule>).key as string;
-    const width = colWidths[key];
-    return {
-      ...col,
-      width,
-      onHeaderCell: () => ({
-        width,
-        onResize: handleColumnResize(key),
-      } as React.HTMLAttributes<HTMLElement>),
-    };
-  });
-
-  const ruleTableScrollX = Object.values(colWidths).reduce((a, b) => a + b, 0);
+  const ruleTableScrollX = Object.values(RULE_COL_WIDTHS).reduce((a, b) => a + b, 0);
 
   // LIBRARY LIST VIEW
   if (!currentLibrary) {
@@ -405,10 +410,24 @@ function RuleListPage() {
       <div>
         <div className="page-header">
           <Title level={4} style={{ margin: 0 }}>审查规则管理</Title>
-          {canManage && (
-            <Button type="primary" icon={<PlusOutlined />}
-              onClick={() => setCreateLibModalOpen(true)}>新建规则库</Button>
-          )}
+          <Space>
+            {canManage && selectedLibIds.length > 0 && (
+              <Popconfirm
+                title={`确定要删除选中的 ${selectedLibIds.length} 个规则库吗？库中所有规则也将被删除。`}
+                onConfirm={handleBatchDeleteLibraries}
+                okText="确定"
+                cancelText="取消"
+              >
+                <Button danger icon={<DeleteOutlined />} loading={batchDeletingLibs}>
+                  批量删除（{selectedLibIds.length}）
+                </Button>
+              </Popconfirm>
+            )}
+            {canManage && (
+              <Button type="primary" icon={<PlusOutlined />}
+                onClick={() => setCreateLibModalOpen(true)}>新建规则库</Button>
+            )}
+          </Space>
         </div>
 
         <Card>
@@ -420,9 +439,15 @@ function RuleListPage() {
             </Empty>
           ) : (
             <Table columns={libColumns} dataSource={libraries} rowKey="id" loading={libLoading}
+              rowSelection={canManage ? {
+                selectedRowKeys: selectedLibIds,
+                onChange: (keys) => setSelectedLibIds(keys),
+              } : undefined}
               pagination={{
                 current: libPage, pageSize: PAGE_SIZE, total: libTotal,
-                showTotal: (t) => `共 ${t} 个规则库`, onChange: (p) => setLibPage(p), showSizeChanger: false,
+                showTotal: (t) => `共 ${t} 个规则库`,
+                onChange: (p) => { setLibPage(p); setSelectedLibIds([]); },
+                showSizeChanger: false,
               }}
             />
           )}
@@ -462,10 +487,24 @@ function RuleListPage() {
             { title: currentLibrary.name },
           ]} />
         </Space>
-        {canManage && (
-          <Button type="primary" icon={<PlusOutlined />}
-            onClick={() => setUploadModalOpen(true)}>上传规则</Button>
-        )}
+        <Space>
+          {canManage && selectedRuleIds.length > 0 && (
+            <Popconfirm
+              title={`确定要删除选中的 ${selectedRuleIds.length} 条规则吗？`}
+              onConfirm={handleBatchDeleteRules}
+              okText="确定"
+              cancelText="取消"
+            >
+              <Button danger icon={<DeleteOutlined />} loading={batchDeletingRules}>
+                批量删除（{selectedRuleIds.length}）
+              </Button>
+            </Popconfirm>
+          )}
+          {canManage && (
+            <Button type="primary" icon={<PlusOutlined />}
+              onClick={() => setUploadModalOpen(true)}>上传规则</Button>
+          )}
+        </Space>
       </div>
 
       <Card className="rule-table-card">
@@ -477,17 +516,23 @@ function RuleListPage() {
           </Empty>
         ) : (
           <Table
-            columns={resizableRuleColumns}
+            columns={ruleColumns}
             dataSource={rules}
             rowKey="id"
             loading={ruleLoading}
             size="middle"
             tableLayout="fixed"
-            components={{ header: { cell: ResizableHeaderCell } }}
-            scroll={{ x: ruleTableScrollX }}
+            scroll={{ x: ruleTableScrollX + (canManage ? 50 : 0) }}
+            rowSelection={canManage ? {
+              columnWidth: 50,
+              selectedRowKeys: selectedRuleIds,
+              onChange: (keys) => setSelectedRuleIds(keys),
+            } : undefined}
             pagination={{
               current: rulePage, pageSize: PAGE_SIZE, total: ruleTotal,
-              showTotal: (t) => `共 ${t} 条规则`, onChange: (p) => setRulePage(p), showSizeChanger: false,
+              showTotal: (t) => `共 ${t} 条规则`,
+              onChange: (p) => { setRulePage(p); setSelectedRuleIds([]); },
+              showSizeChanger: false,
             }}
           />
         )}
@@ -525,9 +570,6 @@ function RuleListPage() {
                     <Descriptions.Item label="规则编号">{previewRule.ruleCode}</Descriptions.Item>
                   )}
                   <Descriptions.Item label="规则类型">{renderRuleTypeTag(previewRule.ruleType)}</Descriptions.Item>
-                  {previewRule.standard && (
-                    <Descriptions.Item label="适用标准">{previewRule.standard}</Descriptions.Item>
-                  )}
                   {previewRule.sections && previewRule.sections.length > 0 && (
                     <Descriptions.Item label="目标章节" span={2}>
                       <Space wrap>
@@ -583,22 +625,24 @@ function RuleListPage() {
               ]}
             />
           </Form.Item>
-          <Form.Item name="standard" label="适用标准">
-            <Input placeholder="例如 DO-160G（可选）" />
-          </Form.Item>
           <Form.Item
             name="sections"
             label="目标章节"
-            extra="标准的章节编号（如 13、15、4.5）。按回车输入多个；仅 section_specific 规则会按此匹配文档一级标题"
+            extra="标准的章节编号（如 13、15、4.5）。按回车输入多个；仅专项规则会按此匹配文档一级标题"
           >
             <Select mode="tags" tokenSeparators={[',', '，', ' ']} placeholder="回车确认每个章节号" />
           </Form.Item>
           <Form.Item
             name="keywords"
             label="适用范围"
-            extra="自定义关键词，回车确认。提交审查时会与上传文档的一级标题进行匹配，命中即认为该规则适用于该章节"
+            extra="提交审查时会与上传文档的一级标题进行匹配，命中即认为该规则适用于该章节。下拉框中可选择当前规则库已有的范围；也可直接键入新的回车确认。"
           >
-            <Select mode="tags" tokenSeparators={[',', '，']} placeholder="回车确认每个关键词" />
+            <Select
+              mode="tags"
+              tokenSeparators={[',', '，']}
+              placeholder="选择或输入适用范围"
+              options={libraryScopeOptions}
+            />
           </Form.Item>
           <Form.Item name="description" label="规则简述">
             <Input.TextArea rows={3} placeholder="便于在列表中识别该规则的一句话描述" />

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu, Avatar, Dropdown, Typography, Space, Tag, theme } from 'antd';
 import {
@@ -15,6 +15,8 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import useAuthStore from '../store/authStore';
+import useLogStore from '../store/logStore';
+import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -34,6 +36,35 @@ function AppLayout() {
 
   const role = user?.role || 'user';
   const isSupervisor = role === 'supervisor';
+
+  // Global log subscriber: keep accumulating WebSocket-driven log entries even
+  // when the user is NOT on the workspace page, so returning later via 查看详情
+  // shows the full timeline. This must live above the routed pages.
+  useEffect(() => {
+    taskWebSocket.connect();
+    const handler = (data: TaskProgressMessage) => {
+      if (!data.taskId) return;
+      const s = data.status?.toUpperCase();
+      const level: 'info' | 'error' | 'success' | 'warning' =
+        s === 'COMPLETED' ? 'success'
+        : s === 'FAILED' ? 'error'
+        : s === 'CANCELLED' ? 'warning'
+        : 'info';
+      const time = new Date().toLocaleTimeString('zh-CN', {
+        hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+      useLogStore.getState().appendLog(data.taskId, {
+        time,
+        level,
+        message: data.message || `状态更新: ${data.status}`,
+        progress: data.progress,
+      });
+    };
+    taskWebSocket.subscribe('*', handler);
+    return () => {
+      taskWebSocket.unsubscribe('*', handler);
+    };
+  }, []);
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     navigate(key);
