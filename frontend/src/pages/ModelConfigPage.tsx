@@ -16,7 +16,7 @@ import {
   message,
   Popconfirm,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, QuestionCircleOutlined, ApiOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, QuestionCircleOutlined, ApiOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getModelList,
@@ -42,7 +42,6 @@ function ModelConfigPage() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [isCustomProvider, setIsCustomProvider] = useState(false);
-  const [testingId, setTestingId] = useState<number | null>(null);
   const [testingInForm, setTestingInForm] = useState(false);
 
   const fetchModels = async () => {
@@ -142,33 +141,6 @@ function ModelConfigPage() {
     }
   };
 
-  const handleTestRow = async (model: AIModel) => {
-    setTestingId(model.id);
-    try {
-      const res = await testModelConnection({ id: model.id });
-      const data = res.data?.data;
-      Modal.success({
-        title: `「${model.name}」连接成功`,
-        content: (
-          <div style={{ fontSize: 13 }}>
-            <div>解析后的请求地址：<code>{data?.resolvedUrl}</code></div>
-            <div style={{ marginTop: 6 }}>响应耗时：{data?.latencyMs} ms</div>
-            {data?.reply && (
-              <div style={{ marginTop: 6 }}>模型回复（截断）：{data.reply}</div>
-            )}
-          </div>
-        ),
-      });
-    } catch (e: unknown) {
-      const errMsg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
-        || (e as Error)?.message
-        || '请检查地址、API Key 与模型标识';
-      Modal.error({ title: `「${model.name}」连接失败`, content: errMsg });
-    } finally {
-      setTestingId(null);
-    }
-  };
-
   const handleTestInForm = async () => {
     try {
       const values = await form.validateFields([
@@ -214,13 +186,15 @@ function ModelConfigPage() {
       title: '模型名称',
       dataIndex: 'name',
       key: 'name',
-      width: 160,
+      width: 140,
+      ellipsis: true,
     },
     {
       title: '供应商',
       dataIndex: 'provider',
       key: 'provider',
-      width: 120,
+      width: 100,
+      ellipsis: true,
       render: (val: string) => {
         const p = MODEL_PROVIDERS.find((m) => m.value === val);
         return p?.label || val;
@@ -230,27 +204,27 @@ function ModelConfigPage() {
       title: '模型标识',
       dataIndex: 'modelKey',
       key: 'modelKey',
-      width: 180,
+      width: 150,
       ellipsis: true,
     },
     {
       title: 'API 地址',
       dataIndex: 'apiEndpoint',
       key: 'apiEndpoint',
-      width: 220,
+      width: 180,
       ellipsis: true,
     },
     {
       title: '最大 Token',
       dataIndex: 'maxTokens',
       key: 'maxTokens',
-      width: 110,
+      width: 100,
     },
     {
       title: 'Temperature',
       dataIndex: 'temperature',
       key: 'temperature',
-      width: 100,
+      width: 110,
     },
     {
       title: '状态',
@@ -269,18 +243,9 @@ function ModelConfigPage() {
     {
       title: '操作',
       key: 'action',
-      width: 220,
+      width: 130,
       render: (_, record) => (
-        <Space>
-          <Button
-            type="link"
-            size="small"
-            icon={<ThunderboltOutlined />}
-            loading={testingId === record.id}
-            onClick={() => handleTestRow(record)}
-          >
-            测试
-          </Button>
+        <Space size={4}>
           <Button
             type="link"
             size="small"
@@ -323,7 +288,7 @@ function ModelConfigPage() {
           dataSource={models}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1000 }}
           pagination={{
             current: page,
             pageSize: PAGE_SIZE,
