@@ -297,6 +297,7 @@ function ReviewWorkspacePage() {
                 const suggestion = issue.suggestion ? String(issue.suggestion) : '';
                 const rule = issue.rule ? String(issue.rule) : '';
                 const ruleCode = (issue.rule_code || issue.ruleCode) ? String(issue.rule_code || issue.ruleCode) : '';
+                const showRule = rule && rule !== ruleCode;
                 const evidence = issue.evidence ? String(issue.evidence) : '';
                 return (
                   <Card
@@ -309,7 +310,7 @@ function ReviewWorkspacePage() {
                       <Space style={{ marginBottom: 4 }} wrap>
                         {category && <Tag>{category}</Tag>}
                         {ruleCode && <Tag color="purple">{ruleCode}</Tag>}
-                        {rule && <Tag color="blue">{rule}</Tag>}
+                        {showRule && <Tag color="blue">{rule}</Tag>}
                       </Space>
                     )}
                     {description && (

@@ -144,7 +144,7 @@ function ModelConfigPage() {
   const handleTestInForm = async () => {
     try {
       const values = await form.validateFields([
-        'name', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey',
+        'name', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature',
       ]);
       const provider = values.providerSelect === '__custom__'
         ? (values.providerCustom as string)
@@ -157,6 +157,7 @@ function ModelConfigPage() {
         modelKey: values.modelKey as string,
         apiEndpoint: values.apiEndpoint as string,
         apiKey: values.apiKey as string,
+        temperature: values.temperature as number,
       });
       const data = res.data?.data;
       Modal.success({

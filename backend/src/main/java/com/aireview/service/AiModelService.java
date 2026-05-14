@@ -140,7 +140,7 @@ public class AiModelService {
         }
         probe.setApiKey(key);
         probe.setMaxTokens(16);
-        probe.setTemperature(0.0);
+        probe.setTemperature(resolveProbeTemperature(dto, persistedFallback));
         probe.setTimeout(30);
         probe.setIsEnabled(true);
 
@@ -225,6 +225,16 @@ public class AiModelService {
 
         log.info("AI model response received, length: {}", content.length());
         return content;
+    }
+
+    private Double resolveProbeTemperature(AiModelConfigDTO dto, AiModelConfig persistedFallback) {
+        if (dto.getTemperature() != null) {
+            return dto.getTemperature();
+        }
+        if (persistedFallback != null && persistedFallback.getTemperature() != null) {
+            return persistedFallback.getTemperature();
+        }
+        return 0.1;
     }
 
     private AiModelConfigDTO toDTO(AiModelConfig config) {
