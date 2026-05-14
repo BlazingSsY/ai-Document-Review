@@ -27,18 +27,20 @@ function LoginPage() {
       } else {
         res = await login({ email: values.email, password: values.password });
       }
-      const { accessToken: token } = res.data.data;
-      // Temporarily store token so getUserProfile can use it
+      const { accessToken: token, refreshToken } = res.data.data;
+      // Temporarily store tokens so getUserProfile and the refresh interceptor can use them
       localStorage.setItem('token', token);
+      localStorage.setItem('refreshToken', refreshToken);
 
       // Fetch real user info from server
       const profileRes = await getUserProfile();
       const userInfo = profileRes.data.data;
-      setAuth(token, userInfo);
+      setAuth(token, refreshToken, userInfo);
       message.success(isRegister ? '注册成功' : '登录成功');
       navigate('/dashboard');
     } catch {
       localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
     } finally {
       setLoading(false);
     }

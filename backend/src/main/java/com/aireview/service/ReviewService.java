@@ -18,6 +18,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
@@ -34,7 +35,11 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Service
@@ -58,6 +63,15 @@ public class ReviewService {
     @Autowired
     private ReviewService self;
 
+    /**
+     * 切片级并行调用 AI 的独立线程池，配置见 {@code AsyncConfig.chunkReviewExecutor()}。
+     * 用字段注入而不是构造器注入，以避免与 Lombok @RequiredArgsConstructor 的 @Qualifier
+     * 拷贝行为冲突 —— 项目里 {@code self} 也是同样的字段注入模式。
+     */
+    @Autowired
+    @Qualifier("chunkReviewExecutor")
+    private Executor chunkReviewExecutor;
+
     /** Tracks cancelled task IDs so the async loop can exit early. */
     private final Set<String> cancelledTasks = ConcurrentHashMap.newKeySet();
 
@@ -75,6 +89,9 @@ public class ReviewService {
 
     @Value("${review.chunk.overlap-tokens}")
     private int overlapTokens;
+
+    @Value("${review.parallel.chunk-concurrency}")
+    private int chunkConcurrency;
 
     /**
      * Submit a review task: upload the document and start async processing.
@@ -346,61 +363,79 @@ public class ReviewService {
             saveChunkDebugInfo(taskId, task.getFileName(), task.getSelectedModel(), runStamp,
                     chapters, chunks, chunkDispatchTraces);
 
-            // 5b. Process each chunk with the pre-computed dispatch
-            List<Map<String, Object>> chunkResults = new ArrayList<>();
-            for (int i = 0; i < chunks.size(); i++) {
-                // Check cancellation before each chunk
-                if (cancelledTasks.remove(taskId)) {
-                    log.info("Review task {} cancelled during processing", taskId);
-                    return;
+            // 5b. 并行处理所有切片
+            //
+            // 性能：原来这里是 for 循环逐切片串行调用，每片 AI 耗时 20~60s 线性叠加，
+            // 10 片文档要 5~10 分钟。改为并发调度后，N 片可压缩到 ⌈N/并发⌉ 个 AI 调用时长。
+            //
+            // 设计要点：
+            //   1. 结果按原 chunkIdx 回填到固定大小数组，避免并发追加竞态。
+            //   2. 进度按完成数原子递增，UI 看到的百分比始终单调上升。
+            //   3. 不为每个切片各发一条 "开始" 消息（会刷屏），只发一条 "已启动 N 个并行任务"。
+            //   4. 取消信号被消费一次：在所有 future 完成后统一 remove。运行中的 HTTP 调用
+            //      会跑完（CompletableFuture.cancel 在 Java 不能中断 HttpClient.send），但
+            //      未启动的 chunk task 会在入口处快速返回。
+            int totalChunks = chunks.size();
+            int effectiveConcurrency = Math.min(chunkConcurrency, totalChunks);
+            log.info("Starting parallel chunk review: total={}, concurrency={}", totalChunks, effectiveConcurrency);
+            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                    "文档已切分为 " + totalChunks + " 个片段，开始并行审查（并发度 "
+                            + effectiveConcurrency + "）...", 30);
+
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            final Map<String, Object>[] orderedResults = new Map[totalChunks];
+            AtomicInteger completedCount = new AtomicInteger(0);
+            List<CompletableFuture<Void>> futures = new ArrayList<>(totalChunks);
+
+            for (int i = 0; i < totalChunks; i++) {
+                final int chunkIdx = i;
+                final ChunkUtils.ChunkResult chunk = chunks.get(i);
+                final RuleDispatcher.DispatchResult dispatch = dispatches.get(i);
+
+                CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
+                    // 任务已被取消时，未启动的切片立即返回。
+                    if (cancelledTasks.contains(taskId)) {
+                        return;
+                    }
+                    try {
+                        Map<String, Object> chunkResult = reviewSingleChunk(
+                                chunkIdx, totalChunks, chunk, dispatch, chapters, modelConfig);
+                        orderedResults[chunkIdx] = chunkResult;
+
+                        int done = completedCount.incrementAndGet();
+                        int progress = 30 + (int) ((double) done / totalChunks * 60);
+                        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                "[" + chunk.getLabel() + "] 审查完成 (" + done + "/" + totalChunks + ")",
+                                progress);
+                    } catch (Exception e) {
+                        // 让 allOf 能感知到异常
+                        throw new CompletionException(e);
+                    }
+                }, chunkReviewExecutor);
+
+                futures.add(fut);
+            }
+
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            } catch (CompletionException ce) {
+                Throwable cause = ce.getCause() != null ? ce.getCause() : ce;
+                if (cause instanceof Exception ex) {
+                    throw ex;
                 }
+                throw new RuntimeException("并行审查执行失败", cause);
+            }
 
-                ChunkUtils.ChunkResult chunk = chunks.get(i);
-                RuleDispatcher.DispatchResult dispatch = dispatches.get(i);
-                int chunkNum = i + 1;
-                int progress = 30 + (int) ((double) chunkNum / chunks.size() * 60);
+            // 所有 future 完成后统一消费取消信号 —— 与原循环 cancelledTasks.remove(taskId) 等价
+            if (cancelledTasks.remove(taskId)) {
+                log.info("Review task {} cancelled during processing", taskId);
+                return;
+            }
 
-                String progressMsg = "正在审查 [" + chunk.getLabel() + "] (" + chunkNum + "/" + chunks.size()
-                        + "，约" + chunk.getEstimatedTokens() + " tokens，命中规则 "
-                        + dispatch.getAppliedRules().size() + " 条)...";
-                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, progressMsg, progress);
-
-                String systemPrompt = buildPromptForRules(dispatch.getAppliedRules());
-
-                // Detect cross-references like "见第X章" / "参见 4.5 节" and append
-                // the referenced chapters' content as supporting context. The
-                // delimiter block tells the model not to apply the current
-                // chapter's rules to those referenced sections.
-                java.util.Set<Integer> refIdx = ChapterReferenceResolver
-                        .findReferencedChapters(chunk.getContent(), chunk.getLabel(), chapters);
-                String supporting = ChapterReferenceResolver.renderSupportingContext(refIdx, chapters);
-
-                String chunkContent = "章节: " + chunk.getLabel()
-                        + " (" + chunkNum + "/" + chunks.size() + ")\n\n" + chunk.getContent()
-                        + supporting;
-                String aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent);
-
-                Map<String, Object> chunkResult = new HashMap<>();
-                chunkResult.put("chunk", chunkNum);
-                chunkResult.put("chapterTitle", chunk.getLabel());
-                chunkResult.put("totalChunks", chunks.size());
-                chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
-                chunkResult.put("appliedRules", dispatch.getAppliedRuleNames());
-                Map<String, Object> parsedResult = tryParseAiJson(aiResponse);
-                if (parsedResult != null) {
-                    chunkResult.put("result", parsedResult);
-                } else {
-                    // Even after best-effort extraction the response still isn't JSON.
-                    // Wrap the raw text into a minimal issues structure so downstream
-                    // aggregation and the Excel export still produce something usable.
-                    log.warn("AI响应无法解析为JSON，已包装为原始文本issue: 长度={}",
-                            aiResponse != null ? aiResponse.length() : 0);
-                    chunkResult.put("result", buildFallbackResult(chunk.getLabel(), aiResponse));
-                }
-                chunkResults.add(chunkResult);
-
-                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                        "[" + chunk.getLabel() + "] 审查完成", progress);
+            // 按原顺序收集结果；被取消跳过的切片位置为 null，过滤掉
+            List<Map<String, Object>> chunkResults = new ArrayList<>(totalChunks);
+            for (Map<String, Object> r : orderedResults) {
+                if (r != null) chunkResults.add(r);
             }
 
             // 5.5 Document-level pass (only if there are document_specific rules to apply)
@@ -620,6 +655,54 @@ public class ReviewService {
         }
         sb.append("\n请基于全文目录与各章节摘要，按文档级规则给出综合判定。");
         return sb.toString();
+    }
+
+    /**
+     * 单个切片的完整审查流程：组装系统提示词、附加跨章节引用上下文、调用 AI、解析响应。
+     *
+     * <p>本方法被并行调度执行，必须线程安全：
+     * <ul>
+     *   <li>{@link #buildPromptForRules}、{@link ChapterReferenceResolver} 都是纯函数；</li>
+     *   <li>{@link AiModelService#callAiModel} 使用同一个 {@link java.net.http.HttpClient}
+     *       —— JDK HttpClient 文档明确说明线程安全；</li>
+     *   <li>{@link #tryParseAiJson} 使用 {@code ObjectMapper}，后者文档说明 read 操作是线程安全的；</li>
+     *   <li>返回的 Map 是本方法内新建的，调用方拿到独立实例。</li>
+     * </ul>
+     */
+    private Map<String, Object> reviewSingleChunk(int chunkIdx, int totalChunks,
+                                                   ChunkUtils.ChunkResult chunk,
+                                                   RuleDispatcher.DispatchResult dispatch,
+                                                   List<WordParser.Chapter> chapters,
+                                                   AiModelConfig modelConfig) throws Exception {
+        int chunkNum = chunkIdx + 1;
+        String systemPrompt = buildPromptForRules(dispatch.getAppliedRules());
+
+        // Detect cross-references like "见第X章" / "参见 4.5 节" and append
+        // the referenced chapters' content as supporting context.
+        Set<Integer> refIdx = ChapterReferenceResolver
+                .findReferencedChapters(chunk.getContent(), chunk.getLabel(), chapters);
+        String supporting = ChapterReferenceResolver.renderSupportingContext(refIdx, chapters);
+
+        String chunkContent = "章节: " + chunk.getLabel()
+                + " (" + chunkNum + "/" + totalChunks + ")\n\n" + chunk.getContent()
+                + supporting;
+        String aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent);
+
+        Map<String, Object> chunkResult = new HashMap<>();
+        chunkResult.put("chunk", chunkNum);
+        chunkResult.put("chapterTitle", chunk.getLabel());
+        chunkResult.put("totalChunks", totalChunks);
+        chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
+        chunkResult.put("appliedRules", dispatch.getAppliedRuleNames());
+        Map<String, Object> parsedResult = tryParseAiJson(aiResponse);
+        if (parsedResult != null) {
+            chunkResult.put("result", parsedResult);
+        } else {
+            log.warn("AI响应无法解析为JSON，已包装为原始文本issue: 长度={}",
+                    aiResponse != null ? aiResponse.length() : 0);
+            chunkResult.put("result", buildFallbackResult(chunk.getLabel(), aiResponse));
+        }
+        return chunkResult;
     }
 
     /**

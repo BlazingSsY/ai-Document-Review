@@ -31,8 +31,9 @@ export function register(params: RegisterParams) {
   return request.post<ApiResponse<AuthResult>>('/auth/register', params);
 }
 
+// 后端实际返回 { accessToken, refreshToken }（双 token 轮换），原先 { token } 是错的类型签名。
 export function refreshToken(refreshToken: string) {
-  return request.post<ApiResponse<{ token: string }>>('/auth/refresh', { refreshToken });
+  return request.post<ApiResponse<AuthResult>>('/auth/refresh', { refreshToken });
 }
 
 export function getUserProfile() {

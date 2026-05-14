@@ -72,7 +72,8 @@ function ModelConfigPage() {
     setIsCustomProvider(false);
     setThinkingTouched(false);
     form.resetFields();
-    form.setFieldsValue({ maxTokens: 4096, temperature: 0.7, enabled: true, thinkingMode: false });
+    // 新增模型时，maxTokens 留空让用户按实际模型上下文窗口填写；temperature 默认 0.3（审查类任务偏稳定）
+    form.setFieldsValue({ maxTokens: undefined, temperature: 0.3, enabled: true, thinkingMode: false });
     setModalOpen(true);
   };
 
@@ -373,7 +374,7 @@ function ModelConfigPage() {
           form={form}
           onFinish={handleSave}
           layout="vertical"
-          initialValues={{ maxTokens: 4096, temperature: 0.7, enabled: true, thinkingMode: false }}
+          initialValues={{ temperature: 0.3, enabled: true, thinkingMode: false }}
         >
           <Form.Item
             name="name"
@@ -440,7 +441,7 @@ function ModelConfigPage() {
               rules={[{ required: true, message: '请输入' }]}
               extra={thinkingMode ? '思考模式下后端会保证 ≥ 16000' : undefined}
             >
-              <InputNumber min={100} max={128000} style={{ width: 160 }} />
+              <InputNumber min={100} max={256000} placeholder="请输入" style={{ width: 160 }} />
             </Form.Item>
             <Form.Item
               name="temperature"
