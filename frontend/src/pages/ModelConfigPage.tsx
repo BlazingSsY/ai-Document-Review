@@ -25,6 +25,7 @@ import {
   deleteModel,
   toggleModel,
   testModelConnection,
+  suggestThinkingMode,
   AIModel,
   CreateModelParams,
 } from '../api/models';
@@ -43,6 +44,11 @@ function ModelConfigPage() {
   const [form] = Form.useForm();
   const [isCustomProvider, setIsCustomProvider] = useState(false);
   const [testingInForm, setTestingInForm] = useState(false);
+  // Track whether the user has manually toggled the thinking switch in this form
+  // session. While false, typing into modelKey can auto-suggest a value;
+  // once the user flips the switch themselves we stop overriding their choice.
+  const [thinkingTouched, setThinkingTouched] = useState(false);
+  const thinkingMode = Form.useWatch('thinkingMode', form);
 
   const fetchModels = async () => {
     setLoading(true);
@@ -64,8 +70,9 @@ function ModelConfigPage() {
   const openCreateModal = () => {
     setEditingModel(null);
     setIsCustomProvider(false);
+    setThinkingTouched(false);
     form.resetFields();
-    form.setFieldsValue({ maxTokens: 4096, temperature: 0.7, enabled: true });
+    form.setFieldsValue({ maxTokens: 4096, temperature: 0.7, enabled: true, thinkingMode: false });
     setModalOpen(true);
   };
 
@@ -73,6 +80,9 @@ function ModelConfigPage() {
     setEditingModel(model);
     const knownProvider = MODEL_PROVIDERS.some((p) => p.value === model.provider);
     setIsCustomProvider(!knownProvider);
+    // For existing models the saved value IS the user's choice, so treat the switch
+    // as already-touched and never auto-overwrite while they edit modelKey.
+    setThinkingTouched(true);
     form.setFieldsValue({
       name: model.name,
       providerSelect: knownProvider ? model.provider : '__custom__',
@@ -83,8 +93,32 @@ function ModelConfigPage() {
       maxTokens: model.maxTokens,
       temperature: model.temperature,
       enabled: model.enabled,
+      thinkingMode: !!model.thinkingMode,
     });
     setModalOpen(true);
+  };
+
+  /**
+   * Debounced auto-suggestion: when the user finishes typing the modelKey we ask
+   * the backend whether that id looks like a thinking-mode model. We only apply
+   * the result if the user hasn't manually flipped the switch yet.
+   */
+  const handleModelKeyChange = (value: string) => {
+    if (thinkingTouched) return;
+    const key = (value || '').trim();
+    if (!key) return;
+    suggestThinkingMode(key)
+      .then((res) => {
+        if (thinkingTouched) return; // user touched it while we were waiting
+        const suggested = !!res.data?.data?.thinkingMode;
+        const current = form.getFieldValue('thinkingMode');
+        if (current !== suggested) {
+          form.setFieldsValue({ thinkingMode: suggested });
+        }
+      })
+      .catch(() => {
+        // best-effort; swallow errors
+      });
   };
 
   const handleSave = async (values: Record<string, unknown>) => {
@@ -100,6 +134,7 @@ function ModelConfigPage() {
       maxTokens: values.maxTokens as number,
       temperature: values.temperature as number,
       enabled: values.enabled as boolean,
+      thinkingMode: !!values.thinkingMode,
     };
     setSaving(true);
     try {
@@ -158,6 +193,7 @@ function ModelConfigPage() {
         apiEndpoint: values.apiEndpoint as string,
         apiKey: values.apiKey as string,
         temperature: values.temperature as number,
+        thinkingMode: !!form.getFieldValue('thinkingMode'),
       });
       const data = res.data?.data;
       Modal.success({
@@ -226,6 +262,26 @@ function ModelConfigPage() {
       dataIndex: 'temperature',
       key: 'temperature',
       width: 110,
+      render: (val: number, record) => (
+        record.thinkingMode
+          ? (
+            <Tooltip title="思考模式下服务端会强制使用默认 temperature（如 Kimi K2.6 = 1.0），此字段仅作展示，发送请求时会被忽略">
+              <span style={{ color: '#bfbfbf', textDecoration: 'line-through' }}>{val}</span>
+            </Tooltip>
+          )
+          : <span>{val}</span>
+      ),
+    },
+    {
+      title: '思考模式',
+      dataIndex: 'thinkingMode',
+      key: 'thinkingMode',
+      width: 100,
+      render: (val: boolean) => (
+        val
+          ? <Tag color="purple">思考</Tag>
+          : <Tag color="default">普通</Tag>
+      ),
     },
     {
       title: '状态',
@@ -289,7 +345,7 @@ function ModelConfigPage() {
           dataSource={models}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1100 }}
           pagination={{
             current: page,
             pageSize: PAGE_SIZE,
@@ -317,7 +373,7 @@ function ModelConfigPage() {
           form={form}
           onFinish={handleSave}
           layout="vertical"
-          initialValues={{ maxTokens: 4096, temperature: 0.7, enabled: true }}
+          initialValues={{ maxTokens: 4096, temperature: 0.7, enabled: true, thinkingMode: false }}
         >
           <Form.Item
             name="name"
@@ -353,8 +409,12 @@ function ModelConfigPage() {
             name="modelKey"
             label="模型标识"
             rules={[{ required: true, message: '请输入模型标识' }]}
+            extra="填写官方模型ID，例：gpt-4o、kimi-k2-thinking、kimi-k2.6、glm-5.1。系统会据此自动建议是否开启思考模式。"
           >
-            <Input placeholder="例：gpt-4o, claude-3-opus" />
+            <Input
+              placeholder="例：gpt-4o, claude-3-opus, kimi-k2-thinking"
+              onBlur={(e) => handleModelKeyChange(e.target.value)}
+            />
           </Form.Item>
           <Form.Item
             name="apiEndpoint"
@@ -378,6 +438,7 @@ function ModelConfigPage() {
               name="maxTokens"
               label="最大 Token"
               rules={[{ required: true, message: '请输入' }]}
+              extra={thinkingMode ? '思考模式下后端会保证 ≥ 16000' : undefined}
             >
               <InputNumber min={100} max={128000} style={{ width: 160 }} />
             </Form.Item>
@@ -392,13 +453,34 @@ function ModelConfigPage() {
                 </span>
               }
               rules={[{ required: true, message: '请输入' }]}
+              extra={thinkingMode ? '已开启思考模式，发送请求时会自动省略此参数（服务端强制默认值）' : undefined}
             >
-              <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} />
+              <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} disabled={thinkingMode} />
             </Form.Item>
           </Space>
-          <Form.Item name="enabled" label="启用状态" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="禁用" />
-          </Form.Item>
+          <Space size="large" style={{ width: '100%' }}>
+            <Form.Item
+              name="thinkingMode"
+              label={
+                <span>
+                  思考模式&nbsp;
+                  <Tooltip title="开启后，调用此模型时后端会自动：① 不发送 temperature（服务端会用默认值，如 Kimi K2.6/GLM-5.1 = 1.0）；② 把 max_tokens 抬到 ≥ 16000，给推理过程留足空间；③ 优先取 content 字段、必要时回退到 reasoning_content。系统会根据模型标识自动建议，也可手动调整。">
+                    <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                  </Tooltip>
+                </span>
+              }
+              valuePropName="checked"
+            >
+              <Switch
+                checkedChildren="开启"
+                unCheckedChildren="关闭"
+                onChange={() => setThinkingTouched(true)}
+              />
+            </Form.Item>
+            <Form.Item name="enabled" label="启用状态" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+            </Form.Item>
+          </Space>
           <Form.Item style={{ marginBottom: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <Button

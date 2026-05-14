@@ -32,6 +32,9 @@ public class AiModelConfig {
 
     private Boolean isEnabled;
 
+    /** See {@link com.aireview.dto.AiModelConfigDTO#thinkingMode}. */
+    private Boolean thinkingMode;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 

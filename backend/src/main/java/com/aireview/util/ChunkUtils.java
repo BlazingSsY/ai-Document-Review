@@ -48,8 +48,37 @@ public class ChunkUtils {
     }
 
     /**
+     * Find the index of the first "real" chapter — the first heading whose title starts
+     * with a chapter number ("1", "1.1", "一、", "第1章"...) followed by a non-numeric
+     * chapter name. Everything before this point is treated as front matter (大标题、
+     * 签署页、目录、图表清单 etc.) and skipped before AI review.
+     *
+     * <p>Returns 0 if no numbered chapter is found, so behaviour is unchanged for
+     * documents whose first content is already a real chapter.
+     */
+    public static int findFirstRealChapterIndex(List<WordParser.Chapter> chapters) {
+        if (chapters == null || chapters.isEmpty()) return 0;
+        java.util.regex.Pattern numberedTitle = java.util.regex.Pattern.compile(
+                "^\\s*(?:第\\s*)?(?:[0-9]+(?:\\.[0-9]+)*|[一二三四五六七八九十百零]+)" +
+                "\\s*(?:章|节|篇|部分|、|\\.|\\s|[\\u4e00-\\u9fa5a-zA-Z]).*");
+        for (int i = 0; i < chapters.size(); i++) {
+            WordParser.Chapter ch = chapters.get(i);
+            if (ch == null) continue;
+            String title = ch.getTitle();
+            String body = ch.getContent();
+            if (title == null || title.isBlank()) continue;
+            if (body == null || body.isBlank()) continue;
+            if (numberedTitle.matcher(title.trim()).matches()) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    /**
      * Split chapters into chunks. Each chapter that fits within maxTokens becomes one chunk.
      * Chapters exceeding maxTokens are further split by paragraphs and sentences.
+     * Empty / whitespace-only chapters are skipped so they never reach the AI model.
      *
      * @param chapters   list of chapter objects from WordParser
      * @param maxTokens  maximum tokens per chunk (e.g. 25600)
@@ -65,6 +94,16 @@ public class ChunkUtils {
             String label = chapter.getTitle() != null && !chapter.getTitle().isBlank()
                     ? chapter.getTitle()
                     : "第 " + (i + 1) + " 部分";
+
+            // Skip empty / whitespace-only chapters and stray headings whose body is empty.
+            // These produce 0-token chunks that waste an AI call and clutter the result file.
+            if (tokens == 0 || fullText == null || fullText.isBlank()
+                    || (chapter.getContent() != null && chapter.getContent().isBlank()
+                        && tokens < 5)) {
+                log.info("Skipping empty / near-empty chapter '{}' (tokens={}, len={})",
+                        label, tokens, fullText == null ? 0 : fullText.length());
+                continue;
+            }
 
             if (tokens <= maxTokens) {
                 // Chapter fits in one chunk

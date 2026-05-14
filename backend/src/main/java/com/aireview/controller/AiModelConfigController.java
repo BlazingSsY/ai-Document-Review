@@ -115,6 +115,17 @@ public class AiModelConfigController {
         }
     }
 
+    /**
+     * Tell the UI whether a given modelKey / modelName looks like a thinking-mode
+     * model, so the model-config dialog can pre-tick the "思考模式" switch as the
+     * user types. The user can still manually override the suggestion.
+     */
+    @GetMapping("/suggest-thinking-mode")
+    public ApiResponse<Map<String, Object>> suggestThinkingMode(@RequestParam String modelKey) {
+        boolean suggested = AiModelService.matchesThinkingPattern(modelKey);
+        return ApiResponse.success(Map.of("thinkingMode", suggested, "modelKey", modelKey));
+    }
+
     @PutMapping("/{id}/toggle")
     public ApiResponse<Void> toggle(@PathVariable Long id, @RequestBody Map<String, Boolean> body) {
         try {

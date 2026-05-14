@@ -63,8 +63,8 @@ async:
 # AI review
 review:
   retry:
-    max-attempts: 3
-    interval-ms: 5000
+    max-attempts: 5
+    interval-ms: 6000
   chunk:
     max-tokens: 25600
     overlap-tokens: 0

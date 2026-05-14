@@ -19,7 +19,9 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -55,6 +57,7 @@ public class AiModelService {
         if (dto.getMaxTokens() != null) config.setMaxTokens(dto.getMaxTokens());
         if (dto.getTemperature() != null) config.setTemperature(dto.getTemperature());
         if (dto.getEnabled() != null) config.setIsEnabled(dto.getEnabled());
+        if (dto.getThinkingMode() != null) config.setThinkingMode(dto.getThinkingMode());
         config.setUpdatedAt(LocalDateTime.now());
         aiModelConfigMapper.updateById(config);
         log.info("AI model config updated: {}", config.getModelName());
@@ -139,9 +142,30 @@ public class AiModelService {
             key = persistedFallback.getApiKey();
         }
         probe.setApiKey(key);
-        probe.setMaxTokens(16);
+        // Carry the thinking-mode flag through to the probe. Resolution order:
+        //   1. Explicit value from the DTO (the form's switch).
+        //   2. Saved value on the persisted row (when editing an existing model).
+        //   3. Null → isThinkingModel falls back to the regex heuristic on modelKey.
+        if (dto.getThinkingMode() != null) {
+            probe.setThinkingMode(dto.getThinkingMode());
+        } else if (persistedFallback != null && persistedFallback.getThinkingMode() != null) {
+            probe.setThinkingMode(persistedFallback.getThinkingMode());
+        }
+        // Thinking models share max_tokens between reasoning_content and content.
+        // The probe needs a budget large enough for the model to finish its chain
+        // of thought AND produce the single-character reply, otherwise the
+        // response comes back with content="" and the connection test misreports
+        // success/failure. 16 tokens is fine for non-thinking models; thinking
+        // models need at least 16 000 per the Moonshot/Z.ai docs.
+        boolean probeThinking = isThinkingModel(probe);
+        probe.setMaxTokens(probeThinking ? 16000 : 16);
+        // For thinking models the server enforces its own temperature; callAiModel
+        // detects this and omits the parameter. For everything else we still want
+        // a low temperature so the probe is deterministic.
         probe.setTemperature(resolveProbeTemperature(dto, persistedFallback));
-        probe.setTimeout(30);
+        // Thinking models can take a while to finish their reasoning even for a
+        // tiny prompt, so allow more time for the probe than the legacy 30 s.
+        probe.setTimeout(probeThinking ? 120 : 30);
         probe.setIsEnabled(true);
 
         if (probe.getEndpoint() == null || probe.getEndpoint().isBlank()) {
@@ -175,11 +199,34 @@ public class AiModelService {
             throw new RuntimeException("API Key 无效或已被脱敏，请重新配置模型的 API Key");
         }
 
+        boolean thinking = isThinkingModel(config);
+
         JSONObject requestBody = new JSONObject();
         requestBody.put("model", config.getModelKey() != null && !config.getModelKey().isBlank()
                 ? config.getModelKey() : config.getModelName());
-        requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.1);
-        requestBody.put("max_tokens", config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
+
+        // Thinking-mode models (kimi-k2-thinking / kimi-k2.6 / GLM-4.5 / GLM-4.6 /
+        // GLM-5 / GLM-5.1, ...) enforce a fixed temperature on the server side. The
+        // Moonshot API explicitly rejects any temperature ≠ 1 with a 400 "invalid
+        // temperature" error. The cleanest behaviour is to OMIT temperature for
+        // these models so the API applies its own default.
+        if (!thinking) {
+            requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.1);
+        } else {
+            log.info("Detected thinking-mode model ({}): omitting temperature so server default applies",
+                    config.getModelKey());
+        }
+
+        // For thinking models, max_tokens covers BOTH reasoning_content and the
+        // final content. The Kimi docs recommend ≥ 16 000 to avoid the answer
+        // being truncated mid-thought.
+        int maxTokens = config.getMaxTokens() != null ? config.getMaxTokens() : 4096;
+        if (thinking && maxTokens < 16000) {
+            log.info("Bumping max_tokens from {} → 16000 for thinking-mode model {}",
+                    maxTokens, config.getModelKey());
+            maxTokens = 16000;
+        }
+        requestBody.put("max_tokens", maxTokens);
 
         JSONArray messages = new JSONArray();
         JSONObject systemMsg = new JSONObject();
@@ -202,8 +249,8 @@ public class AiModelService {
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
                 .build();
 
-        log.debug("AI request body (truncated): model={}, messages count={}, content length={}",
-                requestBody.getString("model"), messages.size(), userContent.length());
+        log.debug("AI request body (truncated): model={}, messages count={}, content length={}, thinking={}",
+                requestBody.getString("model"), messages.size(), userContent.length(), thinking);
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -219,13 +266,67 @@ public class AiModelService {
             throw new RuntimeException("AI model returned empty response");
         }
 
-        String content = choices.getJSONObject(0)
-                .getJSONObject("message")
-                .getString("content");
+        JSONObject message = choices.getJSONObject(0).getJSONObject("message");
+        // Thinking models return both `reasoning_content` (the chain-of-thought) and
+        // `content` (the final answer). We always want `content`; fall back to
+        // `reasoning_content` only if `content` is missing — that usually indicates
+        // the model was truncated before producing the final answer and the user
+        // still benefits from seeing the reasoning text.
+        String content = message.getString("content");
+        if (content == null || content.isBlank()) {
+            String reasoning = message.getString("reasoning_content");
+            if (reasoning != null && !reasoning.isBlank()) {
+                log.warn("AI model returned empty content but non-empty reasoning_content "
+                        + "(likely truncated); using reasoning text as fallback");
+                content = reasoning;
+            }
+        }
+        if (content == null) content = "";
 
         log.info("AI model response received, length: {}", content.length());
         return content;
     }
+
+    /**
+     * Decide whether the API call should treat this config as a thinking-mode model
+     * (i.e. omit temperature, raise max_tokens, parse reasoning_content fallback).
+     *
+     * <p>Resolution order:
+     * <ol>
+     *   <li>If the user explicitly set the {@code thinking_mode} flag in the model
+     *       config (via the UI), trust their choice — this lets new models be
+     *       configured without code changes, and lets a model that later relaxes
+     *       its temperature lock be switched back.</li>
+     *   <li>Otherwise fall back to the regex heuristic for legacy rows / configs
+     *       whose flag is null.</li>
+     * </ol>
+     */
+    static boolean isThinkingModel(AiModelConfig config) {
+        if (config == null) return false;
+        Boolean explicit = config.getThinkingMode();
+        if (explicit != null) return explicit;
+        String key = config.getModelKey();
+        if (key == null || key.isBlank()) key = config.getModelName();
+        return matchesThinkingPattern(key);
+    }
+
+    /**
+     * Heuristic: does this model id look like a thinking/reasoning model? Used as
+     * the auto-suggestion when the UI doesn't yet have a value, and as the
+     * fallback when {@link #isThinkingModel} sees no explicit flag.
+     */
+    public static boolean matchesThinkingPattern(String modelKeyOrName) {
+        if (modelKeyOrName == null || modelKeyOrName.isBlank()) return false;
+        return THINKING_MODEL_PATTERN.matcher(modelKeyOrName.toLowerCase(Locale.ROOT)).find();
+    }
+
+    private static final Pattern THINKING_MODEL_PATTERN = Pattern.compile(
+            // Kimi: kimi-k2-thinking, kimi-k2.5, kimi-k2.6, kimi-k2-5, kimi-k2-6, ...
+            "kimi-?k?2[.\\-]?(?:thinking|5|6|7|8|9)"
+            // GLM: glm-4.5, glm-4.6, glm-5, glm-5.1, glm-5-air, glm-4.5-thinking ...
+            + "|glm-?(?:4\\.5|4\\.6|4\\.7|5(?:\\.[0-9]+)?)"
+            // Generic catch-all: any name containing "thinking" / "reasoner" / "-r1"
+            + "|thinking|reasoner|-r1\\b|deepseek-r1");
 
     private Double resolveProbeTemperature(AiModelConfigDTO dto, AiModelConfig persistedFallback) {
         if (dto.getTemperature() != null) {
@@ -248,6 +349,7 @@ public class AiModelService {
         dto.setMaxTokens(config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
         dto.setTemperature(config.getTemperature() != null ? config.getTemperature() : 0.7);
         dto.setEnabled(config.getIsEnabled());
+        dto.setThinkingMode(config.getThinkingMode() != null ? config.getThinkingMode() : Boolean.FALSE);
         dto.setCreatedAt(config.getCreatedAt());
         dto.setUpdatedAt(config.getUpdatedAt());
         return dto;
@@ -265,6 +367,11 @@ public class AiModelService {
         config.setTemperature(dto.getTemperature() != null ? dto.getTemperature() : 0.7);
         config.setTimeout(60);
         config.setIsEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
+        // If the UI didn't provide a value, fall back to the regex heuristic so historic
+        // rows and forms-without-the-field still get sensible auto-detection.
+        config.setThinkingMode(dto.getThinkingMode() != null
+                ? dto.getThinkingMode()
+                : matchesThinkingPattern(dto.getModelKey() != null ? dto.getModelKey() : dto.getName()));
         return config;
     }
 

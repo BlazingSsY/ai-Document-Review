@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -270,6 +271,10 @@ public class ReviewService {
             return;
         }
 
+        // Single timestamp used for both 切片结果 and 审查结果 file names so they share
+        // a consistent suffix and are easy to associate.
+        String runStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+
         try {
             // Update status to PROCESSING
             updateTaskStatus(task, ReviewTask.STATUS_PROCESSING, null);
@@ -277,13 +282,24 @@ public class ReviewService {
 
             // 1. Parse Word document into chapters (by Heading 1)
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在解析文档结构（按一级标题拆分章节）...", 10);
-            List<WordParser.Chapter> chapters = WordParser.parseChapters(task.getFilePath());
-            if (chapters.isEmpty() || chapters.stream().allMatch(ch -> ch.getContent().isBlank())) {
+            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
+            if (rawChapters.isEmpty() || rawChapters.stream().allMatch(ch -> ch.getContent().isBlank())) {
                 throw new RuntimeException("文档内容为空或无法解析");
             }
-            log.info("Document parsed into {} chapter(s)", chapters.size());
+
+            // Skip leading front matter (封面/签署页/目录/图表清单) — start review from the
+            // first chapter whose title begins with a chapter number, e.g. "1 试验目的".
+            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
+            List<WordParser.Chapter> chapters = firstRealIdx > 0
+                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
+                    : rawChapters;
+            if (firstRealIdx > 0) {
+                log.info("Skipped {} front-matter chapter(s); first real chapter: '{}'",
+                        firstRealIdx, chapters.get(0).getTitle());
+            }
+            log.info("Document parsed into {} chapter(s) (after front-matter trim)", chapters.size());
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                    "文档解析完成，共识别 " + chapters.size() + " 个章节", 15);
+                    "文档解析完成，跳过封面/目录等前置内容后共 " + chapters.size() + " 个章节", 15);
 
             // 2. Load and prepare scenario rules (parse metadata + strip frontmatter)
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在加载审查规则...", 20);
@@ -327,7 +343,8 @@ public class ReviewService {
                 chunkDispatchTraces.add(dispatchEntry);
             }
             // Write debug file early so partial failures stay diagnosable.
-            saveChunkDebugInfo(taskId, task.getFileName(), chapters, chunks, chunkDispatchTraces);
+            saveChunkDebugInfo(taskId, task.getFileName(), task.getSelectedModel(), runStamp,
+                    chapters, chunks, chunkDispatchTraces);
 
             // 5b. Process each chunk with the pre-computed dispatch
             List<Map<String, Object>> chunkResults = new ArrayList<>();
@@ -417,8 +434,9 @@ public class ReviewService {
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在汇总审查结果...", 95);
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
 
-            // 6.5 Persist the aggregated AI result to ./output/审查结果.json on the host
-            saveAiResultToFile(taskId, task.getFileName(), aggregatedResult);
+            // 6.5 Persist the aggregated AI result to ./output/审查结果_<file>_<model>_<ts>.json
+            saveAiResultToFile(taskId, task.getFileName(), task.getSelectedModel(), runStamp,
+                    aggregatedResult);
 
             // 7. Save result and mark as completed
             task.setAiResult(aggregatedResult);
@@ -437,15 +455,15 @@ public class ReviewService {
     }
 
     /**
-     * Save complete chapter/chunk information to 切片结果.json.
-     * Writes full content (no truncation) to the bind-mounted ./output directory
-     * so the file is directly accessible on the host machine.
-     * Also writes a copy to the uploads volume as a backup.
+     * Save complete chapter/chunk information to
+     * ./output/切片结果_<fileBase>_<model>_<runStamp>.json on the host
+     * (via the bind-mounted /app/output directory). A separate file is produced
+     * for every review run so historic slicing details are preserved.
      *
      * @param dispatchTraces  per-chunk record of which rules were applied and why; one entry
      *                        per chunk, aligned with {@code chunks} by chunk number.
      */
-    private void saveChunkDebugInfo(String taskId, String fileName,
+    private void saveChunkDebugInfo(String taskId, String fileName, String model, String runStamp,
                                      List<WordParser.Chapter> chapters,
                                      List<ChunkUtils.ChunkResult> chunks,
                                      List<Map<String, Object>> dispatchTraces) {
@@ -453,6 +471,7 @@ public class ReviewService {
             Map<String, Object> debug = new LinkedHashMap<>();
             debug.put("taskId", taskId);
             debug.put("fileName", fileName);
+            debug.put("model", model);
             debug.put("timestamp", LocalDateTime.now().toString());
             debug.put("chapterCount", chapters.size());
             debug.put("chunkCount", chunks.size());
@@ -492,37 +511,27 @@ public class ReviewService {
 
             String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(debug);
 
-            // Primary: write to bind-mounted output directory (accessible on host at ./output/)
-            try {
-                Path outputDir = Path.of("/app/output");
-                Files.createDirectories(outputDir);
-                Path outputFile = outputDir.resolve("切片结果.json");
-                Files.writeString(outputFile, json);
-                log.info("切片结果.json saved to output dir: {}", outputFile.toAbsolutePath());
-            } catch (Exception ex) {
-                log.warn("Could not write to /app/output (bind mount may be unavailable): {}", ex.getMessage());
-            }
-
-            // Backup: also save to uploads volume
-            Path uploadsDebugFile = Path.of(documentsDir).getParent().resolve("切片结果.json");
-            Files.writeString(uploadsDebugFile, json);
-            log.info("切片结果.json backup saved to uploads: {}", uploadsDebugFile.toAbsolutePath());
-
+            Path outputDir = Path.of("/app/output");
+            Files.createDirectories(outputDir);
+            Path outputFile = outputDir.resolve(buildOutputFileName("切片结果", fileName, model, runStamp));
+            Files.writeString(outputFile, json);
+            log.info("切片结果 saved to output dir: {}", outputFile.toAbsolutePath());
         } catch (Exception e) {
             log.warn("Failed to save chunk debug info: {}", e.getMessage());
         }
     }
 
     /**
-     * Persist the AI-aggregated review result to ./output/审查结果.json on the host
-     * (via the bind-mounted /app/output directory).
+     * Persist the AI-aggregated review result to
+     * ./output/审查结果_<fileBase>_<model>_<runStamp>.json on the host.
      */
-    private void saveAiResultToFile(String taskId, String fileName,
+    private void saveAiResultToFile(String taskId, String fileName, String model, String runStamp,
                                      Map<String, Object> aggregatedResult) {
         try {
             Map<String, Object> wrapper = new LinkedHashMap<>();
             wrapper.put("taskId", taskId);
             wrapper.put("fileName", fileName);
+            wrapper.put("model", model);
             wrapper.put("timestamp", LocalDateTime.now().toString());
             wrapper.put("result", aggregatedResult);
 
@@ -530,12 +539,31 @@ public class ReviewService {
 
             Path outputDir = Path.of("/app/output");
             Files.createDirectories(outputDir);
-            Path outputFile = outputDir.resolve("审查结果.json");
+            Path outputFile = outputDir.resolve(buildOutputFileName("审查结果", fileName, model, runStamp));
             Files.writeString(outputFile, json);
-            log.info("审查结果.json saved to: {}", outputFile.toAbsolutePath());
+            log.info("审查结果 saved to: {}", outputFile.toAbsolutePath());
         } catch (Exception e) {
-            log.warn("Failed to save 审查结果.json: {}", e.getMessage());
+            log.warn("Failed to save 审查结果: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Compose an output file name: {@code <prefix>_<fileBase>_<model>_<runStamp>.json}.
+     * The original document's extension is stripped, and any filesystem-unsafe
+     * characters in the file base or model name are replaced with underscores.
+     */
+    private static String buildOutputFileName(String prefix, String fileName, String model, String runStamp) {
+        String base = fileName == null ? "document" : fileName;
+        int dot = base.lastIndexOf('.');
+        if (dot > 0) base = base.substring(0, dot);
+        base = sanitizeForFileName(base);
+        String safeModel = sanitizeForFileName(model == null || model.isBlank() ? "model" : model);
+        return prefix + "_" + base + "_" + safeModel + "_" + runStamp + ".json";
+    }
+
+    private static String sanitizeForFileName(String s) {
+        if (s == null) return "";
+        return s.replaceAll("[\\\\/:*?\"<>|\\s]+", "_").trim();
     }
 
     /**

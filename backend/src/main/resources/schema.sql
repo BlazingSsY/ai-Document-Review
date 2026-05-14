@@ -97,9 +97,16 @@ CREATE TABLE IF NOT EXISTS ai_model_config (
     temperature     DECIMAL(3,2)    NOT NULL DEFAULT 0.70,
     timeout         INTEGER         NOT NULL DEFAULT 60,
     is_enabled      BOOLEAN         NOT NULL DEFAULT TRUE,
+    -- Thinking-mode models (Kimi K2.6, GLM-5.x, ...) fix temperature server-side and
+    -- need a much larger max_tokens budget for the chain-of-thought. When true the
+    -- backend omits temperature from the API call and ensures max_tokens >= 16000.
+    thinking_mode   BOOLEAN         NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP       NOT NULL DEFAULT NOW()
 );
+
+-- Rolling migration: add the column for existing databases that pre-date the flag.
+ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS thinking_mode BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS user_library_assignment (
     user_id         BIGINT          NOT NULL REFERENCES users(id) ON DELETE CASCADE,
