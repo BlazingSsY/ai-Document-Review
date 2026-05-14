@@ -412,11 +412,18 @@ public class AiModelService {
                 }
             case "moonshot":
                 // Moonshot
-                if (!baseUrl.contains("/v1/chat/completions")) {
-                    return baseUrl + "/v1/chat/completions";
-                } else {
+                if (baseUrl.contains("/chat/completions")) {
                     return baseUrl;
                 }
+                if (baseUrl.endsWith("/v1")) {
+                    return baseUrl + "/chat/completions";
+                }
+                if (baseUrl.contains("/v1/")) {
+                    // 已经包含 /v1/xxx 等子路径，直接使用
+                    return baseUrl;
+                }
+                // 既不含 /v1 也不含 /chat/completions：补全完整路径
+                return baseUrl + "/v1/chat/completions";
             case "alibaba":
                 // 阿里通义千问API
                 if (!baseUrl.contains("/api/v1/services/aigc/text-generation/generation")) {

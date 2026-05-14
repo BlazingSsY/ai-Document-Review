@@ -31,7 +31,11 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ai_review
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres123
-      SPRING_SQL_INIT_MODE: never
+      # Re-run schema.sql on every backend startup. schema.sql is fully idempotent
+      # (CREATE TABLE IF NOT EXISTS / ALTER TABLE ... ADD COLUMN IF NOT EXISTS /
+      # INSERT ... ON CONFLICT DO NOTHING), so this gives us auto-applied
+      # migrations without needing to drop the postgres_data volume.
+      SPRING_SQL_INIT_MODE: always
       JWT_SECRET: Y2hhbmdlLXRoaXMtdG8tYS1zZWN1cmUtcmFuZG9tLWtleS1pbi1wcm9kdWN0aW9uLWF0LWxlYXN0LTI1Ni1iaXRz
     depends_on:
       postgres:
