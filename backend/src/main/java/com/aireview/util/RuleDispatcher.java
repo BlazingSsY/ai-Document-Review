@@ -83,7 +83,6 @@ public class RuleDispatcher {
         if (rule.getDocumentType() != null && !rule.getDocumentType().isBlank()) meta.setDocumentType(rule.getDocumentType());
         if (rule.getSections() != null && !rule.getSections().isEmpty()) meta.setSections(rule.getSections());
         if (rule.getKeywords() != null && !rule.getKeywords().isEmpty()) meta.setKeywords(rule.getKeywords());
-        if (rule.getSeverity() != null && !rule.getSeverity().isBlank()) meta.setSeverity(rule.getSeverity());
         return meta;
     }
 
@@ -148,7 +147,6 @@ public class RuleDispatcher {
             trace.put("ruleName", p.getRule().getRuleName());
             trace.put("ruleCode", meta != null ? meta.getRuleCode() : null);
             trace.put("ruleType", meta != null ? meta.getRuleType() : RuleMetadata.TYPE_GLOBAL);
-            trace.put("severity", meta != null ? meta.getSeverity() : null);
             trace.put("reason", reason);
             if (!matchedKeywords.isEmpty()) trace.put("matchedKeywords", new ArrayList<>(matchedKeywords));
             if (!matchedSections.isEmpty()) trace.put("matchedSections", new ArrayList<>(matchedSections));

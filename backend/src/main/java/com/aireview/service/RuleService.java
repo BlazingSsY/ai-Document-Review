@@ -94,7 +94,6 @@ public class RuleService {
                 rule.setDocumentType(meta.getDocumentType());
                 rule.setSections(emptyToNull(meta.getSections()));
                 rule.setKeywords(emptyToNull(meta.getKeywords()));
-                rule.setSeverity(meta.getSeverity());
             }
             rule.setDescription(pr.getDescription());
             ruleMapper.insert(rule);
@@ -195,13 +194,12 @@ public class RuleService {
         if (req.getDocumentType() != null) rule.setDocumentType(blankToNull(req.getDocumentType()));
         if (req.getSections() != null)     rule.setSections(emptyToNull(req.getSections()));
         if (req.getKeywords() != null)     rule.setKeywords(emptyToNull(req.getKeywords()));
-        if (req.getSeverity() != null)     rule.setSeverity(blankToNull(req.getSeverity()));
         if (req.getDescription() != null)  rule.setDescription(blankToNull(req.getDescription()));
         rule.setUpdatedAt(LocalDateTime.now());
         ruleMapper.updateById(rule);
-        log.info("Rule {} metadata updated: code={}, type={}, sections={}, keywords={}, severity={}",
+        log.info("Rule {} metadata updated: code={}, type={}, sections={}, keywords={}",
                 id, rule.getRuleCode(), rule.getRuleType(), rule.getSections(),
-                rule.getKeywords(), rule.getSeverity());
+                rule.getKeywords());
         return toDTO(rule);
     }
 
@@ -245,7 +243,6 @@ public class RuleService {
         dto.setDocumentType(rule.getDocumentType());
         dto.setSections(rule.getSections());
         dto.setKeywords(rule.getKeywords());
-        dto.setSeverity(rule.getSeverity());
 
         // Backfill from content frontmatter if DB columns are still empty (handles rules
         // uploaded before the columns existed). These backfills are NOT persisted here —
@@ -253,8 +250,7 @@ public class RuleService {
         if (content != null && !content.isBlank()) {
             boolean anyMetaInDb = dto.getRuleCode() != null || dto.getRuleType() != null
                     || (dto.getSections() != null && !dto.getSections().isEmpty())
-                    || (dto.getKeywords() != null && !dto.getKeywords().isEmpty())
-                    || dto.getSeverity() != null;
+                    || (dto.getKeywords() != null && !dto.getKeywords().isEmpty());
             if (!anyMetaInDb) {
                 RuleMetadata meta = RuleMetadata.parse(content, rule.getFileType());
                 if (dto.getRuleCode() == null)   dto.setRuleCode(meta.getRuleCode());
@@ -264,7 +260,6 @@ public class RuleService {
                     dto.setSections(meta.getSections());
                 if (dto.getKeywords() == null && meta.getKeywords() != null && !meta.getKeywords().isEmpty())
                     dto.setKeywords(meta.getKeywords());
-                if (dto.getSeverity() == null)   dto.setSeverity(meta.getSeverity());
             }
         }
         return dto;

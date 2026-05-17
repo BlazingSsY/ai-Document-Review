@@ -25,10 +25,9 @@ import java.util.stream.Collectors;
  *      applies_to:
  *        sections: ["13"]
  *        keywords: ["霉菌", "Fungus"]
- *      severity: high
  *      ---
  *
- *   2. Top-level fields on a JSON rule file (rule_code / rule_type / severity / ...).
+ *   2. Top-level fields on a JSON rule file (rule_code / rule_type / ...).
  *
  * Metadata is optional. A rule without metadata is treated as a {@code global} rule
  * and will apply to every chunk, matching the existing behaviour.
@@ -51,8 +50,6 @@ public class RuleMetadata {
     private List<String> sections = new ArrayList<>();
     /** Free-form keywords used to match against chunk title / body for dispatch. */
     private List<String> keywords = new ArrayList<>();
-    /** {@code high} / {@code medium} / {@code low}. */
-    private String severity;
     /** True when the rule_type explicitly disables this rule. */
     private boolean enabled = true;
 
@@ -169,7 +166,6 @@ public class RuleMetadata {
             case "rule_code", "rulecode", "code" -> meta.ruleCode = v;
             case "rule_type", "ruletype", "type" -> meta.ruleType = normalizeRuleTypeValue(v);
             case "document_type", "documenttype" -> meta.documentType = v;
-            case "severity" -> meta.severity = v.toLowerCase(Locale.ROOT);
             case "enabled" -> meta.enabled = !("false".equalsIgnoreCase(v) || "0".equals(v));
             case "sections", "target_sections" -> meta.sections = parseArray(v);
             case "keywords", "scope" -> meta.keywords = parseArray(v);
@@ -254,7 +250,6 @@ public class RuleMetadata {
                 meta.ruleType = normalizeRuleTypeValue(obj.getString("Type"));
             }
             applyJsonField(meta, obj, "document_type");
-            applyJsonField(meta, obj, "severity");
             if (obj.containsKey("enabled")) {
                 meta.enabled = obj.getBooleanValue("enabled");
             }
@@ -325,7 +320,6 @@ public class RuleMetadata {
             case "rule_code" -> meta.ruleCode = v;
             case "rule_type" -> meta.ruleType = normalizeRuleTypeValue(v);
             case "document_type" -> meta.documentType = v;
-            case "severity" -> meta.severity = v.toLowerCase(Locale.ROOT);
             default -> { }
         }
     }

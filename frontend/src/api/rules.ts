@@ -17,7 +17,6 @@ export interface Rule {
   documentType?: string;
   sections?: string[];
   keywords?: string[];
-  severity?: string;
   description?: string;
   sourceFile?: string;
 }
@@ -29,7 +28,6 @@ export interface RuleMetadataUpdate {
   documentType?: string;
   sections?: string[];
   keywords?: string[];
-  severity?: string;
   description?: string;
 }
 

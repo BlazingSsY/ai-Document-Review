@@ -42,7 +42,6 @@ public class Rule {
     @TableField(typeHandler = PgJsonbStringListTypeHandler.class)
     private List<String> keywords;
 
-    private String severity;        // high / medium / low
     private String description;     // short human-readable summary
     /** Original uploaded filename — useful when one file expanded into many rules. */
     private String sourceFile;

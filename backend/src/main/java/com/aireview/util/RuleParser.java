@@ -161,7 +161,7 @@ public class RuleParser {
     }
 
     /**
-     * Build a system prompt with per-rule metadata (rule_code, severity, ...) inlined
+     * Build a system prompt with per-rule metadata (rule_code, rule_type, ...) inlined
      * before each rule body. {@code ruleHeaders.size()} must equal {@code ruleContents.size()};
      * each header is rendered as a small front-matter block above its rule body.
      *
@@ -187,7 +187,7 @@ public class RuleParser {
         sp.append("      \"suggestion\": \"修改建议\",\n");
         sp.append("      \"rule\": \"对应的审查规则名称（必填）\",\n");
         sp.append("      \"rule_code\": \"命中的规则编号，若规则未提供则留空\",\n");
-        sp.append("      \"severity\": \"high | medium | low，若规则未声明默认 medium\",\n");
+        sp.append("      \"severity\": \"high | medium | low，由模型按问题严重性自行判定，默认 medium\",\n");
         sp.append("      \"category\": \"问题分类，例如 格式、完整性、标准符合性、逻辑一致性\",\n");
         sp.append("      \"evidence\": \"判定依据：摘录支持该结论的原文片段或表格行\"\n");
         sp.append("    }\n");
@@ -253,8 +253,6 @@ public class RuleParser {
             sb.append("[适用章节] ").append(String.join("、", meta.getSections())).append("\n");
         if (meta.getKeywords() != null && !meta.getKeywords().isEmpty())
             sb.append("[关键词] ").append(String.join("、", meta.getKeywords())).append("\n");
-        if (meta.getSeverity() != null && !meta.getSeverity().isBlank())
-            sb.append("[严重程度] ").append(meta.getSeverity()).append("\n");
         return sb.toString().trim();
     }
 

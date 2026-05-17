@@ -192,8 +192,6 @@ public class MultiRuleParser {
             meta.setKeywords(scopeList);
         }
 
-        // Severity defaults parallel the autoDetect path so downstream behaviour is consistent.
-        meta.setSeverity(meta.isSectionSpecific() ? "high" : "medium");
         return meta;
     }
 
@@ -324,9 +322,6 @@ public class MultiRuleParser {
         List<String> keywords = autoKeywords(content);
         if (!keywords.isEmpty()) meta.setKeywords(keywords);
 
-        // Severity default: high for section_specific (matches DO-160G compliance focus),
-        // medium otherwise. User can override in the edit modal.
-        meta.setSeverity(meta.isSectionSpecific() ? "high" : "medium");
         return meta;
     }
 

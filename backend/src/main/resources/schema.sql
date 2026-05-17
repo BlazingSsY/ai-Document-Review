@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS rules (
     document_type   VARCHAR(100),
     sections        JSONB,
     keywords        JSONB,
-    severity        VARCHAR(20),
     description     TEXT,
     source_file     VARCHAR(255)
 );
@@ -45,12 +44,13 @@ ALTER TABLE rules ADD COLUMN IF NOT EXISTS rule_type     VARCHAR(40);
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS document_type VARCHAR(100);
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS sections      JSONB;
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS keywords      JSONB;
-ALTER TABLE rules ADD COLUMN IF NOT EXISTS severity      VARCHAR(20);
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS description   TEXT;
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS source_file   VARCHAR(255);
 
 -- 删除已废弃的 standard（适用标准）列，存在则丢弃；不存在直接跳过。
 ALTER TABLE rules DROP COLUMN IF EXISTS standard;
+-- 删除已废弃的 severity（严重程度）列，存在则丢弃；不存在直接跳过。
+ALTER TABLE rules DROP COLUMN IF EXISTS severity;
 
 CREATE TABLE IF NOT EXISTS scenarios (
     id              BIGSERIAL       PRIMARY KEY,
