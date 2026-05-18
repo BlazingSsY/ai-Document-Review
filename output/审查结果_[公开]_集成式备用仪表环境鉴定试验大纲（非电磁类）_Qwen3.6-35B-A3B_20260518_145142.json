@@ -1,0 +1,1011 @@
+{
+  "taskId" : "3da956de6f49f0506848dd2e7cd5e304",
+  "fileName" : "[公开] 集成式备用仪表环境鉴定试验大纲（非电磁类）.docx",
+  "model" : "Qwen3.6-35B-A3B",
+  "timestamp" : "2026-05-18T14:56:41.035901594",
+  "result" : {
+    "totalChunks" : 10,
+    "chunkResults" : [ {
+      "result" : {
+        "summary" : "本章节主要审查了温度变化试验的目的、要求、设备、程序及判据。整体结构完整，试验条件、循环次数及QPAT检查要求描述清晰，图表编号引用一致。主要问题在于未明确EUT供应商件号及试验设备校准证书的具体信息，建议补充完善。其余审查项均通过或本章节不适用。",
+        "issues" : [ {
+          "location" : "1 温度变化试验 > 受试/陪试设备",
+          "description" : "未明确提及试验件受试设备的EUT供应商件号，仅说明详细构型见其他章节，不符合件号完整性要求。",
+          "suggestion" : "补充EUT供应商件号，确保件号清晰、规范，便于后续追溯与核查。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+        }, {
+          "location" : "1 温度变化试验 > 试验设备、测试设备及要求",
+          "description" : "试验设备信息表中“校验方式”列仅标注“设备校验”，未明确校准证书编号、有效期及证书关键信息。",
+          "suggestion" : "补充校准证书编号、有效期及证书关键信息，确保证书真实合法且在有效期内，符合设备参数及校准证书审查要求。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表14-2中所有设备的“校验方式”列均为“设备校验”"
+        } ],
+        "passed_items" : [ "G-1-test_unit: 本章节表格未列出需对应试验单位与地址的试验项目，不适用/通过", "G-2-Project_omissions: 温度变化试验（对应DO-160G 5.3.1）检查项目完整，无关键缺漏", "G-3-functional_check: 试验程序中明确包含QPAT1-1、QPAT2、QPAT3、QPAT4及QPAT2-1检查要求", "G-4-Pretest_preparation: 包含制造符合性要求及试验前安装连接、人员资质检查描述", "G-5-mode: 明确提及工作状态并引用6.4节，符合规范", "G-16-pic_sheet: 图14-1至图14-3及表14-1至表14-2编号唯一、引用一致、顺序合理", "G-11-auxiliary_facilities: 本章节未涉及独立辅助设备描述，不适用/通过", "item_type: 表格中无“试验项目”和“试验类别”列，不适用/通过", "G-12-Analogy/similarity_analysis: 未涉及类比/相似性分析，不适用/通过", "G-14-Cyclic/Different Surface Testing: 明确试验循环次数（2个）及循环步骤（b~f为1个循环），描述无误", "G-15-Test_conditions: 试验条件（温度极值、稳定时间、变化速率、循环次数）在表格及程序中明确一致", "project_check: 无外部清单提供，默认通过", "title_check: 章节标题“1 温度变化试验”符合DO-160G具体试验范畴", "test_site_extract: 无“承试单位”和“地址”列的表格，不适用/通过" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 1,
+      "totalChunks" : 10,
+      "estimatedTokens" : 1909,
+      "chapterTitle" : "1 温度变化试验",
+      "elapsedMs" : 54050
+    }, {
+      "result" : {
+        "summary" : "本章节主要涵盖湿热试验的目的、要求、设备、布置、程序及判据。整体结构完整，试验条件、循环次数及QPAT检查要求明确。但存在部分信息缺失：未明确提供EUT供应商件号；试验设备表未提供校准证书信息；工作模式描述较为简略。其余审查项均通过或不适用于本章节。",
+        "issues" : [ {
+          "location" : "2 湿热 (2/10) > 受试/陪试设备",
+          "description" : "未明确提供受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号。",
+          "suggestion" : "补充EUT供应商件号，或明确引用包含该信息的章节/附件。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+        }, {
+          "location" : "2 湿热 (2/10) > 试验设备、测试设备及要求",
+          "description" : "试验设备信息表（表15-2）中仅标注了“设备校验”作为校验方式，未提供具体的校准证书编号、有效期或校准机构信息。",
+          "suggestion" : "在表15-2中补充各关键测试设备对应的校准证书编号、校准日期及有效期，或引用独立的校准证书清单。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表 15-2中所有设备的“校验方式”列均仅标注“设备校验”，无证书编号或有效期信息。"
+        }, {
+          "location" : "2 湿热 (2/10) > 试验程序",
+          "description" : "试验程序中仅提及“使受试设备处于工作状态1”，未完整列出受试设备的所有功能工作模式。",
+          "suggestion" : "在受试设备描述或试验程序章节明确列出所有需考核的工作模式（如工作状态1、2等）及其对应功能。",
+          "rule" : "G-5-mode",
+          "rule_code" : "G-5-mode",
+          "severity" : "low",
+          "category" : "完整性",
+          "evidence" : "b)使受试设备处于工作状态1，调节试验箱内温度至（38±2）℃，相对湿度至（85±4）%，使受试设备在该温湿度条件下稳定3h；"
+        } ],
+        "passed_items" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-16-pic_sheet", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 2,
+      "totalChunks" : 10,
+      "estimatedTokens" : 1790,
+      "chapterTitle" : "2 湿热",
+      "elapsedMs" : 85244
+    }, {
+      "result" : {
+        "summary" : "本章内容整体结构完整，试验项目覆盖DO-160G第7章相关要求，试验程序及判据描述清晰。但审查发现存在多项需修正问题：试验项目表格缺失试验单位与地址；图表引用编号存在错误（引用不存在的图6-1）；受试设备未提供供应商件号；测试设备表未提供校准证书信息；个别文字存在错漏。其余审查项均通过或不适用于本章。",
+        "issues" : [ {
+          "location" : "3 工作冲击和坠撞安全 (3/10) > 试验要求",
+          "description" : "试验项目（工作冲击、坠撞安全冲击、坠撞安全持续载荷）对应的表格中缺失【试验单位】和【试验地址】。",
+          "suggestion" : "在试验要求或设备信息表中补充各试验项目对应的试验单位全称及详细地址。",
+          "rule" : "G-1-test_unit",
+          "rule_code" : "G-1-test_unit",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "表16-1、表16-2、表16-3中均无试验单位及地址列。"
+        }, {
+          "location" : "3 工作冲击和坠撞安全 (3/10) > 试验要求",
+          "description" : "存在文字规范性问题：1.图16-1说明中“抬升”疑似错别字；2.“表 16-2坠撞安全冲击条件”缺少标点符号。",
+          "suggestion" : "将“抬升”修改为“产生”或“激发”；在“表 16-2”与“坠撞安全冲击条件”之间补充冒号或空格。",
+          "rule" : "G-2-Project_omissions",
+          "rule_code" : "G-2-Project_omissions",
+          "severity" : "low",
+          "category" : "格式",
+          "evidence" : "图16-1说明：“T2=对于用振动台抬升的脉冲，应监测脉冲的最短时间。”；原文：“试验条件见表16-2坠撞安全冲击条件”"
+        }, {
+          "location" : "3 工作冲击和坠撞安全 (3/10) > 试验要求",
+          "description" : "图表引用编号错误/不一致。文中两次引用“图 6-1”，但本章为第16章，且前文已使用图16-1，该编号不存在或引用错误。",
+          "suggestion" : "核对并修正图表编号，将“图 6-1”改为正确的编号（如“图 16-7”），并确保全文引用格式统一。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "high",
+          "category" : "标准符合性",
+          "evidence" : "原文：“冲击的轴向图如图 6-1所示……持续载荷的方向定义如图 6-1所示。”"
+        }, {
+          "location" : "3 工作冲击和坠撞安全 (3/10) > 受试/陪试设备",
+          "description" : "未明确提供受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号。",
+          "suggestion" : "在“受试/陪试设备”章节补充EUT的完整供应商件号（P/N），确保信息完整可追溯。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "原文：“受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；”"
+        }, {
+          "location" : "3 工作冲击和坠撞安全 (3/10) > 试验设备、测试设备及要求",
+          "description" : "试验测试设备参数信息及校准证书信息不完整。表16-4仅标注“校验方式”为“设备校验”，未提供校准证书编号、有效期等关键信息。",
+          "suggestion" : "补充关键测试设备的校准证书编号及有效期信息，或明确证书获取途径/存放位置。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表16-4“校验方式”列仅填写“设备校验”。"
+        } ],
+        "passed_items" : [ "default: 通过", "G-3-functional_check: 通过（试验程序中明确包含QPAT检查及试验前功能性能检查描述）", "G-4-Pretest_preparation: 通过（包含“受试设备、试验装置（试验前）的制造符合性要求”章节，试验前准备检查完整）", "G-5-mode: 通过（试验程序中明确提及“工作状态1”、“工作状态2”，功能模式检查符合要求）", "G-11-auxiliary_facilities: 不适用（本章未涉及辅助设施专项审查要求）", "item_type: 通过（表格信息提取正常）", "G-12-Analogy/similarity_analysis: 不适用（本章未涉及类比分析/相似性分析试验科目）", "G-14-Cyclic/Different Surface Testing: 不适用（本章未涉及循环/不同面试验）", "G-15-Test_conditions: 通过（表16-1、16-2、16-3已明确各试验科目的具体试验条件）", "project_check: 通过（试验项目清单核查一致）", "title_check: 通过（章节标题符合DO-160G试验范畴）", "test_site_extract: 通过（HTML表格抽取正常）" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 3,
+      "totalChunks" : 10,
+      "estimatedTokens" : 3203,
+      "chapterTitle" : "3 工作冲击和坠撞安全",
+      "elapsedMs" : 149690
+    }, {
+      "result" : {
+        "summary" : "本章内容整体结构完整，涵盖了标准振动、强化振动和短时高量值试验的目的、要求、设备及程序。但存在多处需修正的问题：强化振动程序步骤c)错误引用了标准振动曲线图；图号/表号引用格式不统一（16-2与17-x混用）；未明确EUT供应商件号及试验单位/地址；试验设备表缺少校准证书信息；部分技术参数表述存在空格缺失或符号不规范。建议按DO-160G标准及文档编制规范进行补充和修正。",
+        "issues" : [ {
+          "location" : "4 振动 > 试验程序 > 强化振动",
+          "description" : "强化振动试验步骤c)错误引用了标准振动试验的曲线图（图17-1），应引用强化振动曲线图（图17-2）。",
+          "suggestion" : "将步骤c)中的“按图 17-1和表 17-2中的标准振动功率谱密度量值”修改为“按图 17-2和表 17-2中的强化振动功率谱密度量值”。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "high",
+          "category" : "逻辑一致性",
+          "evidence" : "c)使受试设备处于工作状态2，按图 17-1和表 17-2中的标准振动功率谱密度量值进行X轴向10min的标准随机振动。"
+        }, {
+          "location" : "4 振动 > 试验要求",
+          "description" : "图号、表号引用格式不统一，文中混用了“图 16-2”与“图 17-x/表 17-x”的编号格式，且跨章节引用未作明确标识。",
+          "suggestion" : "统一全文图表编号格式。若图16-2为其他章节图表，建议补充章节引用标识（如“见图4-16-2”或“见第16章图2”）；若为笔误，请修正为正确的图表编号。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "medium",
+          "category" : "格式",
+          "evidence" : "安装方向如图 16-2所示。按照DO－160G中第8章S类别（B3曲线）进行标准振动试验，标准振动试验曲线如图 17-1所示..."
+        }, {
+          "location" : "4 振动 > 受试/陪试设备",
+          "description" : "未明确受试设备（EUT）的供应商件号。",
+          "suggestion" : "在“受试设备”描述中补充EUT的完整供应商件号（P/N），确保与供应商提供的技术文档或构型状态文件一致。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+        }, {
+          "location" : "4 振动 > 试验设备、测试设备及要求",
+          "description" : "试验设备信息表（表17-3）中未提供校准证书信息，仅标注“设备校验”或“/”，不符合试验设备参数及校准证书完整性要求。",
+          "suggestion" : "在表17-3中补充各试验设备对应的校准证书编号、校准日期及有效期，或提供校准证书附件索引。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表17-3中“校验方式”列仅填写“设备校验”或“/”，无证书编号及有效期信息。"
+        }, {
+          "location" : "4 振动",
+          "description" : "文档未提供试验项目与试验单位、试验地址的对应信息。",
+          "suggestion" : "补充试验大纲封面或试验要求章节中的试验单位及地址信息，或提供包含“试验项目-试验单位-试验地址”的对应表格。",
+          "rule" : "G-1-test_unit",
+          "rule_code" : "G-1-test_unit",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "全文未出现试验单位及试验地址相关描述或表格。"
+        }, {
+          "location" : "4 振动 > 试验程序 > 标准振动试验",
+          "description" : "部分技术参数表述存在空格缺失或符号不规范问题（如“1.0oct/min”、“0.5－PK”、“0.167Hz/s”）。",
+          "suggestion" : "统一技术参数格式，数值与单位间添加空格（如“1.0 oct/min”、“0.167 Hz/s”），连字符使用标准半角“-”或明确标注“pk”。",
+          "rule" : "G-2-Project_omissions",
+          "rule_code" : "G-2-Project_omissions",
+          "severity" : "low",
+          "category" : "格式",
+          "evidence" : "以1.0oct/min的扫描速率、峰值加速度0.5－PK的正弦扫描... 频率从10Hz到250Hz进行正弦线性扫频"
+        } ],
+        "passed_items" : [ "default", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "item_type", "project_check", "title_check", "test_site_extract" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 4,
+      "totalChunks" : 10,
+      "estimatedTokens" : 3220,
+      "chapterTitle" : "4 振动",
+      "elapsedMs" : 52002
+    }, {
+      "result" : {
+        "summary" : "本章节整体结构完整，试验目的、要求、程序及判据描述清晰，QPAT检查、试验前准备、功能模式及试验条件等关键要素均已明确。主要问题集中在信息完整性方面：设备信息表缺少【试验单位】与【试验地址】列；测试设备未提供校准证书信息；受试设备未标注EUT供应商件号。其余审查项均符合要求或本节不涉及。",
+        "issues" : [ {
+          "location" : "5 防水 > 试验设备、测试设备及要求",
+          "description" : "设备信息表（表 18-1）中未设置【试验单位】和【试验地址】列，所有列出的试验设备均缺少对应的承试单位与详细地址信息。",
+          "suggestion" : "在表 18-1中增加【试验单位】和【试验地址】列，并如实填写各设备的承试单位及详细地址，确保可追溯。",
+          "rule" : "G-1-test_unit",
+          "rule_code" : "G-1-test_unit",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "表 18-1列头为：序号、设备名称、用途、设备型号、技术要求/精度、校验方式。"
+        }, {
+          "location" : "5 防水 > 试验设备、测试设备及要求",
+          "description" : "试验设备信息表中仅标注了“校验方式”为“设备校验”或为空，未提供具体的校准证书编号、校准机构及有效期信息，不符合校准证书完整性审查要求。",
+          "suggestion" : "补充各核心测试设备的校准证书编号、校准日期及有效期，或增加【校准证书编号】列以便核查。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表 18-1中“校验方式”列内容均为“设备校验”或“/”，无证书信息。"
+        }, {
+          "location" : "5 防水 > 受试/陪试设备",
+          "description" : "受试设备“E/ISI-2集成式备用仪表”未明确标注EUT供应商件号，无法对应到具体供应商的真实产品，缺乏追溯依据。",
+          "suggestion" : "在受试设备描述中补充EUT供应商件号（Part Number），确保件号清晰、规范且与供应商信息一致。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+        } ],
+        "passed_items" : [ "G-2-Project_omissions: 文字内容无误，检查项目符合本章防水试验要求", "G-3-functional_check: 试验程序及判据中已明确包含QPAT1-1、QPAT2、QPAT3和QPAT4检查描述", "G-4-Pretest_preparation: 已明确试验环境搭建确认、参数设置检查及安装连接要求", "G-5-mode: 试验程序中已明确受试设备处于“工作状态1”", "G-16-pic_sheet: 图18-1至图18-3、表18-1编号唯一、引用一致、顺序合理", "G-11-auxiliary_facilities: 试验箱、防水试验系统等辅助设备名称、型号及核心参数已明确", "G-12-Analogy/similarity_analysis: 本节不涉及类比/相似性分析", "G-14-Cyclic/Different Surface Testing: 本节不涉及循环/不同面试验", "G-15-Test_conditions: 滴水距离、滴水量、温度条件、时间等试验条件已明确", "item_type: 表格无试验项目/类别列，按规则返回空数组，不适用", "test_site_extract: 表格无承试单位/地址列，按规则返回空字符串，不适用" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 5,
+      "totalChunks" : 10,
+      "estimatedTokens" : 1607,
+      "chapterTitle" : "5 防水",
+      "elapsedMs" : 83346
+    }, {
+      "result" : {
+        "summary" : "本章节主要审查了流体敏感性试验的完整性、规范性及合规性。整体内容结构完整，试验程序、判据及循环要求描述清晰。主要问题集中在：1. 试验单位与地址信息缺失；2. 图表编号与章节号不一致且存在未清理的占位符标签；3. 受试设备供应商件号未明确；4. 试验设备校验方式未提供具体证书信息。其余审查项均通过或不适用于本章。",
+        "issues" : [ {
+          "location" : "6 流体敏感性 (6/10) > 试验要求",
+          "description" : "文档中未提供试验项目对应的试验单位与试验地址信息。",
+          "suggestion" : "补充试验项目对应的试验单位及试验地址，确保每项试验均有明确的责任单位与实施地点。",
+          "rule" : "G-1-test_unit",
+          "rule_code" : "G-1-test_unit",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "文档正文及表格中均未出现“试验单位”与“试验地址”字段或相关描述。"
+        }, {
+          "location" : "6 流体敏感性 (6/10) > 试验布置和连接",
+          "description" : "图表编号与章节号不一致（本章为第6章，但图表编号为19-1、19-2）；且图表引用处存在未清理的占位符标签“[图表 19]”、“[图表 20]”。",
+          "suggestion" : "统一图表编号规则（建议改为6-1、6-2或按全文档统一编号体系调整）；删除正文中的“[图表 19]”、“[图表 20]”占位符标签。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "medium",
+          "category" : "格式",
+          "evidence" : "[图表 19]\n图 19-1：流体敏感性试验连接图\n[图表 20]\n图 19-2：流体敏感性试验布置图"
+        }, {
+          "location" : "6 流体敏感性 (6/10) > 受试/陪试设备",
+          "description" : "受试设备描述中未提供EUT供应商件号。",
+          "suggestion" : "补充受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号，确保件号清晰、可追溯且与供应商信息一致。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+        }, {
+          "location" : "6 流体敏感性 (6/10) > 试验设备、测试设备及要求",
+          "description" : "试验设备信息表中“校验方式”列仅填写“设备校验”或“合格证”，未提供具体校准证书编号、发证机构或有效期等关键信息。",
+          "suggestion" : "在表19-2中补充各试验设备对应的校准证书编号、校准机构及有效期信息，或明确引用证书附件。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表19-2中“校验方式”列内容均为“设备校验”或“合格证”。"
+        } ],
+        "passed_items" : [ "G-2-Project_omissions（不适用：本章为流体敏感性试验，非规则所列温度/高度/振动等章节）", "G-3-functional_check（合格：试验程序及判据中明确包含QPAT检查）", "G-4-Pretest_preparation（合格：试验程序及符合性要求中明确了试验前环境搭建、参数确认及安装连接检查）", "G-5-mode（合格：明确提及“工作状态1”及工作状态切换要求）", "G-11-auxiliary_facilities（合格：辅助设施要求已涵盖在试验设备描述中）", "G-12-Analogy/similarity_analysis（合格：不涉及类比/相似性分析）", "G-14-Cyclic/Different Surface Testing（合格：试验程序中明确了3个24h循环及循环内工作时机）", "G-15-Test_conditions（合格：试验条件在程序及表格中明确）", "item_type（通过：表格无对应列，按规则返回空数组）", "project_check（不适用：未提供核查清单）", "title_check（合格：章节标题符合DO-160G流体敏感性试验范畴）", "test_site_extract（不适用：未包含“承试单位”和“地址”列的表格）" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 6,
+      "totalChunks" : 10,
+      "estimatedTokens" : 1824,
+      "chapterTitle" : "6 流体敏感性",
+      "elapsedMs" : 244124
+    }, {
+      "result" : {
+        "summary" : "本章节为霉菌试验章节，整体结构完整，涵盖了试验目的、要求、设备、程序及判据。但存在多项关键信息缺失：未明确试验前功能性能/QPAT检查、试验前准备检查不够具体、未明确功能模式检查、缺少EUT供应商件号及设备校准证书信息、霉菌试验程序缺少无机盐溶液制备/孢子活力检查/对照样品制备、合格判据缺少真菌种类分析/资质人员评价等关键要求、设备状态记录未分阶段明确目视与ATP检查。图表引用及编号一致，试验条件明确。建议按审查规则逐项补充完善。",
+        "issues" : [ {
+          "location" : "7 霉菌 > 试验程序",
+          "description" : "未明确提及试验前对试验件进行功能性能检查或QPAT检查。",
+          "suggestion" : "在试验程序或试验前准备章节补充试验前功能性能检查或QPAT检查的具体要求。",
+          "rule" : "G-3-functional_check",
+          "rule_code" : "G-3-functional_check",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "原文仅提及“确定受试设备按照12.1要求完成了产品验收测试”及“检查确认试验参数设置”，无明确的功能性能/QPAT检查描述。"
+        }, {
+          "location" : "7 霉菌 > 试验程序",
+          "description" : "试验前准备检查描述不完整，缺乏具体的检查项目、标准和方法。",
+          "suggestion" : "补充试验前准备检查的具体内容，明确环境搭建确认、设备连接检查、参数设置核对等检查项目、标准及方法。",
+          "rule" : "G-4-Pretest_preparation",
+          "rule_code" : "G-4-Pretest_preparation",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "原文仅提及“试验人员应在试验环境搭建完成后予以检查确认试验参数设置”，缺乏系统性准备检查。"
+        }, {
+          "location" : "7 霉菌 > 受试/陪试设备",
+          "description" : "未明确提及受试设备的功能模式检查要求。",
+          "suggestion" : "在受试设备描述章节明确其功能性能及工作模式，或补充功能模式检查的具体要求。",
+          "rule" : "G-5-mode",
+          "rule_code" : "G-5-mode",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "原文仅写“工作状态：详见6.4节”，未在本章明确功能模式检查。"
+        }, {
+          "location" : "7 霉菌 > 受试/陪试设备",
+          "description" : "未提供受试设备（EUT）的供应商件号。",
+          "suggestion" : "补充EUT的供应商件号，确保件号清晰规范，便于追溯核查。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "原文仅写“受试设备：E/ISI-2集成式备用仪表”，无供应商件号。"
+        }, {
+          "location" : "7 霉菌 > 试验设备、测试设备及要求",
+          "description" : "试验测试设备信息表中未明确校准证书信息。",
+          "suggestion" : "在设备信息表中补充校准证书编号、有效期或明确引用校准证书要求，确保设备参数及证书完整。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表20-3中“校验方式”仅填写“设备校验”，无证书编号或有效期信息。"
+        }, {
+          "location" : "7 霉菌 > 受试/陪试设备",
+          "description" : "缺少受试设备的供应商件号信息。",
+          "suggestion" : "补充EUT的供应商件号。",
+          "rule" : "13-2-equipment_identification",
+          "rule_code" : "13-2-equipment_identification",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "原文“受试设备：E/ISI-2集成式备用仪表”未提供供应商件号。"
+        }, {
+          "location" : "7 霉菌 > 受试/陪试设备",
+          "description" : "未提供受试设备的基本功能介绍。",
+          "suggestion" : "补充受试设备（E/ISI-2集成式备用仪表）的用途、主要功能及在飞机系统中的作用描述。",
+          "rule" : "13-5-system_function_description",
+          "rule_code" : "13-5-system_function_description",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "原文仅列出设备名称，无功能描述。"
+        }, {
+          "location" : "7 霉菌 > 试验程序",
+          "description" : "霉菌试验程序缺少无机盐溶液制备、孢子活力检查及对照样品制备的描述。",
+          "suggestion" : "补充无机盐溶液制备、混合孢子悬浮液制备、孢子活力检查、对照样品制备的具体步骤或引用标准程序。",
+          "rule" : "13-8-mould_procedure",
+          "rule_code" : "13-8-mould_procedure",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "原文仅提及“用喷雾器将混合孢子悬浮液...喷在...”及“检查棉布对照条上的霉菌生长情况”，未涵盖DO-160要求的五项核心程序。"
+        }, {
+          "location" : "7 霉菌 > 试验判据",
+          "description" : "霉菌试验合格判据不完整，缺少真菌种类分析、有资质人员评价、材料物理特性影响分析等关键要求。",
+          "suggestion" : "补充完整的外观判据、功能性能判据及结果分析要求（包括真菌种类分析、生长位置判定、有资质人员评价、材料特性影响分析、长期影响分析、营养基质识别及人体因素评价）。",
+          "rule" : "13-9-mould_acceptance_criteria",
+          "rule_code" : "13-9-mould_acceptance_criteria",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "原文仅规定“内外表面均不应出现劣化现象，允许受试样件霉菌生长不超过2级”，未涵盖标准要求的完整判据体系。"
+        }, {
+          "location" : "7 霉菌 > 试验程序",
+          "description" : "未明确试验前、中、后三个阶段的具体目视检查和ATP测试记录要求。",
+          "suggestion" : "补充试验前、试验中、试验后三个阶段明确的目视检查及ATP测试（或等效功能检查）记录要求，并列出具体检查项目。",
+          "rule" : "13-12-equipment_status_record",
+          "rule_code" : "13-12-equipment_status_record",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "原文仅提及“定时巡查试验设备运行状态”及“试验后检测”，未明确分阶段的目视与ATP记录要求。"
+        } ],
+        "passed_items" : [ "G-1-test_unit (无对应试验单位/地址表格，不适用)", "G-2-Project_omissions (本章为单一霉菌试验，项目完整)", "G-16-pic_sheet (图20-1/20-2及表20-1至20-4引用一致，编号顺序合理)", "G-11-auxiliary_facilities (本章未涉及辅助设施专项要求，不适用)", "G-12-Analogy/similarity_analysis (不涉及类比/相似性分析)", "G-14-Cyclic/Different Surface Testing (不涉及循环/不同面试验)", "G-15-Test_conditions (表20-1明确列出了试验周期、温度、湿度等条件)", "13-4-installation_location (明确描述“安装于飞机驾驶舱”)", "13-6-test_equipment_list (表20-3提供了完整的试验设备信息表)", "13-7-mould_type (表20-2明确列出了5种试验菌种及编号)", "13-10-mould_compliance_verification (明确说明“应通过DO－160G第13章，F类规定的霉菌试验”，无需符合性验证)", "item_type (已提取试验项目与类别)", "project_check (已核查试验项目)", "title_check (章节标题符合DO160G试验范畴)", "test_site_extract (无承试单位/地址表格，不适用)" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "13-2-equipment_identification", "13-4-installation_location", "13-5-system_function_description", "13-6-test_equipment_list", "13-7-mould_type", "13-8-mould_procedure", "13-9-mould_acceptance_criteria", "13-10-mould_compliance_verification", "13-12-equipment_status_record", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 7,
+      "totalChunks" : 10,
+      "estimatedTokens" : 2034,
+      "chapterTitle" : "7 霉菌",
+      "elapsedMs" : 122233
+    }, {
+      "result" : {
+        "summary" : "本章内容整体结构完整，试验条件、程序及判据描述较为清晰。但存在图号引用格式混乱及占位符未清理、EUT供应商件号缺失、校准证书信息不全、试验前功能/QPAT检查未明确、相似性分析结论未给出等问题。建议按审查意见补充完善相关表格字段及检查要求，并统一图表编号格式。",
+        "issues" : [ {
+          "location" : "8 防火，可燃性 (8/10) > 试验布置和连接",
+          "description" : "图号引用格式不统一且存在未清理的占位符与重复表述。原文出现“[图表 23]”占位符，且图21-2标题表述为“（图 21-2）\\n图 21-2：可燃性试验布置图”，存在编号重复和格式混乱。",
+          "suggestion" : "删除占位符“[图表 23]”，统一图号引用格式为“图21-2：可燃性试验布置图”，确保全文图号引用唯一、格式一致。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "medium",
+          "category" : "格式",
+          "evidence" : "可燃性试验连接示意图和试验布局如图 21-1和图 21-2所示。\\n[图表 23]\\n图 21-1：可燃性试验连接图\\n（图 21-2）\\n图 21-2：可燃性试验布置图"
+        }, {
+          "location" : "8 防火，可燃性 (8/10) > 受试/陪试设备",
+          "description" : "受试设备清单（表21-2）中未明确标注EUT供应商件号。表格仅包含“图号/型号”、“材料”、“尺寸”等列，缺少供应商件号信息，不符合追溯要求。",
+          "suggestion" : "在表21-2中增加“供应商件号”列，或直接在现有“图号/型号”列中补充明确的供应商件号，确保件号清晰可追溯。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "表 21-2：可燃性试验受试样件清单... <th>图  号/型号</th>... <td></td>"
+        }, {
+          "location" : "8 防火，可燃性 (8/10) > 试验设备、测试设备及要求",
+          "description" : "试验设备信息表（表21-3）中仅注明“校验方式”为“设备校验”，未提供具体的校准证书编号、有效期或校准机构信息，不符合校准证书完整性审查要求。",
+          "suggestion" : "在表21-3中补充各设备的校准证书编号、校准日期及有效期，或引用独立的校准证书清单，确保证书信息可核查。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "<th>校验方式</th>... <td>设备校验</td>"
+        }, {
+          "location" : "8 防火，可燃性 (8/10) > 受试设备、试验装置（试验前）的制造符合性要求",
+          "description" : "试验前检查要求中未明确提及对受试设备进行功能性能检查或QPAT检查（或等效描述）。虽然提到了产品验收测试和参数设置检查，但缺乏针对试验前EUT功能状态的明确检查步骤。",
+          "suggestion" : "在“受试设备、试验装置（试验前）的制造符合性要求”或“试验程序”开头补充试验前功能性能检查或QPAT检查的具体要求及合格判据。",
+          "rule" : "G-3-functional_check",
+          "rule_code" : "G-3-functional_check",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "试验件状态应满足“6.试验产品/设备说明”构型和产品状态要求，确定试验件按照12.1要求完成了产品验收测试。确保试验件、陪试件、试验装置，在试验前按照21.3-21.5的要求，进行了相应的安装和连接。"
+        }, {
+          "location" : "8 防火，可燃性 (8/10) > 受试/陪试设备",
+          "description" : "文档中提及“（相似性分析是否可以采用）”，表明可能涉及相似性分析，但未提供对应的分析报告或明确结论。若采用相似性分析，需补充完整的分析报告。",
+          "suggestion" : "明确是否采用相似性分析。若采用，需补充完整的相似性分析报告（含类比对象、分析过程、数据支撑及结论）；若不采用，请删除该疑问表述并说明理由。",
+          "rule" : "G-12-Analogy/similarity_analysis",
+          "rule_code" : "G-12-Analogy/similarity_analysis",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "选出参见试验的样件清单见表 21-2。（相似性分析是否可以采用）"
+        } ],
+        "passed_items" : [ "G-4-Pretest_preparation: 试验前准备检查（预处理条件、环境要求）描述完整", "G-5-mode: 工作状态引用了6.4节，视为已明确", "G-15-Test_conditions: 试验条件（表21-1及预处理条件）明确完整", "G-14-Cyclic/Different Surface Testing: 不涉及循环/不同面试验", "G-11-auxiliary_facilities: 辅助设备信息在设备表中已体现，视为通过", "G-2-Project_omissions: 本章为DO-160G第26章内容，规则3列出的4/5/6/7章项目不适用，视为通过/不适用", "G-1-test_unit: 本章未列出试验项目与单位地址对应表，规则2主要针对此类表格，视为不适用/通过" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 8,
+      "totalChunks" : 10,
+      "estimatedTokens" : 1903,
+      "chapterTitle" : "8 防火，可燃性",
+      "elapsedMs" : 118692
+    }, {
+      "result" : {
+        "summary" : "本章节为加速度试验章节，整体框架完整，涵盖了试验目的、要求、设备、程序及判据。但存在多项关键信息缺失及引用不一致问题：未提供试验单位与地址、EUT供应商件号及测试设备校准证书信息；试验要求中引用的安装方向图号（图16-2）与后续实际使用的图号（图22-1/22-2）不一致；试验程序中表号引用存在笔误（表42应为表22-1）。其余审查项均符合要求或适用。",
+        "issues" : [ {
+          "location" : "9 加速度 > 试验要求",
+          "description" : "未提供本章节试验项目对应的试验单位与试验地址信息。",
+          "suggestion" : "在试验要求或设备信息表中补充明确的试验单位名称及试验地址。",
+          "rule" : "G-1-test_unit",
+          "rule_code" : "G-1-test_unit",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "正文中仅提及‘应通过ISO2669:1995...规定的试验’，未列出承试单位及地址。"
+        }, {
+          "location" : "9 加速度 > 试验要求",
+          "description" : "试验要求中引用安装方向为‘图 16-2’，但后续试验布置及程序中实际使用‘图 22-1’和‘图 22-2’，图号引用前后不一致。",
+          "suggestion" : "统一图号引用，将‘图 16-2’修正为实际使用的‘图 22-1’或‘图 22-2’，或补充图16-2。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "medium",
+          "category" : "格式",
+          "evidence" : "试验要求：‘安装方向如图 16-2所示。’；试验布置：‘按图 22-1和图 22-2将受试设备与测试设备进行连接布置。’"
+        }, {
+          "location" : "9 加速度 > 试验程序",
+          "description" : "步骤d)中表号引用存在笔误，‘表42结构试验量值’与上下文及表22-1不一致。",
+          "suggestion" : "将‘表42’修正为‘表22-1’。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "medium",
+          "category" : "格式",
+          "evidence" : "试验程序步骤d)：‘以不小于15s的时间逐渐增加离心机的加速度至表42结构试验量值。’"
+        }, {
+          "location" : "9 加速度 > 受试/陪试设备",
+          "description" : "未明确列出受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号。",
+          "suggestion" : "补充EUT供应商件号，确保件号清晰、规范且可追溯。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+        }, {
+          "location" : "9 加速度 > 试验设备、测试设备及要求",
+          "description" : "表22-2设备信息表中仅填写了‘设备校验’作为校验方式，未提供具体的校准证书编号或有效期信息。",
+          "suggestion" : "在表22-2中补充各核心测试设备对应的校准证书编号及有效期，或明确证书获取方式。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表22-2中‘校验方式’列均填写为‘设备校验’，无证书编号信息。"
+        } ],
+        "passed_items" : [ "default", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 9,
+      "totalChunks" : 10,
+      "estimatedTokens" : 1631,
+      "chapterTitle" : "9 加速度",
+      "elapsedMs" : 87013
+    }, {
+      "result" : {
+        "summary" : "本章节为DO-160G风车振动试验章节，整体结构完整，试验程序、判据及QPAT检查要求明确。主要问题集中在设备信息表缺少试验单位/地址及校准证书信息，EUT供应商件号未直接给出，部分图表引用跨章编号需核实，以及辅助设施描述缺失。建议按审查意见补充完善。",
+        "issues" : [ {
+          "location" : "10 风车 > 试验设备、测试设备及要求",
+          "description" : "本章未提供包含试验项目、试验单位及试验地址的汇总表，表23-2仅为设备信息表，缺少【试验单位】和【试验地址】列，不符合试验单位与地址完整性要求。",
+          "suggestion" : "补充试验项目汇总表，或在表23-2中增加【试验单位】和【试验地址】列并填写对应信息。",
+          "rule" : "G-1-test_unit",
+          "rule_code" : "G-1-test_unit",
+          "severity" : "high",
+          "category" : "完整性",
+          "evidence" : "表 23-2：设备信息表（表头仅包含序号、设备名称、用途、设备型号、技术要求/精度、校验方式）"
+        }, {
+          "location" : "10 风车 > 受试/陪试设备",
+          "description" : "受试设备仅描述为“E/ISI-2集成式备用仪表”，未直接给出EUT供应商件号，仅引用6.1节，不符合件号明确可追溯的要求。",
+          "suggestion" : "在本章“受试/陪试设备”中直接补充EUT供应商件号，或明确说明件号获取路径，确保件号标注清晰规范。",
+          "rule" : "G-9-EUT_supplier",
+          "rule_code" : "G-9-EUT_supplier",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+        }, {
+          "location" : "10 风车 > 试验设备、测试设备及要求",
+          "description" : "表23-2中试验测试设备仅标注“校验方式”为“设备校验”，未提供校准证书编号、有效期等关键信息，不符合校准证书审查要求。",
+          "suggestion" : "在表23-2中补充“校准证书编号”及“有效期至”列，或提供校准证书清单附件，确保证书信息完整可查。",
+          "rule" : "G-10-Test equipment and certificates",
+          "rule_code" : "G-10-Test equipment and certificates",
+          "severity" : "medium",
+          "category" : "完整性",
+          "evidence" : "表 23-2：设备信息表（“校验方式”列均为“设备校验”，无证书编号及有效期信息）"
+        }, {
+          "location" : "10 风车 > 试验要求",
+          "description" : "文中引用“图 16-2”作为安装方向参考，但当前章节为第10章，图表编号跨章引用可能导致编号体系混乱或引用不存在的编号。",
+          "suggestion" : "核实“图 16-2”是否为通用安装图。若为通用图，建议统一引用格式；若为本章专用图，请重新编号为“图 23-3”（或顺延）并更新引用。",
+          "rule" : "G-16-pic_sheet",
+          "rule_code" : "G-16-pic_sheet",
+          "severity" : "low",
+          "category" : "格式/一致性",
+          "evidence" : "安装方向如图 16-2所示。"
+        }, {
+          "location" : "10 风车 > 试验布置和连接",
+          "description" : "试验布置描述中未明确列出辅助设施（如安装夹具、线缆、转接件等）的名称、型号及核心参数。",
+          "suggestion" : "补充辅助设施清单，明确每件辅助设备的名称、型号规格及核心参数，或引用相关章节说明。",
+          "rule" : "G-11-auxiliary_facilities",
+          "rule_code" : "G-11-auxiliary_facilities",
+          "severity" : "low",
+          "category" : "完整性",
+          "evidence" : "将E/ISI-2集成式备用仪表安装在试验台上（测试设备处于试验台外），按图 23-1和图 23-2将受试设备与测试设备进行连接布置。"
+        } ],
+        "passed_items" : [ "G-2-Project_omissions: 检查项目完整（风车试验程序、参数及判据齐全）", "G-3-functional_check: 包含QPAT检查描述", "G-4-Pretest_preparation: 包含试验前准备及安装连接要求", "G-5-mode: 明确工作状态2", "G-12-Analogy/similarity_analysis: 不涉及类比分析/相似性分析", "G-14-Cyclic/Different Surface Testing: 不涉及循环/不同面试验", "G-15-Test_conditions: 试验条件明确（表23-1）", "title_check: 标题符合DO160G试验范畴", "default: 整体结构完整，无明显语病" ]
+      },
+      "appliedRules" : [ "default", "G-1-test_unit", "G-2-Project_omissions", "G-3-functional_check", "G-4-Pretest_preparation", "G-5-mode", "G-16-pic_sheet", "G-9-EUT_supplier", "G-10-Test equipment and certificates", "G-11-auxiliary_facilities", "item_type", "G-12-Analogy/similarity_analysis", "G-14-Cyclic/Different Surface Testing", "G-15-Test_conditions", "project_check", "title_check", "test_site_extract" ],
+      "chunk" : 10,
+      "totalChunks" : 10,
+      "estimatedTokens" : 1533,
+      "chapterTitle" : "10 风车",
+      "elapsedMs" : 51266
+    } ],
+    "totalIssues" : 48,
+    "allIssues" : [ {
+      "location" : "1 温度变化试验 > 受试/陪试设备",
+      "description" : "未明确提及试验件受试设备的EUT供应商件号，仅说明详细构型见其他章节，不符合件号完整性要求。",
+      "suggestion" : "补充EUT供应商件号，确保件号清晰、规范，便于后续追溯与核查。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+    }, {
+      "location" : "1 温度变化试验 > 试验设备、测试设备及要求",
+      "description" : "试验设备信息表中“校验方式”列仅标注“设备校验”，未明确校准证书编号、有效期及证书关键信息。",
+      "suggestion" : "补充校准证书编号、有效期及证书关键信息，确保证书真实合法且在有效期内，符合设备参数及校准证书审查要求。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表14-2中所有设备的“校验方式”列均为“设备校验”"
+    }, {
+      "location" : "2 湿热 (2/10) > 受试/陪试设备",
+      "description" : "未明确提供受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号。",
+      "suggestion" : "补充EUT供应商件号，或明确引用包含该信息的章节/附件。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+    }, {
+      "location" : "2 湿热 (2/10) > 试验设备、测试设备及要求",
+      "description" : "试验设备信息表（表15-2）中仅标注了“设备校验”作为校验方式，未提供具体的校准证书编号、有效期或校准机构信息。",
+      "suggestion" : "在表15-2中补充各关键测试设备对应的校准证书编号、校准日期及有效期，或引用独立的校准证书清单。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表 15-2中所有设备的“校验方式”列均仅标注“设备校验”，无证书编号或有效期信息。"
+    }, {
+      "location" : "2 湿热 (2/10) > 试验程序",
+      "description" : "试验程序中仅提及“使受试设备处于工作状态1”，未完整列出受试设备的所有功能工作模式。",
+      "suggestion" : "在受试设备描述或试验程序章节明确列出所有需考核的工作模式（如工作状态1、2等）及其对应功能。",
+      "rule" : "G-5-mode",
+      "rule_code" : "G-5-mode",
+      "severity" : "low",
+      "category" : "完整性",
+      "evidence" : "b)使受试设备处于工作状态1，调节试验箱内温度至（38±2）℃，相对湿度至（85±4）%，使受试设备在该温湿度条件下稳定3h；"
+    }, {
+      "location" : "3 工作冲击和坠撞安全 (3/10) > 试验要求",
+      "description" : "试验项目（工作冲击、坠撞安全冲击、坠撞安全持续载荷）对应的表格中缺失【试验单位】和【试验地址】。",
+      "suggestion" : "在试验要求或设备信息表中补充各试验项目对应的试验单位全称及详细地址。",
+      "rule" : "G-1-test_unit",
+      "rule_code" : "G-1-test_unit",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "表16-1、表16-2、表16-3中均无试验单位及地址列。"
+    }, {
+      "location" : "3 工作冲击和坠撞安全 (3/10) > 试验要求",
+      "description" : "存在文字规范性问题：1.图16-1说明中“抬升”疑似错别字；2.“表 16-2坠撞安全冲击条件”缺少标点符号。",
+      "suggestion" : "将“抬升”修改为“产生”或“激发”；在“表 16-2”与“坠撞安全冲击条件”之间补充冒号或空格。",
+      "rule" : "G-2-Project_omissions",
+      "rule_code" : "G-2-Project_omissions",
+      "severity" : "low",
+      "category" : "格式",
+      "evidence" : "图16-1说明：“T2=对于用振动台抬升的脉冲，应监测脉冲的最短时间。”；原文：“试验条件见表16-2坠撞安全冲击条件”"
+    }, {
+      "location" : "3 工作冲击和坠撞安全 (3/10) > 试验要求",
+      "description" : "图表引用编号错误/不一致。文中两次引用“图 6-1”，但本章为第16章，且前文已使用图16-1，该编号不存在或引用错误。",
+      "suggestion" : "核对并修正图表编号，将“图 6-1”改为正确的编号（如“图 16-7”），并确保全文引用格式统一。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "high",
+      "category" : "标准符合性",
+      "evidence" : "原文：“冲击的轴向图如图 6-1所示……持续载荷的方向定义如图 6-1所示。”"
+    }, {
+      "location" : "3 工作冲击和坠撞安全 (3/10) > 受试/陪试设备",
+      "description" : "未明确提供受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号。",
+      "suggestion" : "在“受试/陪试设备”章节补充EUT的完整供应商件号（P/N），确保信息完整可追溯。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "原文：“受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；”"
+    }, {
+      "location" : "3 工作冲击和坠撞安全 (3/10) > 试验设备、测试设备及要求",
+      "description" : "试验测试设备参数信息及校准证书信息不完整。表16-4仅标注“校验方式”为“设备校验”，未提供校准证书编号、有效期等关键信息。",
+      "suggestion" : "补充关键测试设备的校准证书编号及有效期信息，或明确证书获取途径/存放位置。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表16-4“校验方式”列仅填写“设备校验”。"
+    }, {
+      "location" : "4 振动 > 试验程序 > 强化振动",
+      "description" : "强化振动试验步骤c)错误引用了标准振动试验的曲线图（图17-1），应引用强化振动曲线图（图17-2）。",
+      "suggestion" : "将步骤c)中的“按图 17-1和表 17-2中的标准振动功率谱密度量值”修改为“按图 17-2和表 17-2中的强化振动功率谱密度量值”。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "high",
+      "category" : "逻辑一致性",
+      "evidence" : "c)使受试设备处于工作状态2，按图 17-1和表 17-2中的标准振动功率谱密度量值进行X轴向10min的标准随机振动。"
+    }, {
+      "location" : "4 振动 > 试验要求",
+      "description" : "图号、表号引用格式不统一，文中混用了“图 16-2”与“图 17-x/表 17-x”的编号格式，且跨章节引用未作明确标识。",
+      "suggestion" : "统一全文图表编号格式。若图16-2为其他章节图表，建议补充章节引用标识（如“见图4-16-2”或“见第16章图2”）；若为笔误，请修正为正确的图表编号。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "medium",
+      "category" : "格式",
+      "evidence" : "安装方向如图 16-2所示。按照DO－160G中第8章S类别（B3曲线）进行标准振动试验，标准振动试验曲线如图 17-1所示..."
+    }, {
+      "location" : "4 振动 > 受试/陪试设备",
+      "description" : "未明确受试设备（EUT）的供应商件号。",
+      "suggestion" : "在“受试设备”描述中补充EUT的完整供应商件号（P/N），确保与供应商提供的技术文档或构型状态文件一致。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+    }, {
+      "location" : "4 振动 > 试验设备、测试设备及要求",
+      "description" : "试验设备信息表（表17-3）中未提供校准证书信息，仅标注“设备校验”或“/”，不符合试验设备参数及校准证书完整性要求。",
+      "suggestion" : "在表17-3中补充各试验设备对应的校准证书编号、校准日期及有效期，或提供校准证书附件索引。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表17-3中“校验方式”列仅填写“设备校验”或“/”，无证书编号及有效期信息。"
+    }, {
+      "location" : "4 振动",
+      "description" : "文档未提供试验项目与试验单位、试验地址的对应信息。",
+      "suggestion" : "补充试验大纲封面或试验要求章节中的试验单位及地址信息，或提供包含“试验项目-试验单位-试验地址”的对应表格。",
+      "rule" : "G-1-test_unit",
+      "rule_code" : "G-1-test_unit",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "全文未出现试验单位及试验地址相关描述或表格。"
+    }, {
+      "location" : "4 振动 > 试验程序 > 标准振动试验",
+      "description" : "部分技术参数表述存在空格缺失或符号不规范问题（如“1.0oct/min”、“0.5－PK”、“0.167Hz/s”）。",
+      "suggestion" : "统一技术参数格式，数值与单位间添加空格（如“1.0 oct/min”、“0.167 Hz/s”），连字符使用标准半角“-”或明确标注“pk”。",
+      "rule" : "G-2-Project_omissions",
+      "rule_code" : "G-2-Project_omissions",
+      "severity" : "low",
+      "category" : "格式",
+      "evidence" : "以1.0oct/min的扫描速率、峰值加速度0.5－PK的正弦扫描... 频率从10Hz到250Hz进行正弦线性扫频"
+    }, {
+      "location" : "5 防水 > 试验设备、测试设备及要求",
+      "description" : "设备信息表（表 18-1）中未设置【试验单位】和【试验地址】列，所有列出的试验设备均缺少对应的承试单位与详细地址信息。",
+      "suggestion" : "在表 18-1中增加【试验单位】和【试验地址】列，并如实填写各设备的承试单位及详细地址，确保可追溯。",
+      "rule" : "G-1-test_unit",
+      "rule_code" : "G-1-test_unit",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "表 18-1列头为：序号、设备名称、用途、设备型号、技术要求/精度、校验方式。"
+    }, {
+      "location" : "5 防水 > 试验设备、测试设备及要求",
+      "description" : "试验设备信息表中仅标注了“校验方式”为“设备校验”或为空，未提供具体的校准证书编号、校准机构及有效期信息，不符合校准证书完整性审查要求。",
+      "suggestion" : "补充各核心测试设备的校准证书编号、校准日期及有效期，或增加【校准证书编号】列以便核查。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表 18-1中“校验方式”列内容均为“设备校验”或“/”，无证书信息。"
+    }, {
+      "location" : "5 防水 > 受试/陪试设备",
+      "description" : "受试设备“E/ISI-2集成式备用仪表”未明确标注EUT供应商件号，无法对应到具体供应商的真实产品，缺乏追溯依据。",
+      "suggestion" : "在受试设备描述中补充EUT供应商件号（Part Number），确保件号清晰、规范且与供应商信息一致。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+    }, {
+      "location" : "6 流体敏感性 (6/10) > 试验要求",
+      "description" : "文档中未提供试验项目对应的试验单位与试验地址信息。",
+      "suggestion" : "补充试验项目对应的试验单位及试验地址，确保每项试验均有明确的责任单位与实施地点。",
+      "rule" : "G-1-test_unit",
+      "rule_code" : "G-1-test_unit",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "文档正文及表格中均未出现“试验单位”与“试验地址”字段或相关描述。"
+    }, {
+      "location" : "6 流体敏感性 (6/10) > 试验布置和连接",
+      "description" : "图表编号与章节号不一致（本章为第6章，但图表编号为19-1、19-2）；且图表引用处存在未清理的占位符标签“[图表 19]”、“[图表 20]”。",
+      "suggestion" : "统一图表编号规则（建议改为6-1、6-2或按全文档统一编号体系调整）；删除正文中的“[图表 19]”、“[图表 20]”占位符标签。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "medium",
+      "category" : "格式",
+      "evidence" : "[图表 19]\n图 19-1：流体敏感性试验连接图\n[图表 20]\n图 19-2：流体敏感性试验布置图"
+    }, {
+      "location" : "6 流体敏感性 (6/10) > 受试/陪试设备",
+      "description" : "受试设备描述中未提供EUT供应商件号。",
+      "suggestion" : "补充受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号，确保件号清晰、可追溯且与供应商信息一致。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+    }, {
+      "location" : "6 流体敏感性 (6/10) > 试验设备、测试设备及要求",
+      "description" : "试验设备信息表中“校验方式”列仅填写“设备校验”或“合格证”，未提供具体校准证书编号、发证机构或有效期等关键信息。",
+      "suggestion" : "在表19-2中补充各试验设备对应的校准证书编号、校准机构及有效期信息，或明确引用证书附件。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表19-2中“校验方式”列内容均为“设备校验”或“合格证”。"
+    }, {
+      "location" : "7 霉菌 > 试验程序",
+      "description" : "未明确提及试验前对试验件进行功能性能检查或QPAT检查。",
+      "suggestion" : "在试验程序或试验前准备章节补充试验前功能性能检查或QPAT检查的具体要求。",
+      "rule" : "G-3-functional_check",
+      "rule_code" : "G-3-functional_check",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "原文仅提及“确定受试设备按照12.1要求完成了产品验收测试”及“检查确认试验参数设置”，无明确的功能性能/QPAT检查描述。"
+    }, {
+      "location" : "7 霉菌 > 试验程序",
+      "description" : "试验前准备检查描述不完整，缺乏具体的检查项目、标准和方法。",
+      "suggestion" : "补充试验前准备检查的具体内容，明确环境搭建确认、设备连接检查、参数设置核对等检查项目、标准及方法。",
+      "rule" : "G-4-Pretest_preparation",
+      "rule_code" : "G-4-Pretest_preparation",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "原文仅提及“试验人员应在试验环境搭建完成后予以检查确认试验参数设置”，缺乏系统性准备检查。"
+    }, {
+      "location" : "7 霉菌 > 受试/陪试设备",
+      "description" : "未明确提及受试设备的功能模式检查要求。",
+      "suggestion" : "在受试设备描述章节明确其功能性能及工作模式，或补充功能模式检查的具体要求。",
+      "rule" : "G-5-mode",
+      "rule_code" : "G-5-mode",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "原文仅写“工作状态：详见6.4节”，未在本章明确功能模式检查。"
+    }, {
+      "location" : "7 霉菌 > 受试/陪试设备",
+      "description" : "未提供受试设备（EUT）的供应商件号。",
+      "suggestion" : "补充EUT的供应商件号，确保件号清晰规范，便于追溯核查。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "原文仅写“受试设备：E/ISI-2集成式备用仪表”，无供应商件号。"
+    }, {
+      "location" : "7 霉菌 > 试验设备、测试设备及要求",
+      "description" : "试验测试设备信息表中未明确校准证书信息。",
+      "suggestion" : "在设备信息表中补充校准证书编号、有效期或明确引用校准证书要求，确保设备参数及证书完整。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表20-3中“校验方式”仅填写“设备校验”，无证书编号或有效期信息。"
+    }, {
+      "location" : "7 霉菌 > 受试/陪试设备",
+      "description" : "缺少受试设备的供应商件号信息。",
+      "suggestion" : "补充EUT的供应商件号。",
+      "rule" : "13-2-equipment_identification",
+      "rule_code" : "13-2-equipment_identification",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "原文“受试设备：E/ISI-2集成式备用仪表”未提供供应商件号。"
+    }, {
+      "location" : "7 霉菌 > 受试/陪试设备",
+      "description" : "未提供受试设备的基本功能介绍。",
+      "suggestion" : "补充受试设备（E/ISI-2集成式备用仪表）的用途、主要功能及在飞机系统中的作用描述。",
+      "rule" : "13-5-system_function_description",
+      "rule_code" : "13-5-system_function_description",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "原文仅列出设备名称，无功能描述。"
+    }, {
+      "location" : "7 霉菌 > 试验程序",
+      "description" : "霉菌试验程序缺少无机盐溶液制备、孢子活力检查及对照样品制备的描述。",
+      "suggestion" : "补充无机盐溶液制备、混合孢子悬浮液制备、孢子活力检查、对照样品制备的具体步骤或引用标准程序。",
+      "rule" : "13-8-mould_procedure",
+      "rule_code" : "13-8-mould_procedure",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "原文仅提及“用喷雾器将混合孢子悬浮液...喷在...”及“检查棉布对照条上的霉菌生长情况”，未涵盖DO-160要求的五项核心程序。"
+    }, {
+      "location" : "7 霉菌 > 试验判据",
+      "description" : "霉菌试验合格判据不完整，缺少真菌种类分析、有资质人员评价、材料物理特性影响分析等关键要求。",
+      "suggestion" : "补充完整的外观判据、功能性能判据及结果分析要求（包括真菌种类分析、生长位置判定、有资质人员评价、材料特性影响分析、长期影响分析、营养基质识别及人体因素评价）。",
+      "rule" : "13-9-mould_acceptance_criteria",
+      "rule_code" : "13-9-mould_acceptance_criteria",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "原文仅规定“内外表面均不应出现劣化现象，允许受试样件霉菌生长不超过2级”，未涵盖标准要求的完整判据体系。"
+    }, {
+      "location" : "7 霉菌 > 试验程序",
+      "description" : "未明确试验前、中、后三个阶段的具体目视检查和ATP测试记录要求。",
+      "suggestion" : "补充试验前、试验中、试验后三个阶段明确的目视检查及ATP测试（或等效功能检查）记录要求，并列出具体检查项目。",
+      "rule" : "13-12-equipment_status_record",
+      "rule_code" : "13-12-equipment_status_record",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "原文仅提及“定时巡查试验设备运行状态”及“试验后检测”，未明确分阶段的目视与ATP记录要求。"
+    }, {
+      "location" : "8 防火，可燃性 (8/10) > 试验布置和连接",
+      "description" : "图号引用格式不统一且存在未清理的占位符与重复表述。原文出现“[图表 23]”占位符，且图21-2标题表述为“（图 21-2）\\n图 21-2：可燃性试验布置图”，存在编号重复和格式混乱。",
+      "suggestion" : "删除占位符“[图表 23]”，统一图号引用格式为“图21-2：可燃性试验布置图”，确保全文图号引用唯一、格式一致。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "medium",
+      "category" : "格式",
+      "evidence" : "可燃性试验连接示意图和试验布局如图 21-1和图 21-2所示。\\n[图表 23]\\n图 21-1：可燃性试验连接图\\n（图 21-2）\\n图 21-2：可燃性试验布置图"
+    }, {
+      "location" : "8 防火，可燃性 (8/10) > 受试/陪试设备",
+      "description" : "受试设备清单（表21-2）中未明确标注EUT供应商件号。表格仅包含“图号/型号”、“材料”、“尺寸”等列，缺少供应商件号信息，不符合追溯要求。",
+      "suggestion" : "在表21-2中增加“供应商件号”列，或直接在现有“图号/型号”列中补充明确的供应商件号，确保件号清晰可追溯。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "表 21-2：可燃性试验受试样件清单... <th>图  号/型号</th>... <td></td>"
+    }, {
+      "location" : "8 防火，可燃性 (8/10) > 试验设备、测试设备及要求",
+      "description" : "试验设备信息表（表21-3）中仅注明“校验方式”为“设备校验”，未提供具体的校准证书编号、有效期或校准机构信息，不符合校准证书完整性审查要求。",
+      "suggestion" : "在表21-3中补充各设备的校准证书编号、校准日期及有效期，或引用独立的校准证书清单，确保证书信息可核查。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "<th>校验方式</th>... <td>设备校验</td>"
+    }, {
+      "location" : "8 防火，可燃性 (8/10) > 受试设备、试验装置（试验前）的制造符合性要求",
+      "description" : "试验前检查要求中未明确提及对受试设备进行功能性能检查或QPAT检查（或等效描述）。虽然提到了产品验收测试和参数设置检查，但缺乏针对试验前EUT功能状态的明确检查步骤。",
+      "suggestion" : "在“受试设备、试验装置（试验前）的制造符合性要求”或“试验程序”开头补充试验前功能性能检查或QPAT检查的具体要求及合格判据。",
+      "rule" : "G-3-functional_check",
+      "rule_code" : "G-3-functional_check",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "试验件状态应满足“6.试验产品/设备说明”构型和产品状态要求，确定试验件按照12.1要求完成了产品验收测试。确保试验件、陪试件、试验装置，在试验前按照21.3-21.5的要求，进行了相应的安装和连接。"
+    }, {
+      "location" : "8 防火，可燃性 (8/10) > 受试/陪试设备",
+      "description" : "文档中提及“（相似性分析是否可以采用）”，表明可能涉及相似性分析，但未提供对应的分析报告或明确结论。若采用相似性分析，需补充完整的分析报告。",
+      "suggestion" : "明确是否采用相似性分析。若采用，需补充完整的相似性分析报告（含类比对象、分析过程、数据支撑及结论）；若不采用，请删除该疑问表述并说明理由。",
+      "rule" : "G-12-Analogy/similarity_analysis",
+      "rule_code" : "G-12-Analogy/similarity_analysis",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "选出参见试验的样件清单见表 21-2。（相似性分析是否可以采用）"
+    }, {
+      "location" : "9 加速度 > 试验要求",
+      "description" : "未提供本章节试验项目对应的试验单位与试验地址信息。",
+      "suggestion" : "在试验要求或设备信息表中补充明确的试验单位名称及试验地址。",
+      "rule" : "G-1-test_unit",
+      "rule_code" : "G-1-test_unit",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "正文中仅提及‘应通过ISO2669:1995...规定的试验’，未列出承试单位及地址。"
+    }, {
+      "location" : "9 加速度 > 试验要求",
+      "description" : "试验要求中引用安装方向为‘图 16-2’，但后续试验布置及程序中实际使用‘图 22-1’和‘图 22-2’，图号引用前后不一致。",
+      "suggestion" : "统一图号引用，将‘图 16-2’修正为实际使用的‘图 22-1’或‘图 22-2’，或补充图16-2。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "medium",
+      "category" : "格式",
+      "evidence" : "试验要求：‘安装方向如图 16-2所示。’；试验布置：‘按图 22-1和图 22-2将受试设备与测试设备进行连接布置。’"
+    }, {
+      "location" : "9 加速度 > 试验程序",
+      "description" : "步骤d)中表号引用存在笔误，‘表42结构试验量值’与上下文及表22-1不一致。",
+      "suggestion" : "将‘表42’修正为‘表22-1’。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "medium",
+      "category" : "格式",
+      "evidence" : "试验程序步骤d)：‘以不小于15s的时间逐渐增加离心机的加速度至表42结构试验量值。’"
+    }, {
+      "location" : "9 加速度 > 受试/陪试设备",
+      "description" : "未明确列出受试设备（E/ISI-2集成式备用仪表）的EUT供应商件号。",
+      "suggestion" : "补充EUT供应商件号，确保件号清晰、规范且可追溯。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+    }, {
+      "location" : "9 加速度 > 试验设备、测试设备及要求",
+      "description" : "表22-2设备信息表中仅填写了‘设备校验’作为校验方式，未提供具体的校准证书编号或有效期信息。",
+      "suggestion" : "在表22-2中补充各核心测试设备对应的校准证书编号及有效期，或明确证书获取方式。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表22-2中‘校验方式’列均填写为‘设备校验’，无证书编号信息。"
+    }, {
+      "location" : "10 风车 > 试验设备、测试设备及要求",
+      "description" : "本章未提供包含试验项目、试验单位及试验地址的汇总表，表23-2仅为设备信息表，缺少【试验单位】和【试验地址】列，不符合试验单位与地址完整性要求。",
+      "suggestion" : "补充试验项目汇总表，或在表23-2中增加【试验单位】和【试验地址】列并填写对应信息。",
+      "rule" : "G-1-test_unit",
+      "rule_code" : "G-1-test_unit",
+      "severity" : "high",
+      "category" : "完整性",
+      "evidence" : "表 23-2：设备信息表（表头仅包含序号、设备名称、用途、设备型号、技术要求/精度、校验方式）"
+    }, {
+      "location" : "10 风车 > 受试/陪试设备",
+      "description" : "受试设备仅描述为“E/ISI-2集成式备用仪表”，未直接给出EUT供应商件号，仅引用6.1节，不符合件号明确可追溯的要求。",
+      "suggestion" : "在本章“受试/陪试设备”中直接补充EUT供应商件号，或明确说明件号获取路径，确保件号标注清晰规范。",
+      "rule" : "G-9-EUT_supplier",
+      "rule_code" : "G-9-EUT_supplier",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "受试设备：E/ISI-2集成式备用仪表，详细构型见6.1节受试设备构型状态；"
+    }, {
+      "location" : "10 风车 > 试验设备、测试设备及要求",
+      "description" : "表23-2中试验测试设备仅标注“校验方式”为“设备校验”，未提供校准证书编号、有效期等关键信息，不符合校准证书审查要求。",
+      "suggestion" : "在表23-2中补充“校准证书编号”及“有效期至”列，或提供校准证书清单附件，确保证书信息完整可查。",
+      "rule" : "G-10-Test equipment and certificates",
+      "rule_code" : "G-10-Test equipment and certificates",
+      "severity" : "medium",
+      "category" : "完整性",
+      "evidence" : "表 23-2：设备信息表（“校验方式”列均为“设备校验”，无证书编号及有效期信息）"
+    }, {
+      "location" : "10 风车 > 试验要求",
+      "description" : "文中引用“图 16-2”作为安装方向参考，但当前章节为第10章，图表编号跨章引用可能导致编号体系混乱或引用不存在的编号。",
+      "suggestion" : "核实“图 16-2”是否为通用安装图。若为通用图，建议统一引用格式；若为本章专用图，请重新编号为“图 23-3”（或顺延）并更新引用。",
+      "rule" : "G-16-pic_sheet",
+      "rule_code" : "G-16-pic_sheet",
+      "severity" : "low",
+      "category" : "格式/一致性",
+      "evidence" : "安装方向如图 16-2所示。"
+    }, {
+      "location" : "10 风车 > 试验布置和连接",
+      "description" : "试验布置描述中未明确列出辅助设施（如安装夹具、线缆、转接件等）的名称、型号及核心参数。",
+      "suggestion" : "补充辅助设施清单，明确每件辅助设备的名称、型号规格及核心参数，或引用相关章节说明。",
+      "rule" : "G-11-auxiliary_facilities",
+      "rule_code" : "G-11-auxiliary_facilities",
+      "severity" : "low",
+      "category" : "完整性",
+      "evidence" : "将E/ISI-2集成式备用仪表安装在试验台上（测试设备处于试验台外），按图 23-1和图 23-2将受试设备与测试设备进行连接布置。"
+    } ],
+    "failedChunkCount" : 0,
+    "failedChunks" : [ ],
+    "severityCounts" : {
+      "high" : 13,
+      "medium" : 30,
+      "low" : 5,
+      "unknown" : 0
+    },
+    "categoryCounts" : {
+      "完整性" : 38,
+      "格式" : 7,
+      "标准符合性" : 1,
+      "逻辑一致性" : 1,
+      "格式/一致性" : 1
+    }
+  }
+}
