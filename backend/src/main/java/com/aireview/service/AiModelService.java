@@ -56,6 +56,7 @@ public class AiModelService {
         }
         if (dto.getMaxTokens() != null) config.setMaxTokens(dto.getMaxTokens());
         if (dto.getTemperature() != null) config.setTemperature(dto.getTemperature());
+        if (dto.getTimeout() != null) config.setTimeout(dto.getTimeout());
         if (dto.getEnabled() != null) config.setIsEnabled(dto.getEnabled());
         if (dto.getThinkingMode() != null) config.setThinkingMode(dto.getThinkingMode());
         config.setUpdatedAt(LocalDateTime.now());
@@ -348,6 +349,7 @@ public class AiModelService {
         dto.setApiKey(maskApiKey(config.getApiKey()));
         dto.setMaxTokens(config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
         dto.setTemperature(config.getTemperature() != null ? config.getTemperature() : 0.7);
+        dto.setTimeout(config.getTimeout() != null ? config.getTimeout() : 180);
         dto.setEnabled(config.getIsEnabled());
         dto.setThinkingMode(config.getThinkingMode() != null ? config.getThinkingMode() : Boolean.FALSE);
         dto.setCreatedAt(config.getCreatedAt());
@@ -365,7 +367,7 @@ public class AiModelService {
         config.setContextWindow(128000);
         config.setMaxTokens(dto.getMaxTokens() != null ? dto.getMaxTokens() : 4096);
         config.setTemperature(dto.getTemperature() != null ? dto.getTemperature() : 0.7);
-        config.setTimeout(60);
+        config.setTimeout(dto.getTimeout() != null ? dto.getTimeout() : 180);
         config.setIsEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
         // If the UI didn't provide a value, fall back to the regex heuristic so historic
         // rows and forms-without-the-field still get sensible auto-detection.

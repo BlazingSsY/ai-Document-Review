@@ -10,6 +10,7 @@ export interface AIModel {
   apiKey: string;
   maxTokens: number;
   temperature: number;
+  timeout: number;
   enabled: boolean;
   /**
    * When true the backend treats this as a thinking/reasoning model: temperature is
@@ -30,6 +31,7 @@ export interface CreateModelParams {
   apiKey: string;
   maxTokens: number;
   temperature: number;
+  timeout: number;
   enabled: boolean;
   thinkingMode: boolean;
 }

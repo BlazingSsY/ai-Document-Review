@@ -71,7 +71,7 @@ review:
   parallel:
     # 单个文档内切片并发调用 AI 的最大并发数。AI 调用以网络等待为主，
     # 提高并发可线性缩短审查耗时；上限由模型提供方的 RPM/并发配额决定。
-    chunk-concurrency: 8
+    chunk-concurrency: 4
 
 logging:
   level:

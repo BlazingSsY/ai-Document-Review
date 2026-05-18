@@ -21,7 +21,7 @@ import {
   ReloadOutlined,
   DownloadOutlined,
 } from '@ant-design/icons';
-import { getReviewDetail, reReview, exportReviewExcel, ReviewTask } from '../api/reviews';
+import { getReviewDetail, reReview, retryFailedChunks, exportReviewExcel, ReviewTask } from '../api/reviews';
 import { STATUS_LABELS } from '../utils/constants';
 import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
 import useLogStore, { LogEntry } from '../store/logStore';
@@ -69,6 +69,7 @@ function ReviewWorkspacePage() {
   const clearLogs = useLogStore((s) => s.clearLogs);
   const [wsProgress, setWsProgress] = useState<number>(0);
   const [reReviewing, setReReviewing] = useState(false);
+  const [retryingFailed, setRetryingFailed] = useState(false);
   const [exporting, setExporting] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -126,6 +127,21 @@ function ReviewWorkspacePage() {
       message.error('重新审查失败');
     } finally {
       setReReviewing(false);
+    }
+  };
+
+  const handleRetryFailedChunks = async () => {
+    if (!taskId) return;
+    setRetryingFailed(true);
+    try {
+      const res = await retryFailedChunks(taskId);
+      setTask(res.data.data);
+      setWsProgress(5);
+      message.success('失败切片重审已提交');
+    } catch {
+      message.error('失败切片重审提交失败');
+    } finally {
+      setRetryingFailed(false);
     }
   };
 
@@ -220,6 +236,8 @@ function ReviewWorkspacePage() {
   const severityCounts = (task.aiResult?.severityCounts || {}) as Record<string, number>;
   const categoryCounts = (task.aiResult?.categoryCounts || {}) as Record<string, number>;
   const chunkResults = (task.aiResult?.chunkResults || []) as Array<Record<string, unknown>>;
+  const failedChunks = (task.aiResult?.failedChunks || []) as Array<Record<string, unknown>>;
+  const failedChunkCount = Number(task.aiResult?.failedChunkCount || failedChunks.length || 0);
   const isProcessing = status === 'processing';
 
   return (
@@ -243,6 +261,15 @@ function ReviewWorkspacePage() {
               onClick={handleExportExcel}
             >
               导出Excel
+            </Button>
+          )}
+          {status === 'completed' && failedChunkCount > 0 && (
+            <Button
+              icon={<ReloadOutlined />}
+              loading={retryingFailed}
+              onClick={handleRetryFailedChunks}
+            >
+              重审失败切片
             </Button>
           )}
           {!isProcessing && (
@@ -359,6 +386,11 @@ function ReviewWorkspacePage() {
                   <div>文档分块数：<Text strong>{totalChunks}</Text></div>
                 )}
                 <div>发现问题数：<Text strong>{issues.length}</Text></div>
+                {failedChunkCount > 0 && (
+                  <div>
+                    失败切片：<Text strong type="danger">{failedChunkCount}</Text>
+                  </div>
+                )}
                 {(severityCounts.high || severityCounts.medium || severityCounts.low || severityCounts.unknown) ? (
                   <Space wrap size={4}>
                     <Text type="secondary" style={{ fontSize: 12 }}>严重程度分布：</Text>
@@ -378,6 +410,24 @@ function ReviewWorkspacePage() {
                 )}
               </Space>
             </Card>
+
+            {failedChunks.length > 0 && (
+              <Card size="small" title="失败切片" style={{ marginBottom: 12, borderColor: '#ffccc7' }}>
+                <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                  {failedChunks.map((fc, idx) => (
+                    <div key={idx} style={{ fontSize: 12 }}>
+                      <Text strong>#{String(fc.chunk || idx + 1)} {String(fc.chapterTitle || '')}</Text>
+                      <div style={{ color: '#8c8c8c' }}>
+                        tokens={String(fc.estimatedTokens || 0)}，
+                        规则={String(fc.appliedRulesCount || 0)}，
+                        耗时={String(fc.elapsedMs || 0)}ms
+                      </div>
+                      {fc.error ? <Text type="danger" style={{ fontSize: 12 }}>{String(fc.error)}</Text> : null}
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
 
             {chunkResults.length > 0 && (
               <Card size="small" title="规则调度" style={{ marginBottom: 12 }}>

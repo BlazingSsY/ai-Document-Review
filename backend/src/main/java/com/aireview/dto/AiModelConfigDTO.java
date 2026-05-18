@@ -15,6 +15,7 @@ public class AiModelConfigDTO {
     private String apiKey;
     private Integer maxTokens;
     private Double temperature;
+    private Integer timeout;
     private Boolean enabled;
     /**
      * When true the backend treats this model as a thinking/reasoning model: temperature

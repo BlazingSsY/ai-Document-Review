@@ -61,6 +61,10 @@ export function reReview(taskId: string) {
   return request.post<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}/re-review`);
 }
 
+export function retryFailedChunks(taskId: string) {
+  return request.post<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}/retry-failed-chunks`);
+}
+
 export function deleteReview(taskId: string) {
   return request.delete<ApiResponse<null>>(`/reviews/tasks/${taskId}`);
 }

@@ -35,7 +35,7 @@
 | React | 18.3 | UI 框架 |
 | TypeScript | 5.5 | 类型安全 |
 | Vite | 5.4 | 构建工具 |
-| Ant Design | 5.21 | UI 组件库 |
+| Ant Design/Material UI | 5.21 | UI 组件库 |
 | Zustand | 4.5 | 状态管理 |
 | Axios | 1.7 | HTTP 请求 |
 

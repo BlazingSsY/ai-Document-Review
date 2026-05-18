@@ -102,6 +102,24 @@ public class ReviewController {
     }
 
     /**
+     * Retry only chunks that failed in a completed review task.
+     */
+    @PostMapping("/tasks/{taskId}/retry-failed-chunks")
+    public ApiResponse<ReviewTaskDTO> retryFailedChunks(@PathVariable String taskId,
+                                                        Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            ReviewTaskDTO task = reviewService.retryFailedChunks(taskId, userId);
+            return ApiResponse.success("Failed chunk retry submitted", task);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to retry failed chunks", e);
+            return ApiResponse.error("Failed to retry failed chunks: " + e.getMessage());
+        }
+    }
+
+    /**
      * Cancel a review task.
      */
     @PostMapping("/tasks/{taskId}/cancel")

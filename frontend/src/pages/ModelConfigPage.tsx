@@ -73,7 +73,7 @@ function ModelConfigPage() {
     setThinkingTouched(false);
     form.resetFields();
     // 新增模型时，maxTokens 留空让用户按实际模型上下文窗口填写；temperature 默认 0.3（审查类任务偏稳定）
-    form.setFieldsValue({ maxTokens: undefined, temperature: 0.3, enabled: true, thinkingMode: false });
+    form.setFieldsValue({ maxTokens: undefined, temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false });
     setModalOpen(true);
   };
 
@@ -93,6 +93,7 @@ function ModelConfigPage() {
       apiKey: model.apiKey,
       maxTokens: model.maxTokens,
       temperature: model.temperature,
+      timeout: model.timeout || 180,
       enabled: model.enabled,
       thinkingMode: !!model.thinkingMode,
     });
@@ -134,6 +135,7 @@ function ModelConfigPage() {
       apiKey: values.apiKey as string,
       maxTokens: values.maxTokens as number,
       temperature: values.temperature as number,
+      timeout: values.timeout as number,
       enabled: values.enabled as boolean,
       thinkingMode: !!values.thinkingMode,
     };
@@ -180,7 +182,7 @@ function ModelConfigPage() {
   const handleTestInForm = async () => {
     try {
       const values = await form.validateFields([
-        'name', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature',
+        'name', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature', 'timeout',
       ]);
       const provider = values.providerSelect === '__custom__'
         ? (values.providerCustom as string)
@@ -194,6 +196,7 @@ function ModelConfigPage() {
         apiEndpoint: values.apiEndpoint as string,
         apiKey: values.apiKey as string,
         temperature: values.temperature as number,
+        timeout: values.timeout as number,
         thinkingMode: !!form.getFieldValue('thinkingMode'),
       });
       const data = res.data?.data;
@@ -272,6 +275,13 @@ function ModelConfigPage() {
           )
           : <span>{val}</span>
       ),
+    },
+    {
+      title: '超时(s)',
+      dataIndex: 'timeout',
+      key: 'timeout',
+      width: 100,
+      render: (val: number) => val || 180,
     },
     {
       title: '思考模式',
@@ -374,7 +384,7 @@ function ModelConfigPage() {
           form={form}
           onFinish={handleSave}
           layout="vertical"
-          initialValues={{ temperature: 0.3, enabled: true, thinkingMode: false }}
+          initialValues={{ temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false }}
         >
           <Form.Item
             name="name"
@@ -457,6 +467,14 @@ function ModelConfigPage() {
               extra={thinkingMode ? '已开启思考模式，发送请求时会自动省略此参数（服务端强制默认值）' : undefined}
             >
               <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} disabled={thinkingMode} />
+            </Form.Item>
+            <Form.Item
+              name="timeout"
+              label="请求超时(s)"
+              rules={[{ required: true, message: '请输入' }]}
+              extra="大文档或思考模型建议 180~300 秒"
+            >
+              <InputNumber min={30} max={900} step={30} style={{ width: 160 }} />
             </Form.Item>
           </Space>
           <Space size="large" style={{ width: '100%' }}>

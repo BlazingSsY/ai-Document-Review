@@ -36,7 +36,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -271,6 +270,128 @@ public class ReviewService {
         return toDTO(task);
     }
 
+    public ReviewTaskDTO retryFailedChunks(String taskId, Long userId) {
+        ReviewTask task = reviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only retry your own tasks");
+        }
+        if (ReviewTask.STATUS_PROCESSING.equals(task.getStatus())) {
+            throw new IllegalArgumentException("Task is currently processing");
+        }
+
+        Set<Integer> failedChunkNumbers = extractFailedChunkNumbers(task.getAiResult());
+        if (failedChunkNumbers.isEmpty()) {
+            throw new IllegalArgumentException("No failed chunks to retry");
+        }
+
+        updateTaskStatus(task, ReviewTask.STATUS_PROCESSING, null);
+        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                "开始重新审查失败切片，共 " + failedChunkNumbers.size() + " 个", 5);
+        self.retryFailedChunksAsync(taskId);
+        return toDTO(task);
+    }
+
+    @Async("reviewTaskExecutor")
+    public void retryFailedChunksAsync(String taskId) {
+        ReviewTask task = reviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            log.error("Task not found for failed-chunk retry: {}", taskId);
+            return;
+        }
+
+        String runStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        Map<String, Object> existingResult = task.getAiResult();
+        Set<Integer> failedChunkNumbers = extractFailedChunkNumbers(existingResult);
+        if (failedChunkNumbers.isEmpty()) {
+            updateTaskStatus(task, ReviewTask.STATUS_COMPLETED, null);
+            webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_COMPLETED, "没有需要重新审查的失败切片");
+            return;
+        }
+
+        try {
+            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
+            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
+            List<WordParser.Chapter> chapters = firstRealIdx > 0
+                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
+                    : rawChapters;
+            List<Rule> rules = ruleService.getRulesByScenarioId(task.getScenarioId());
+            List<RuleDispatcher.PreparedRule> preparedRules = RuleDispatcher.prepare(rules);
+            AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
+            List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
+
+            List<Map<String, Object>> chunkResults = copyChunkResults(existingResult);
+            int totalToRetry = failedChunkNumbers.size();
+            int retried = 0;
+
+            for (Integer chunkNumber : failedChunkNumbers) {
+                if (chunkNumber == null || chunkNumber < 1 || chunkNumber > chunks.size()) {
+                    log.warn("Skip invalid failed chunk number: task={}, chunk={}", taskId, chunkNumber);
+                    continue;
+                }
+                if (cancelledTasks.contains(taskId)) {
+                    updateTaskStatus(task, ReviewTask.STATUS_CANCELLED, "User cancelled");
+                    webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_CANCELLED, "Task cancelled by user");
+                    return;
+                }
+
+                int chunkIdx = chunkNumber - 1;
+                ChunkUtils.ChunkResult chunk = chunks.get(chunkIdx);
+                RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
+                        chunk.getLabel(), chunk.getContent(), preparedRules);
+
+                long startNs = System.nanoTime();
+                Map<String, Object> replacement;
+                try {
+                    replacement = reviewSingleChunk(chunkIdx, chunks.size(), chunk, dispatch, chapters, modelConfig);
+                    long elapsedMs = elapsedMs(startNs);
+                    replacement.put("elapsedMs", elapsedMs);
+                    log.info("Failed chunk retry completed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}",
+                            taskId, chunkNumber, chunks.size(), chunk.getLabel(), chunk.getEstimatedTokens(),
+                            dispatch.getAppliedRuleNames().size(), elapsedMs);
+                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                            "失败切片重审完成 " + chunkNumber + "/" + chunks.size() + " [" + chunk.getLabel()
+                                    + "]，tokens=" + chunk.getEstimatedTokens()
+                                    + "，规则=" + dispatch.getAppliedRuleNames().size()
+                                    + "，耗时=" + elapsedMs + "ms",
+                            10 + (int) ((double) (++retried) / totalToRetry * 80));
+                } catch (Exception e) {
+                    long elapsedMs = elapsedMs(startNs);
+                    replacement = buildFailedChunkResult(chunkIdx, chunks.size(), chunk, dispatch, e, elapsedMs);
+                    log.warn("Failed chunk retry still failed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}, reason={}",
+                            taskId, chunkNumber, chunks.size(), chunk.getLabel(), chunk.getEstimatedTokens(),
+                            dispatch.getAppliedRuleNames().size(), elapsedMs, e.getMessage(), e);
+                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                            "失败切片重审仍失败 " + chunkNumber + "/" + chunks.size() + " [" + chunk.getLabel()
+                                    + "]，tokens=" + chunk.getEstimatedTokens()
+                                    + "，规则=" + dispatch.getAppliedRuleNames().size()
+                                    + "，耗时=" + elapsedMs + "ms，原因：" + e.getMessage(),
+                            10 + (int) ((double) (++retried) / totalToRetry * 80));
+                }
+                replaceChunkResult(chunkResults, replacement);
+            }
+
+            cancelledTasks.remove(taskId);
+            Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
+            saveAiResultToFile(taskId, task.getFileName(), task.getSelectedModel(), runStamp, aggregatedResult);
+            task.setAiResult(aggregatedResult);
+            updateTaskStatus(task, ReviewTask.STATUS_COMPLETED, null);
+
+            int failedChunkCount = ((Number) aggregatedResult.getOrDefault("failedChunkCount", 0)).intValue();
+            webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_COMPLETED,
+                    failedChunkCount > 0
+                            ? "失败切片重审完成，仍有 " + failedChunkCount + " 个切片失败"
+                            : "失败切片已全部重审完成");
+        } catch (Exception e) {
+            log.error("Failed-chunk retry task failed: {}", taskId, e);
+            updateTaskStatus(task, ReviewTask.STATUS_FAILED, e.getMessage());
+            webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_FAILED,
+                    "失败切片重审失败: " + e.getMessage());
+        }
+    }
+
     /**
      * Asynchronously execute the review task:
      * 1. Parse the Word document
@@ -397,34 +518,48 @@ public class ReviewService {
                     if (cancelledTasks.contains(taskId)) {
                         return;
                     }
+                    long startNs = System.nanoTime();
                     try {
                         Map<String, Object> chunkResult = reviewSingleChunk(
                                 chunkIdx, totalChunks, chunk, dispatch, chapters, modelConfig);
+                        long elapsedMs = elapsedMs(startNs);
+                        chunkResult.put("elapsedMs", elapsedMs);
                         orderedResults[chunkIdx] = chunkResult;
 
                         int done = completedCount.incrementAndGet();
                         int progress = 30 + (int) ((double) done / totalChunks * 60);
+                        log.info("Chunk review completed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}",
+                                taskId, chunkIdx + 1, totalChunks, chunk.getLabel(), chunk.getEstimatedTokens(),
+                                dispatch.getAppliedRuleNames().size(), elapsedMs);
                         webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                                "[" + chunk.getLabel() + "] 审查完成 (" + done + "/" + totalChunks + ")",
+                                "切片 " + (chunkIdx + 1) + "/" + totalChunks + " [" + chunk.getLabel()
+                                        + "] 审查完成，tokens=" + chunk.getEstimatedTokens()
+                                        + "，规则=" + dispatch.getAppliedRuleNames().size()
+                                        + "，耗时=" + elapsedMs + "ms (" + done + "/" + totalChunks + ")",
                                 progress);
                     } catch (Exception e) {
-                        // 让 allOf 能感知到异常
-                        throw new CompletionException(e);
+                        long elapsedMs = elapsedMs(startNs);
+                        orderedResults[chunkIdx] = buildFailedChunkResult(
+                                chunkIdx, totalChunks, chunk, dispatch, e, elapsedMs);
+
+                        int done = completedCount.incrementAndGet();
+                        int progress = 30 + (int) ((double) done / totalChunks * 60);
+                        log.warn("Chunk review failed but task continues: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}, reason={}",
+                                taskId, chunkIdx + 1, totalChunks, chunk.getLabel(), chunk.getEstimatedTokens(),
+                                dispatch.getAppliedRuleNames().size(), elapsedMs, e.getMessage(), e);
+                        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                "切片 " + (chunkIdx + 1) + "/" + totalChunks + " [" + chunk.getLabel()
+                                        + "] 审查失败，已记录并继续；tokens=" + chunk.getEstimatedTokens()
+                                        + "，规则=" + dispatch.getAppliedRuleNames().size()
+                                        + "，耗时=" + elapsedMs + "ms，原因：" + e.getMessage(),
+                                progress);
                     }
                 }, chunkReviewExecutor);
 
                 futures.add(fut);
             }
 
-            try {
-                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-            } catch (CompletionException ce) {
-                Throwable cause = ce.getCause() != null ? ce.getCause() : ce;
-                if (cause instanceof Exception ex) {
-                    throw ex;
-                }
-                throw new RuntimeException("并行审查执行失败", cause);
-            }
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
             // 所有 future 完成后统一消费取消信号 —— 与原循环 cancelledTasks.remove(taskId) 等价
             if (cancelledTasks.remove(taskId)) {
@@ -476,8 +611,11 @@ public class ReviewService {
             // 7. Save result and mark as completed
             task.setAiResult(aggregatedResult);
             updateTaskStatus(task, ReviewTask.STATUS_COMPLETED, null);
+            int failedChunkCount = ((Number) aggregatedResult.getOrDefault("failedChunkCount", 0)).intValue();
             webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_COMPLETED,
-                    "审查完成，共审查 " + chunks.size() + " 个章节片段");
+                    failedChunkCount > 0
+                            ? "审查完成，共审查 " + chunks.size() + " 个切片，其中 " + failedChunkCount + " 个切片失败，可点击重新审查失败切片"
+                            : "审查完成，共审查 " + chunks.size() + " 个章节片段");
 
             log.info("Review task completed: {}", taskId);
 
@@ -554,6 +692,76 @@ public class ReviewService {
         } catch (Exception e) {
             log.warn("Failed to save chunk debug info: {}", e.getMessage());
         }
+    }
+
+    private Set<Integer> extractFailedChunkNumbers(Map<String, Object> aiResult) {
+        Set<Integer> failed = new TreeSet<>();
+        if (aiResult == null) return failed;
+
+        Object failedChunksObj = aiResult.get("failedChunks");
+        if (failedChunksObj instanceof List<?> failedChunks) {
+            for (Object item : failedChunks) {
+                if (item instanceof Map<?, ?> map) {
+                    Integer chunk = toInteger(map.get("chunk"));
+                    if (chunk != null) failed.add(chunk);
+                }
+            }
+        }
+
+        Object chunkResultsObj = aiResult.get("chunkResults");
+        if (chunkResultsObj instanceof List<?> chunkResults) {
+            for (Object item : chunkResults) {
+                if (item instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("failed"))) {
+                    Integer chunk = toInteger(map.get("chunk"));
+                    if (chunk != null) failed.add(chunk);
+                }
+            }
+        }
+        return failed;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> copyChunkResults(Map<String, Object> aiResult) {
+        List<Map<String, Object>> copied = new ArrayList<>();
+        if (aiResult == null) return copied;
+        Object chunkResultsObj = aiResult.get("chunkResults");
+        if (chunkResultsObj instanceof List<?> chunkResults) {
+            for (Object item : chunkResults) {
+                if (item instanceof Map<?, ?> map) {
+                    copied.add(new LinkedHashMap<>((Map<String, Object>) map));
+                }
+            }
+        }
+        return copied;
+    }
+
+    private void replaceChunkResult(List<Map<String, Object>> chunkResults, Map<String, Object> replacement) {
+        Integer replacementChunk = toInteger(replacement.get("chunk"));
+        if (replacementChunk == null) {
+            chunkResults.add(replacement);
+            return;
+        }
+        for (int i = 0; i < chunkResults.size(); i++) {
+            Integer existingChunk = toInteger(chunkResults.get(i).get("chunk"));
+            if (replacementChunk.equals(existingChunk)) {
+                chunkResults.set(i, replacement);
+                return;
+            }
+        }
+        chunkResults.add(replacement);
+        chunkResults.sort(Comparator.comparingInt(m -> Optional.ofNullable(toInteger(m.get("chunk"))).orElse(Integer.MAX_VALUE)));
+    }
+
+    private Integer toInteger(Object raw) {
+        if (raw instanceof Number number) return number.intValue();
+        if (raw instanceof String s) {
+            try {
+                return Integer.parseInt(s.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
@@ -703,6 +911,35 @@ public class ReviewService {
             chunkResult.put("result", buildFallbackResult(chunk.getLabel(), aiResponse));
         }
         return chunkResult;
+    }
+
+    private Map<String, Object> buildFailedChunkResult(int chunkIdx, int totalChunks,
+                                                        ChunkUtils.ChunkResult chunk,
+                                                        RuleDispatcher.DispatchResult dispatch,
+                                                        Exception error,
+                                                        long elapsedMs) {
+        Map<String, Object> chunkResult = new LinkedHashMap<>();
+        chunkResult.put("chunk", chunkIdx + 1);
+        chunkResult.put("chapterTitle", chunk.getLabel());
+        chunkResult.put("totalChunks", totalChunks);
+        chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
+        chunkResult.put("contentLength", chunk.getContent().length());
+        chunkResult.put("appliedRules", dispatch.getAppliedRuleNames());
+        chunkResult.put("failed", true);
+        chunkResult.put("retryable", true);
+        chunkResult.put("elapsedMs", elapsedMs);
+        chunkResult.put("error", error != null ? error.getMessage() : "unknown error");
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("summary", "切片审查失败，已保留为可重试切片");
+        result.put("issues", new ArrayList<>());
+        result.put("passed_items", new ArrayList<>());
+        chunkResult.put("result", result);
+        return chunkResult;
+    }
+
+    private static long elapsedMs(long startNs) {
+        return Math.max(0L, (System.nanoTime() - startNs) / 1_000_000L);
     }
 
     /**
@@ -869,6 +1106,7 @@ public class ReviewService {
 
         List<Integer> scores = new ArrayList<>();
         List<Object> allIssues = new ArrayList<>();
+        List<Map<String, Object>> failedChunks = new ArrayList<>();
         Map<String, Integer> severityCounts = new LinkedHashMap<>();
         severityCounts.put("high", 0);
         severityCounts.put("medium", 0);
@@ -877,6 +1115,17 @@ public class ReviewService {
         Map<String, Integer> categoryCounts = new LinkedHashMap<>();
 
         for (Map<String, Object> chunk : chunkResults) {
+            if (Boolean.TRUE.equals(chunk.get("failed"))) {
+                Map<String, Object> failed = new LinkedHashMap<>();
+                failed.put("chunk", chunk.get("chunk"));
+                failed.put("chapterTitle", chunk.get("chapterTitle"));
+                failed.put("estimatedTokens", chunk.get("estimatedTokens"));
+                failed.put("contentLength", chunk.get("contentLength"));
+                failed.put("appliedRulesCount", chunk.get("appliedRules") instanceof List<?> rules ? rules.size() : 0);
+                failed.put("elapsedMs", chunk.get("elapsedMs"));
+                failed.put("error", chunk.get("error"));
+                failedChunks.add(failed);
+            }
             Object result = chunk.get("result");
             if (result instanceof Map) {
                 @SuppressWarnings("unchecked")
@@ -908,6 +1157,8 @@ public class ReviewService {
         }
         aggregated.put("totalIssues", allIssues.size());
         aggregated.put("allIssues", allIssues);
+        aggregated.put("failedChunkCount", failedChunks.size());
+        aggregated.put("failedChunks", failedChunks);
         aggregated.put("severityCounts", severityCounts);
         aggregated.put("categoryCounts", categoryCounts);
 
