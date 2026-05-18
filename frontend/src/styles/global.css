@@ -289,8 +289,11 @@ body {
 
 /* ==================== Sidebar Menu Overrides ==================== */
 
+/* Selected item: keep the right indicator stripe + bold text as the visual cue,
+   but drop the blue tinted background — the user reported it as a "3D blue
+   bottom" alongside the browser's focus ring. */
 .ant-layout-sider .ant-menu-item-selected {
-  background: rgba(22, 119, 255, 0.12) !important;
+  background: transparent !important;
   border-right: 3px solid #1677ff;
   font-weight: 600;
 }
@@ -315,4 +318,24 @@ body {
 
 .ant-layout-sider .ant-menu-submenu-title {
   color: #1a1a2e !important;
+}
+
+/* Kill the click feedback that produced the "3D blue bottom" look:
+   - browser focus outline on the clickable item,
+   - the inset/outer box-shadow Antd applies on :active,
+   - the Antd 5 wave ripple animation (.ant-wave) that briefly paints a blue
+     ring around the item when it's clicked. */
+.ant-layout-sider .ant-menu-item:focus,
+.ant-layout-sider .ant-menu-item:focus-visible,
+.ant-layout-sider .ant-menu-item:active,
+.ant-layout-sider .ant-menu-submenu-title:focus,
+.ant-layout-sider .ant-menu-submenu-title:focus-visible,
+.ant-layout-sider .ant-menu-submenu-title:active {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.ant-layout-sider .ant-menu-item .ant-wave,
+.ant-layout-sider .ant-menu-submenu-title .ant-wave {
+  display: none !important;
 }

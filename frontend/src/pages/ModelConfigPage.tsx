@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Card,
   Table,
@@ -33,6 +33,25 @@ import { MODEL_PROVIDERS, PAGE_SIZE } from '../utils/constants';
 
 const { Title } = Typography;
 
+/**
+ * 模型表格列宽的基准比例。各值之和 ({@link BASE_TABLE_WIDTH}) 等于"刚好能装下所有内容
+ * 的最小宽度"。运行时根据容器实际宽度等比放大：宽屏铺满，无空白；窄屏退回到这些
+ * 基准 px 并显示水平滚动（操作列已 fixed: 'right'）。
+ *
+ * 调比例时改这里即可，columns 渲染会自动跟着伸缩。
+ */
+const BASE_COLUMN_WIDTHS = {
+  name: 130,
+  provider: 90,
+  modelKey: 140,
+  apiEndpoint: 200,
+  temperature: 110,
+  thinkingMode: 100,
+  enabled: 80,
+  action: 90,
+} as const;
+const BASE_TABLE_WIDTH = Object.values(BASE_COLUMN_WIDTHS).reduce((sum, w) => sum + w, 0);
+
 function ModelConfigPage() {
   const [models, setModels] = useState<AIModel[]>([]);
   const [loading, setLoading] = useState(false);
@@ -49,6 +68,36 @@ function ModelConfigPage() {
   // once the user flips the switch themselves we stop overriding their choice.
   const [thinkingTouched, setThinkingTouched] = useState(false);
   const thinkingMode = Form.useWatch('thinkingMode', form);
+
+  // Measure the table container and scale all column widths proportionally so the
+  // 1080px-laptop layout and the 4K-monitor layout look the same shape — same
+  // column-width ratios, no wasted whitespace on wide screens, no truncation on
+  // standard screens. Falls back to BASE_TABLE_WIDTH when the container is
+  // narrower than the base sum, in which case Antd renders a horizontal scroll
+  // with the 操作 column pinned right.
+  const tableWrapperRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(BASE_TABLE_WIDTH);
+  useEffect(() => {
+    const el = tableWrapperRef.current;
+    if (!el) return;
+    const update = () => setContainerWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const scaledWidths = useMemo(() => {
+    const scale = Math.max(1, containerWidth / BASE_TABLE_WIDTH);
+    const result = {} as Record<keyof typeof BASE_COLUMN_WIDTHS, number>;
+    (Object.keys(BASE_COLUMN_WIDTHS) as Array<keyof typeof BASE_COLUMN_WIDTHS>).forEach((k) => {
+      result[k] = Math.floor(BASE_COLUMN_WIDTHS[k] * scale);
+    });
+    return result;
+  }, [containerWidth]);
+  const scaledTotal = useMemo(
+    () => Object.values(scaledWidths).reduce((sum, w) => sum + w, 0),
+    [scaledWidths],
+  );
 
   const fetchModels = async () => {
     setLoading(true);
@@ -222,19 +271,21 @@ function ModelConfigPage() {
     }
   };
 
+  // Column widths are scaled at render time from BASE_COLUMN_WIDTHS — see the
+  // ResizeObserver hook above. The proportions stay the same on every screen.
   const columns: ColumnsType<AIModel> = [
     {
       title: '模型名称',
       dataIndex: 'name',
       key: 'name',
-      width: 140,
+      width: scaledWidths.name,
       ellipsis: true,
     },
     {
       title: '供应商',
       dataIndex: 'provider',
       key: 'provider',
-      width: 100,
+      width: scaledWidths.provider,
       ellipsis: true,
       render: (val: string) => {
         const p = MODEL_PROVIDERS.find((m) => m.value === val);
@@ -245,49 +296,44 @@ function ModelConfigPage() {
       title: '模型标识',
       dataIndex: 'modelKey',
       key: 'modelKey',
-      width: 150,
+      width: scaledWidths.modelKey,
       ellipsis: true,
     },
     {
       title: 'API 地址',
       dataIndex: 'apiEndpoint',
       key: 'apiEndpoint',
-      width: 180,
+      width: scaledWidths.apiEndpoint,
       ellipsis: true,
     },
     {
-      title: '最大 Token',
-      dataIndex: 'maxTokens',
-      key: 'maxTokens',
-      width: 100,
-    },
-    {
+      // Single-line Temperature column — `whiteSpace: nowrap` on cell + header
+      // guards the strikethrough thinking-mode variant from breaking mid-value.
       title: 'Temperature',
       dataIndex: 'temperature',
       key: 'temperature',
-      width: 110,
+      width: scaledWidths.temperature,
+      align: 'center',
+      onHeaderCell: () => ({ style: { whiteSpace: 'nowrap' } }),
       render: (val: number, record) => (
-        record.thinkingMode
-          ? (
+        <span style={{ whiteSpace: 'nowrap' }}>
+          {record.thinkingMode ? (
             <Tooltip title="思考模式下服务端会强制使用默认 temperature（如 Kimi K2.6 = 1.0），此字段仅作展示，发送请求时会被忽略">
               <span style={{ color: '#bfbfbf', textDecoration: 'line-through' }}>{val}</span>
             </Tooltip>
-          )
-          : <span>{val}</span>
+          ) : (
+            val
+          )}
+        </span>
       ),
-    },
-    {
-      title: '超时(s)',
-      dataIndex: 'timeout',
-      key: 'timeout',
-      width: 100,
-      render: (val: number) => val || 180,
     },
     {
       title: '思考模式',
       dataIndex: 'thinkingMode',
       key: 'thinkingMode',
-      width: 100,
+      width: scaledWidths.thinkingMode,
+      align: 'center',
+      onHeaderCell: () => ({ style: { whiteSpace: 'nowrap' } }),
       render: (val: boolean) => (
         val
           ? <Tag color="purple">思考</Tag>
@@ -298,12 +344,12 @@ function ModelConfigPage() {
       title: '状态',
       dataIndex: 'enabled',
       key: 'enabled',
-      width: 90,
+      width: scaledWidths.enabled,
+      align: 'center',
       render: (enabled: boolean, record) => (
         <Switch
+          size="small"
           checked={enabled}
-          checkedChildren="启用"
-          unCheckedChildren="禁用"
           onChange={(checked) => handleToggle(record.id, checked)}
         />
       ),
@@ -311,26 +357,28 @@ function ModelConfigPage() {
     {
       title: '操作',
       key: 'action',
-      width: 130,
+      width: scaledWidths.action,
+      align: 'center',
+      fixed: 'right',
       render: (_, record) => (
         <Space size={4}>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => openEditModal(record)}
-          >
-            编辑
-          </Button>
+          <Tooltip title="编辑">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openEditModal(record)}
+            />
+          </Tooltip>
           <Popconfirm
             title="确定要删除此模型配置吗？"
             onConfirm={() => handleDelete(record.id)}
             okText="确定"
             cancelText="取消"
           >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
+            <Tooltip title="删除">
+              <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
@@ -351,21 +399,27 @@ function ModelConfigPage() {
       </div>
 
       <Card>
-        <Table
-          columns={columns}
-          dataSource={models}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1100 }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
-            total,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: (p) => setPage(p),
-            showSizeChanger: false,
-          }}
-        />
+        <div ref={tableWrapperRef}>
+          <Table
+            columns={columns}
+            dataSource={models}
+            rowKey="id"
+            loading={loading}
+            // scaledTotal grows with the container, so the table fills the
+            // available width on big monitors instead of leaving a dead zone.
+            // When the container is narrower than BASE_TABLE_WIDTH, scale is
+            // clamped to 1 → scroll.x == base sum → horizontal scrollbar.
+            scroll={{ x: scaledTotal }}
+            pagination={{
+              current: page,
+              pageSize: PAGE_SIZE,
+              total,
+              showTotal: (t) => `共 ${t} 条`,
+              onChange: (p) => setPage(p),
+              showSizeChanger: false,
+            }}
+          />
+        </div>
       </Card>
 
       <Modal

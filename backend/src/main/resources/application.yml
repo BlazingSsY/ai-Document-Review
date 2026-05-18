@@ -63,15 +63,20 @@ async:
 # AI review
 review:
   retry:
-    max-attempts: 5
-    interval-ms: 6000
+    # 4 次尝试 = 3 次重试，节奏 1s → 2s → 4s 指数退避（总等待 7s）。
+    # 比之前 5 次 × 6s = 24s 大幅缩短，但仍能吸收常见的瞬时抖动。
+    # callWithRetry 只对 IOException / HTTP 5xx / 429 重试；4xx 立即失败。
+    max-attempts: 4
+    interval-ms: 1000
   chunk:
     max-tokens: 25600
     overlap-tokens: 0
   parallel:
     # 单个文档内切片并发调用 AI 的最大并发数。AI 调用以网络等待为主，
     # 提高并发可线性缩短审查耗时；上限由模型提供方的 RPM/并发配额决定。
-    chunk-concurrency: 4
+    # chunkReviewExecutor 池子大小 = 此值 × async.max-pool-size，会自动跟随，
+    # 因此调这一处即可，不需要动 AsyncConfig。
+    chunk-concurrency: 6
 
 logging:
   level:

@@ -257,7 +257,10 @@ public class AiModelService {
 
         if (response.statusCode() != 200) {
             log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
-            throw new RuntimeException("AI API HTTP " + response.statusCode() + ": " + response.body());
+            // Throw a typed exception so the retry layer can distinguish 4xx (permanent,
+            // fail fast) from 5xx/429 (transient, retry with backoff).
+            throw new AiApiException(response.statusCode(), response.body(),
+                    "AI API HTTP " + response.statusCode() + ": " + response.body());
         }
 
         JSONObject responseBody = JSON.parseObject(response.body());

@@ -51,23 +51,27 @@ public class AsyncConfig {
      * 任务级线程池里每条任务又会向切片池提交 N 个子任务，如果共用同一个池，多文档并发上传时
      * 会形成嵌套调用 → 父任务占满核心线程 → 子任务排队 → 全部死锁。
      *
-     * <p>AI 调用以网络等待为主，几乎不消耗 CPU，所以核心数直接设为 {@code chunkConcurrency}，
-     * 最大数留出 2 倍冗余以吸收短时突发。队列容量很大是为了让一篇文档的所有切片都能进队，
-     * 不会触发 CallerRunsPolicy 退化为串行。
+     * <p>容量按 "任务并发上限 × 单任务切片并发" 配置：池子至少要能让 {@code maxPoolSize}
+     * 个并行任务各占满 {@code chunkConcurrency} 个槽位，互不饿死。单任务并发上限由
+     * {@code ReviewService} 中的 per-task {@link java.util.concurrent.Semaphore} 在 *父线程*
+     * 上 acquire 来约束（不在 worker 里 park），所以每个 submit 进池子的 runnable 都是马上有
+     * 活干的，不会把线程白白卡在等许可上。这是修过的 bug：之前 core=4/queue=1000 导致所有
+     * 文档共用 4 个线程，任务 2 的切片永远排在任务 1 后面。
      */
     @Bean(name = "chunkReviewExecutor")
     public Executor chunkReviewExecutor() {
+        int core = Math.max(chunkConcurrency * maxPoolSize, chunkConcurrency);
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(chunkConcurrency);
-        executor.setMaxPoolSize(Math.max(chunkConcurrency * 2, chunkConcurrency));
-        executor.setQueueCapacity(1000);
+        executor.setCorePoolSize(core);
+        executor.setMaxPoolSize(core);
+        executor.setQueueCapacity(0);
         executor.setThreadNamePrefix("chunk-review-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(false);
         executor.setAwaitTerminationSeconds(5);
         executor.initialize();
-        log.info("Chunk review thread pool initialized: core={}, max={}, queue={}",
-                chunkConcurrency, executor.getMaxPoolSize(), 1000);
+        log.info("Chunk review thread pool initialized: core=max={}, queue=0 "
+                + "(chunkConcurrency={} × maxTasks={})", core, chunkConcurrency, maxPoolSize);
         return executor;
     }
 }

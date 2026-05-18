@@ -1,17 +1,6 @@
 import request, { ApiResponse } from './request';
 import { PaginatedResult } from './rules';
 
-export interface ReviewFinding {
-  id: number;
-  severity: 'high' | 'medium' | 'low';
-  category: string;
-  originalText: string;
-  suggestion: string;
-  explanation: string;
-  position?: { start: number; end: number };
-  status: 'pending' | 'accepted' | 'rejected';
-}
-
 export interface ReviewTask {
   id: string;
   userId: number;

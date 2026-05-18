@@ -48,20 +48,30 @@ public class TaskProgressHandler extends TextWebSocketHandler {
     /**
      * Broadcast a message to all connected WebSocket sessions.
      *
+     * <p>{@code WebSocketSession.sendMessage} is NOT thread-safe — calling it from
+     * two threads against the same session throws {@code IllegalStateException
+     * ("The remote endpoint was in state [TEXT_PARTIAL_WRITING])}. With multiple
+     * review tasks now genuinely concurrent at the chunk level, broadcasts pour
+     * in from many threads. Synchronizing on the session lets the writes
+     * serialize per-session while still allowing different sessions to write in
+     * parallel.
+     *
      * @param message the JSON message to send
      */
     public void broadcast(String message) {
         TextMessage textMessage = new TextMessage(message);
         for (WebSocketSession session : sessions) {
-            if (session.isOpen()) {
-                try {
+            if (!session.isOpen()) {
+                sessions.remove(session);
+                continue;
+            }
+            try {
+                synchronized (session) {
                     session.sendMessage(textMessage);
-                } catch (IOException e) {
-                    log.error("Failed to send WebSocket message to session {}: {}",
-                            session.getId(), e.getMessage());
-                    sessions.remove(session);
                 }
-            } else {
+            } catch (IOException | IllegalStateException e) {
+                log.error("Failed to send WebSocket message to session {}: {}",
+                        session.getId(), e.getMessage());
                 sessions.remove(session);
             }
         }

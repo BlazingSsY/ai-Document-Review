@@ -38,6 +38,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -322,58 +323,102 @@ public class ReviewService {
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
             List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
 
-            List<Map<String, Object>> chunkResults = copyChunkResults(existingResult);
-            int totalToRetry = failedChunkNumbers.size();
-            int retried = 0;
-
-            for (Integer chunkNumber : failedChunkNumbers) {
-                if (chunkNumber == null || chunkNumber < 1 || chunkNumber > chunks.size()) {
-                    log.warn("Skip invalid failed chunk number: task={}, chunk={}", taskId, chunkNumber);
-                    continue;
-                }
-                if (cancelledTasks.contains(taskId)) {
-                    updateTaskStatus(task, ReviewTask.STATUS_CANCELLED, "User cancelled");
-                    webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_CANCELLED, "Task cancelled by user");
-                    return;
-                }
-
-                int chunkIdx = chunkNumber - 1;
-                ChunkUtils.ChunkResult chunk = chunks.get(chunkIdx);
-                RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
-                        chunk.getLabel(), chunk.getContent(), preparedRules);
-
-                long startNs = System.nanoTime();
-                Map<String, Object> replacement;
-                try {
-                    replacement = reviewSingleChunk(chunkIdx, chunks.size(), chunk, dispatch, chapters, modelConfig);
-                    long elapsedMs = elapsedMs(startNs);
-                    replacement.put("elapsedMs", elapsedMs);
-                    log.info("Failed chunk retry completed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}",
-                            taskId, chunkNumber, chunks.size(), chunk.getLabel(), chunk.getEstimatedTokens(),
-                            dispatch.getAppliedRuleNames().size(), elapsedMs);
-                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                            "失败切片重审完成 " + chunkNumber + "/" + chunks.size() + " [" + chunk.getLabel()
-                                    + "]，tokens=" + chunk.getEstimatedTokens()
-                                    + "，规则=" + dispatch.getAppliedRuleNames().size()
-                                    + "，耗时=" + elapsedMs + "ms",
-                            10 + (int) ((double) (++retried) / totalToRetry * 80));
-                } catch (Exception e) {
-                    long elapsedMs = elapsedMs(startNs);
-                    replacement = buildFailedChunkResult(chunkIdx, chunks.size(), chunk, dispatch, e, elapsedMs);
-                    log.warn("Failed chunk retry still failed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}, reason={}",
-                            taskId, chunkNumber, chunks.size(), chunk.getLabel(), chunk.getEstimatedTokens(),
-                            dispatch.getAppliedRuleNames().size(), elapsedMs, e.getMessage(), e);
-                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                            "失败切片重审仍失败 " + chunkNumber + "/" + chunks.size() + " [" + chunk.getLabel()
-                                    + "]，tokens=" + chunk.getEstimatedTokens()
-                                    + "，规则=" + dispatch.getAppliedRuleNames().size()
-                                    + "，耗时=" + elapsedMs + "ms，原因：" + e.getMessage(),
-                            10 + (int) ((double) (++retried) / totalToRetry * 80));
-                }
-                replaceChunkResult(chunkResults, replacement);
+            List<Integer> validChunkNumbers = failedChunkNumbers.stream()
+                    .filter(n -> n != null && n >= 1 && n <= chunks.size())
+                    .toList();
+            if (validChunkNumbers.size() < failedChunkNumbers.size()) {
+                log.warn("Dropped {} invalid failed chunk number(s) for task {}",
+                        failedChunkNumbers.size() - validChunkNumbers.size(), taskId);
             }
 
-            cancelledTasks.remove(taskId);
+            int totalToRetry = validChunkNumbers.size();
+            int effectiveConcurrency = Math.min(chunkConcurrency, Math.max(1, totalToRetry));
+            log.info("Starting parallel failed-chunk retry: task={}, total={}, concurrency={}",
+                    taskId, totalToRetry, effectiveConcurrency);
+            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                    "开始并行重新审查失败切片，共 " + totalToRetry + " 个（并发度 "
+                            + effectiveConcurrency + "）...", 10);
+
+            // Same parent-thread gating as executeReviewAsync — see comment there for why.
+            Semaphore taskSlots = new Semaphore(effectiveConcurrency);
+            AtomicInteger retriedCount = new AtomicInteger(0);
+            Map<Integer, Map<String, Object>> replacements = new ConcurrentHashMap<>();
+            List<CompletableFuture<Void>> futures = new ArrayList<>(totalToRetry);
+
+            for (Integer chunkNumber : validChunkNumbers) {
+                if (cancelledTasks.contains(taskId)) {
+                    break;
+                }
+                try {
+                    taskSlots.acquire();
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (cancelledTasks.contains(taskId)) {
+                    taskSlots.release();
+                    break;
+                }
+
+                final int chunkIdx = chunkNumber - 1;
+                final int displayChunk = chunkNumber;
+                final ChunkUtils.ChunkResult chunk = chunks.get(chunkIdx);
+                final RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
+                        chunk.getLabel(), chunk.getContent(), preparedRules);
+
+                CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
+                    long startNs = System.nanoTime();
+                    try {
+                        Map<String, Object> replacement;
+                        try {
+                            replacement = reviewSingleChunk(chunkIdx, chunks.size(), chunk, dispatch, chapters, modelConfig);
+                            long elapsedMs = elapsedMs(startNs);
+                            replacement.put("elapsedMs", elapsedMs);
+                            int done = retriedCount.incrementAndGet();
+                            log.info("Failed chunk retry completed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}",
+                                    taskId, displayChunk, chunks.size(), chunk.getLabel(), chunk.getEstimatedTokens(),
+                                    dispatch.getAppliedRuleNames().size(), elapsedMs);
+                            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                    "失败切片重审完成 " + displayChunk + "/" + chunks.size() + " [" + chunk.getLabel()
+                                            + "]，tokens=" + chunk.getEstimatedTokens()
+                                            + "，规则=" + dispatch.getAppliedRuleNames().size()
+                                            + "，耗时=" + elapsedMs + "ms (" + done + "/" + totalToRetry + ")",
+                                    10 + (int) ((double) done / totalToRetry * 80));
+                        } catch (Exception e) {
+                            long elapsedMs = elapsedMs(startNs);
+                            replacement = buildFailedChunkResult(chunkIdx, chunks.size(), chunk, dispatch, e, elapsedMs);
+                            int done = retriedCount.incrementAndGet();
+                            log.warn("Failed chunk retry still failed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}, reason={}",
+                                    taskId, displayChunk, chunks.size(), chunk.getLabel(), chunk.getEstimatedTokens(),
+                                    dispatch.getAppliedRuleNames().size(), elapsedMs, e.getMessage(), e);
+                            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                    "失败切片重审仍失败 " + displayChunk + "/" + chunks.size() + " [" + chunk.getLabel()
+                                            + "]，tokens=" + chunk.getEstimatedTokens()
+                                            + "，规则=" + dispatch.getAppliedRuleNames().size()
+                                            + "，耗时=" + elapsedMs + "ms，原因：" + e.getMessage(),
+                                    10 + (int) ((double) done / totalToRetry * 80));
+                        }
+                        replacements.put(displayChunk, replacement);
+                    } finally {
+                        taskSlots.release();
+                    }
+                }, chunkReviewExecutor);
+
+                futures.add(fut);
+            }
+
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+            if (cancelledTasks.remove(taskId)) {
+                updateTaskStatus(task, ReviewTask.STATUS_CANCELLED, "User cancelled");
+                webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_CANCELLED, "Task cancelled by user");
+                return;
+            }
+
+            List<Map<String, Object>> chunkResults = copyChunkResults(existingResult);
+            for (Map.Entry<Integer, Map<String, Object>> entry : replacements.entrySet()) {
+                replaceChunkResult(chunkResults, entry.getValue());
+            }
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
             saveAiResultToFile(taskId, task.getFileName(), task.getSelectedModel(), runStamp, aggregatedResult);
             task.setAiResult(aggregatedResult);
@@ -489,16 +534,22 @@ public class ReviewService {
             // 性能：原来这里是 for 循环逐切片串行调用，每片 AI 耗时 20~60s 线性叠加，
             // 10 片文档要 5~10 分钟。改为并发调度后，N 片可压缩到 ⌈N/并发⌉ 个 AI 调用时长。
             //
-            // 设计要点：
+            // 多任务并发设计（这里是修过的 bug）：
+            //   - 单任务并发限制在 chunkConcurrency 由 per-task Semaphore 控制；
+            //   - 关键点是 acquire 在 *父线程* 而非子 runnable 内执行，所以慢任务不会把
+            //     N 个子线程全部 park 在 semaphore 上、白占池子。某个文档 50 片，但任一时刻
+            //     只有 4 个 runnable 真正在 chunkReviewExecutor 里跑，其余 46 片还没出 for 循环。
+            //   - 这样另一个任务上传时，池子里有空槽给它的切片，互不阻塞。
+            //
+            // 其余设计要点：
             //   1. 结果按原 chunkIdx 回填到固定大小数组，避免并发追加竞态。
             //   2. 进度按完成数原子递增，UI 看到的百分比始终单调上升。
-            //   3. 不为每个切片各发一条 "开始" 消息（会刷屏），只发一条 "已启动 N 个并行任务"。
-            //   4. 取消信号被消费一次：在所有 future 完成后统一 remove。运行中的 HTTP 调用
-            //      会跑完（CompletableFuture.cancel 在 Java 不能中断 HttpClient.send），但
-            //      未启动的 chunk task 会在入口处快速返回。
+            //   3. 取消：父线程在每次 acquire 前检查，已经在运行的 chunk runnable 自己再判一次。
+            //      运行中的 HTTP 调用会跑完（HttpClient.send 不可中断），但未提交的切片立刻退出。
             int totalChunks = chunks.size();
-            int effectiveConcurrency = Math.min(chunkConcurrency, totalChunks);
-            log.info("Starting parallel chunk review: total={}, concurrency={}", totalChunks, effectiveConcurrency);
+            int effectiveConcurrency = Math.min(chunkConcurrency, Math.max(1, totalChunks));
+            log.info("Starting parallel chunk review: task={}, total={}, concurrency={}",
+                    taskId, totalChunks, effectiveConcurrency);
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                     "文档已切分为 " + totalChunks + " 个片段，开始并行审查（并发度 "
                             + effectiveConcurrency + "）...", 30);
@@ -506,18 +557,31 @@ public class ReviewService {
             @SuppressWarnings({"unchecked", "rawtypes"})
             final Map<String, Object>[] orderedResults = new Map[totalChunks];
             AtomicInteger completedCount = new AtomicInteger(0);
+            Semaphore taskSlots = new Semaphore(effectiveConcurrency);
             List<CompletableFuture<Void>> futures = new ArrayList<>(totalChunks);
 
             for (int i = 0; i < totalChunks; i++) {
+                if (cancelledTasks.contains(taskId)) {
+                    break;
+                }
+                // Gate on the parent thread so we never have more than `effectiveConcurrency`
+                // chunk runnables in the executor at once — see the design note above.
+                try {
+                    taskSlots.acquire();
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (cancelledTasks.contains(taskId)) {
+                    taskSlots.release();
+                    break;
+                }
+
                 final int chunkIdx = i;
                 final ChunkUtils.ChunkResult chunk = chunks.get(i);
                 final RuleDispatcher.DispatchResult dispatch = dispatches.get(i);
 
                 CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
-                    // 任务已被取消时，未启动的切片立即返回。
-                    if (cancelledTasks.contains(taskId)) {
-                        return;
-                    }
                     long startNs = System.nanoTime();
                     try {
                         Map<String, Object> chunkResult = reviewSingleChunk(
@@ -553,6 +617,8 @@ public class ReviewService {
                                         + "，规则=" + dispatch.getAppliedRuleNames().size()
                                         + "，耗时=" + elapsedMs + "ms，原因：" + e.getMessage(),
                                 progress);
+                    } finally {
+                        taskSlots.release();
                     }
                 }, chunkReviewExecutor);
 
@@ -943,7 +1009,21 @@ public class ReviewService {
     }
 
     /**
-     * Call the AI model with retry logic.
+     * Call the AI model with **smart** retry logic:
+     * <ul>
+     *   <li>4xx (except 429) → fail fast. These are permanent client-side errors
+     *       (bad request, expired key, wrong model id) — retrying just wastes
+     *       {@code retryIntervalMs × maxRetryAttempts} of wall-clock time.</li>
+     *   <li>429 / 5xx / network errors / transient response parsing failures →
+     *       retry with exponential backoff: {@code retryIntervalMs × 2^(attempt-1)},
+     *       capped at 30s so a misconfigured {@code maxRetryAttempts=10} doesn't
+     *       sleep for 8 minutes.</li>
+     *   <li>InterruptedException → propagate immediately, preserving interrupt
+     *       status so task cancellation works.</li>
+     * </ul>
+     *
+     * <p>With the defaults ({@code maxAttempts=4}, {@code intervalMs=1000}) the
+     * total backoff budget is 1+2+4=7s instead of the previous 4×6=24s.
      */
     private String callWithRetry(AiModelConfig config, String systemPrompt,
                                   String userContent) throws Exception {
@@ -951,16 +1031,34 @@ public class ReviewService {
         for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
             try {
                 return aiModelService.callAiModel(config, systemPrompt, userContent);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Review interrupted", ie);
+            } catch (AiApiException ae) {
+                if (!ae.isRetryable()) {
+                    log.warn("AI model returned non-retryable HTTP {} — failing fast: {}",
+                            ae.getStatusCode(), ae.getMessage());
+                    throw new RuntimeException(
+                            "AI调用失败(HTTP " + ae.getStatusCode() + "，不可重试): " + ae.getResponseBody(),
+                            ae);
+                }
+                lastException = ae;
+                log.warn("AI model call attempt {}/{} failed (retryable HTTP {}): {}",
+                        attempt, maxRetryAttempts, ae.getStatusCode(), ae.getMessage());
             } catch (Exception e) {
+                // IOException (network), or runtime errors thrown by callAiModel itself
+                // (empty choices / unparseable JSON / etc.) — treat as transient.
                 lastException = e;
-                log.warn("AI model call attempt {}/{} failed: {}", attempt, maxRetryAttempts, e.getMessage());
-                if (attempt < maxRetryAttempts) {
-                    try {
-                        Thread.sleep(retryIntervalMs);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException("Review interrupted", ie);
-                    }
+                log.warn("AI model call attempt {}/{} failed: {}",
+                        attempt, maxRetryAttempts, e.getMessage());
+            }
+            if (attempt < maxRetryAttempts) {
+                long sleepMs = Math.min(retryIntervalMs * (1L << (attempt - 1)), 30_000L);
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Review interrupted", ie);
                 }
             }
         }

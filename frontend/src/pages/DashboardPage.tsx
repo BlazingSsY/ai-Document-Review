@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -13,6 +13,7 @@ import {
   Typography,
   Modal,
   Form,
+  Progress,
   message,
   Popconfirm,
 } from 'antd';
@@ -22,7 +23,6 @@ import {
   SyncOutlined,
   PlusOutlined,
   ThunderboltOutlined,
-  SettingOutlined,
   StopOutlined,
   RedoOutlined,
   DeleteOutlined,
@@ -61,13 +61,14 @@ function DashboardPage() {
   const [scenarioId, setScenarioId] = useState<number | undefined>();
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [taskStatus, setTaskStatus] = useState('');
-  const progressHandlerRef = useRef<((data: TaskProgressMessage) => void) | null>(null);
 
   // Track if there are truly active processing tasks (for spinner)
   const [hasActiveProcessing, setHasActiveProcessing] = useState(false);
+
+  // Per-task progress driven by the global WS feed. Used to render an inline
+  // progress bar in the task table so users see retry / first-pass progress
+  // without having to open the workspace.
+  const [taskProgress, setTaskProgress] = useState<Record<string, number>>({});
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -99,9 +100,24 @@ function DashboardPage() {
     // Connect websocket for global task updates
     taskWebSocket.connect();
     const globalHandler = (data: TaskProgressMessage) => {
-      if (data.status === 'COMPLETED' || data.status === 'FAILED' || data.status === 'CANCELLED') {
+      const s = data.status?.toUpperCase();
+      if (s === 'COMPLETED' || s === 'FAILED' || s === 'CANCELLED') {
+        // Terminal state — drop per-task progress so the bar doesn't linger after the row flips.
+        setTaskProgress((prev) => {
+          if (!(data.taskId in prev)) return prev;
+          const next = { ...prev };
+          delete next[data.taskId];
+          return next;
+        });
         fetchStats();
         fetchTasks();
+      } else if (data.taskId && typeof data.progress === 'number') {
+        setTaskProgress((prev) => {
+          // Progress should be monotonic — guard against stale frames arriving out of order.
+          const current = prev[data.taskId] ?? 0;
+          if (data.progress <= current) return prev;
+          return { ...prev, [data.taskId]: data.progress };
+        });
       }
     };
     taskWebSocket.subscribe('*', globalHandler);
@@ -133,47 +149,18 @@ function DashboardPage() {
     }
   }, [reviewModalOpen]);
 
-  const handleProgressUpdate = useCallback((data: TaskProgressMessage) => {
-    setProgress(data.progress);
-    setTaskStatus(data.status);
-    if (data.status === 'completed' || data.status === 'COMPLETED') {
-      setCurrentStep(3);
-      fetchStats();
-      fetchTasks();
-    } else if (data.status === 'failed' || data.status === 'FAILED') {
-      message.error(data.message || '审查任务失败');
-    } else if (data.status === 'cancelled' || data.status === 'CANCELLED') {
-      message.info('审查任务已取消');
-      setCurrentStep(0);
-      setProgress(0);
-      setTaskStatus('');
-      fetchStats();
-      fetchTasks();
-    }
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (taskId && progressHandlerRef.current) {
-        taskWebSocket.unsubscribe(taskId, progressHandlerRef.current);
-      }
-    };
-  }, [taskId]);
-
   const handleSubmit = async () => {
     if (!selectedFile) { message.warning('请先上传文件'); return; }
     if (!scenarioId) { message.warning('请选择审查场景'); return; }
     if (!selectedModel) { message.warning('请选择 AI 模型'); return; }
 
     setSubmitting(true);
-    let newTaskId: string | null = null;
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('scenarioId', String(scenarioId));
       formData.append('selectedModel', selectedModel);
-      const res = await submitReview(formData);
-      newTaskId = res.data.data.id;
+      await submitReview(formData);
       message.success('审查任务已提交');
     } catch {
       // The interceptor already surfaced the error. Even on failure (e.g. client-side
@@ -193,16 +180,11 @@ function DashboardPage() {
     setReviewModalOpen(false);
     resetReviewModal();
 
-    // Refresh task list & stats
+    // The global WS handler above already streams per-task progress into
+    // taskProgress, which the status column renders inline. No per-modal
+    // subscription is needed — the modal closes on submit anyway.
     fetchTasks();
     fetchStats();
-
-    // Subscribe to progress updates for global handler
-    if (newTaskId) {
-      setTaskId(newTaskId);
-      progressHandlerRef.current = handleProgressUpdate;
-      taskWebSocket.subscribe(newTaskId, handleProgressUpdate);
-    }
   };
 
   const handleCancel = async (tid: string) => {
@@ -238,30 +220,11 @@ function DashboardPage() {
     }
   };
 
-  const handleCancelCurrent = async () => {
-    if (!taskId) return;
-    try {
-      await cancelReview(taskId);
-      message.success('任务已取消');
-      setCurrentStep(0);
-      setProgress(0);
-      setTaskStatus('');
-      setTaskId(null);
-      fetchTasks();
-      fetchStats();
-    } catch {
-      // handled
-    }
-  };
-
   const resetReviewModal = () => {
     setCurrentStep(0);
     setSelectedFile(null);
     setScenarioId(undefined);
     setSelectedModel(undefined);
-    setTaskId(null);
-    setProgress(0);
-    setTaskStatus('');
   };
 
   const columns: ColumnsType<ReviewTask> = [
@@ -280,12 +243,26 @@ function DashboardPage() {
     },
     {
       title: '状态',
-      dataIndex: 'status',
       key: 'status',
-      width: 100,
-      render: (status: string) => {
-        const s = status?.toLowerCase();
-        return <Tag color={STATUS_COLORS[s]}>{STATUS_LABELS[s] || status}</Tag>;
+      width: 160,
+      render: (_, record) => {
+        const s = record.status?.toLowerCase();
+        const tag = <Tag color={STATUS_COLORS[s]}>{STATUS_LABELS[s] || record.status}</Tag>;
+        if (s !== 'processing') return tag;
+        const pct = taskProgress[record.id];
+        if (pct === undefined) return tag;
+        return (
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            {tag}
+            <Progress
+              percent={pct}
+              size="small"
+              status="active"
+              showInfo
+              strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
+            />
+          </Space>
+        );
       },
     },
     {
@@ -360,11 +337,6 @@ function DashboardPage() {
         );
       },
     },
-  ];
-
-  const steps = [
-    { title: '上传文件', icon: <FileTextOutlined /> },
-    { title: '配置参数', icon: <SettingOutlined /> },
   ];
 
   return (

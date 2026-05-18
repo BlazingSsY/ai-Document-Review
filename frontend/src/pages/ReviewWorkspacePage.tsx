@@ -135,8 +135,13 @@ function ReviewWorkspacePage() {
     setRetryingFailed(true);
     try {
       const res = await retryFailedChunks(taskId);
+      // The DTO comes back with status=PROCESSING already set by the backend, which
+      // is what flips `isProcessing` on (and thus reveals the progress bar). Seed
+      // wsProgress so the bar shows immediately instead of flickering in once the
+      // first WS frame lands.
       setTask(res.data.data);
-      setWsProgress(5);
+      setWsProgress(10);
+      addLog('info', '开始重新审查失败切片...');
       message.success('失败切片重审已提交');
     } catch {
       message.error('失败切片重审提交失败');
