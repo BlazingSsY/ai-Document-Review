@@ -101,6 +101,13 @@
             <version>${fastjson2.version}</version>
         </dependency>
 
+        <!-- JSON Schema validator for v2 review pipeline (LlmClient strict structured output) -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.4.0</version>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>

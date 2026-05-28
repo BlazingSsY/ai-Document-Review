@@ -49,6 +49,9 @@ services:
     volumes:
       - upload_files:/app/uploads
       - ./output:/app/output
+      # v2 PromptsMigrationRunner reads prompts.json from this mount when
+      # review.prompts.migration.run-on-startup=true.
+      - ./prompts:/app/prompts:ro
     networks:
       - ai-review-net
 

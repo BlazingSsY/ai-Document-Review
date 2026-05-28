@@ -116,6 +116,131 @@ CREATE TABLE IF NOT EXISTS user_library_assignment (
     PRIMARY KEY (user_id, library_id)
 );
 
+-- =========================================================================
+-- v2 审查管线表（"原子检查 + 证据绑定 + 选择性复核" 引擎）
+--
+-- 旧引擎把每个切片连同所有命中规则一次性塞给模型自由发挥，导致换模型时错误数
+-- 差距极大、且无法追溯。v2 引擎把规则拆成原子 check，每个 (chunk × rule) 单
+-- 独调用一次模型，强制 JSON Schema 输出，要求模型给出原文证据 span，后端再
+-- 校验、去重、对 high severity 二阶段复核。下面 5 张表承载该流程的全部状态。
+-- =========================================================================
+
+-- 一条 rule 下的原子检查项（一对多）。从 prompts.json 自动迁移生成。
+CREATE TABLE IF NOT EXISTS rule_checks (
+    id                  BIGSERIAL       PRIMARY KEY,
+    rule_id             BIGINT          NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+    -- 全局唯一编码，形如 "G-1-test_unit.must_contain_unit_name"。
+    -- 同一 rule 下不能重复；模型必须按此编码回写结果，便于精确去重 & 审计。
+    check_code          VARCHAR(160)    NOT NULL,
+    -- 枚举：presence / format / consistency / numeric / reference / other
+    check_type          VARCHAR(32)     NOT NULL DEFAULT 'presence',
+    -- 给模型的判断问题（应是单一是/否问题，避免主观）
+    question            TEXT            NOT NULL,
+    -- pass 的明确判据，用于消除"清晰、合理"等主观词的歧义
+    pass_criteria       TEXT            NOT NULL,
+    -- fail 时归到这个 severity；high 会进入第二阶段复核
+    fail_severity       VARCHAR(16)     NOT NULL DEFAULT 'medium',
+    -- 用于前端 categoryCounts 聚合
+    category            VARCHAR(64),
+    -- 是否要求模型必须给出原文证据 span（默认 true）
+    evidence_required   BOOLEAN         NOT NULL DEFAULT TRUE,
+    display_order       INTEGER         NOT NULL DEFAULT 0,
+    is_active           BOOLEAN         NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    UNIQUE (rule_id, check_code)
+);
+CREATE INDEX IF NOT EXISTS idx_rule_checks_rule ON rule_checks(rule_id);
+
+-- 每条 check 的正/反例 few-shot，用于在 prompt 中锚定"什么算 pass / fail"。
+CREATE TABLE IF NOT EXISTS rule_check_examples (
+    id              BIGSERIAL       PRIMARY KEY,
+    check_id        BIGINT          NOT NULL REFERENCES rule_checks(id) ON DELETE CASCADE,
+    polarity        VARCHAR(8)      NOT NULL,   -- 'positive' 或 'negative'
+    example_text    TEXT            NOT NULL,
+    explanation     TEXT,
+    display_order   INTEGER         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rule_check_examples_check ON rule_check_examples(check_id);
+
+-- 单次审查任务的执行计划与统计（与 review_tasks 1:1）。
+CREATE TABLE IF NOT EXISTS review_pipelines (
+    id                      BIGSERIAL       PRIMARY KEY,
+    task_id                 VARCHAR(36)     NOT NULL UNIQUE REFERENCES review_tasks(id) ON DELETE CASCADE,
+    total_chunks            INTEGER         NOT NULL DEFAULT 0,
+    -- 计划要执行的 (chunk, rule) 对总数；执行完毕后用来计算覆盖率
+    total_rule_invocations  INTEGER         NOT NULL DEFAULT 0,
+    executed_invocations    INTEGER         NOT NULL DEFAULT 0,
+    -- 解析失败 / 模型拒答的 (chunk, rule) 对数；这些不计入 finding 但要展示
+    inconclusive_invocations INTEGER        NOT NULL DEFAULT 0,
+    stage1_findings         INTEGER         NOT NULL DEFAULT 0,
+    -- 仅对 high severity finding 才会有这两个计数
+    stage2_confirmed        INTEGER         NOT NULL DEFAULT 0,
+    stage2_rejected         INTEGER         NOT NULL DEFAULT 0,
+    -- 'PLANNED' / 'RECALLING' / 'VERIFYING' / 'DONE' / 'FAILED'
+    status                  VARCHAR(16)     NOT NULL DEFAULT 'PLANNED',
+    started_at              TIMESTAMP,
+    finished_at             TIMESTAMP,
+    created_at              TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_review_pipelines_task ON review_pipelines(task_id);
+
+-- 最终展示给前端的 finding 来源（aiResult.allIssues 即从此表渲染）。
+CREATE TABLE IF NOT EXISTS review_findings (
+    id                  BIGSERIAL       PRIMARY KEY,
+    pipeline_id         BIGINT          NOT NULL REFERENCES review_pipelines(id) ON DELETE CASCADE,
+    -- 该 finding 首次被发现时所在的切片
+    chunk_index         INTEGER         NOT NULL,
+    chunk_label         TEXT,
+    rule_id             BIGINT          NOT NULL,
+    rule_code           VARCHAR(160)    NOT NULL,
+    check_id            BIGINT          NOT NULL,
+    check_code          VARCHAR(160)    NOT NULL,
+    severity            VARCHAR(16)     NOT NULL,
+    category            VARCHAR(64),
+    description         TEXT            NOT NULL,
+    suggestion          TEXT,
+    -- 模型给出的、必须在原文中能找到的子串
+    evidence_span       TEXT            NOT NULL,
+    -- 去重用的归一化 span（空白折叠、去标点、转小写）
+    normalized_span     TEXT            NOT NULL,
+    -- 跨切片合并后所有出现位置: [{"chunkIndex":1,"charOffset":234}, ...]
+    occurrences         JSONB,
+    stage1_confidence   DOUBLE PRECISION,
+    -- 'N/A'（低/中优先级不复核） / 'CONFIRMED' / 'REJECTED' / 'UNCERTAIN'
+    stage2_status       VARCHAR(16)     NOT NULL DEFAULT 'N/A',
+    stage2_reason       TEXT,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    -- 同一 pipeline 内 (check + 归一化 span) 唯一，天然去重
+    UNIQUE (pipeline_id, check_code, normalized_span)
+);
+CREATE INDEX IF NOT EXISTS idx_review_findings_pipeline ON review_findings(pipeline_id);
+
+-- 每一次 LLM 调用的完整原始审计（用户已确认接受每任务多几 MB 存储成本）。
+-- 用于事后诊断"为什么这两个模型的结果差距大"——直接对比 request/response。
+CREATE TABLE IF NOT EXISTS ai_call_logs (
+    id              BIGSERIAL       PRIMARY KEY,
+    pipeline_id     BIGINT          REFERENCES review_pipelines(id) ON DELETE CASCADE,
+    -- 'RECALL' / 'VERIFY' / 'MIGRATION'
+    stage           VARCHAR(16)     NOT NULL,
+    chunk_index     INTEGER,
+    rule_id         BIGINT,
+    check_id        BIGINT,
+    model_key       VARCHAR(128)    NOT NULL,
+    attempt         INTEGER         NOT NULL DEFAULT 1,
+    request_body    JSONB           NOT NULL,
+    response_body   JSONB,
+    parsed_output   JSONB,
+    schema_valid    BOOLEAN,
+    http_status     INTEGER,
+    duration_ms     INTEGER,
+    error_message   TEXT,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_call_logs_pipeline ON ai_call_logs(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_ai_call_logs_stage ON ai_call_logs(stage);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_rules_creator ON rules(creator_id);
 CREATE INDEX IF NOT EXISTS idx_rules_library ON rules(library_id);
