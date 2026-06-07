@@ -192,90 +192,211 @@ public class AiModelService {
     }
 
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent) throws Exception {
+        return callAiModel(config, systemPrompt, userContent, AiCallOptions.defaults());
+    }
+
+    /**
+     * 收敛性审查主用入口。在 legacy 调用基础上加三件事：
+     * <ol>
+     *   <li>统一参数：temperature / top_p / seed / max_tokens 全部按 {@link AiCallOptions} 强制；
+     *       思维模型仍 omit temperature 以避免 Moonshot/GLM 的 400 拒绝。</li>
+     *   <li>provider 结构化输出：OpenAI 兼容协议走 {@code response_format=json_schema}，
+     *       Anthropic 走 {@code tool_use+tool_choice=tool}，其余 fallback 到
+     *       {@code response_format=json_object} 或仅 prompt 约束。</li>
+     *   <li>Anthropic 协议适配：headers 用 {@code x-api-key + anthropic-version}，
+     *       system 单独字段，响应解析 {@code content[].text} 与 {@code tool_use.input}。</li>
+     * </ol>
+     */
+    public String callAiModel(AiModelConfig config, String systemPrompt, String userContent,
+                               AiCallOptions options) throws Exception {
+        if (options == null) options = AiCallOptions.defaults();
         String fullUrl = buildFullApiUrl(config);
         log.info("Calling AI model: {} at {} (resolved URL: {})", config.getModelName(), config.getEndpoint(), fullUrl);
 
-        // Guard against masked API keys
         if (config.getApiKey() == null || config.getApiKey().contains("****")) {
             throw new RuntimeException("API Key 无效或已被脱敏，请重新配置模型的 API Key");
         }
 
         boolean thinking = isThinkingModel(config);
+        String provider = config.getProvider() != null ? config.getProvider().toLowerCase(Locale.ROOT) : "openai";
+        boolean isAnthropic = "anthropic".equals(provider);
 
-        JSONObject requestBody = new JSONObject();
-        requestBody.put("model", config.getModelKey() != null && !config.getModelKey().isBlank()
-                ? config.getModelKey() : config.getModelName());
+        int timeoutSec = config.getTimeout() != null ? config.getTimeout() : 180;
+        int maxTokens = resolveMaxTokens(config, options, thinking);
 
-        // Thinking-mode models (kimi-k2-thinking / kimi-k2.6 / GLM-4.5 / GLM-4.6 /
-        // GLM-5 / GLM-5.1, ...) enforce a fixed temperature on the server side. The
-        // Moonshot API explicitly rejects any temperature ≠ 1 with a 400 "invalid
-        // temperature" error. The cleanest behaviour is to OMIT temperature for
-        // these models so the API applies its own default.
-        if (!thinking) {
-            requestBody.put("temperature", config.getTemperature() != null ? config.getTemperature() : 0.1);
+        JSONObject requestBody = isAnthropic
+                ? buildAnthropicRequestBody(config, systemPrompt, userContent, options, thinking, maxTokens)
+                : buildOpenAiRequestBody(config, systemPrompt, userContent, options, thinking, maxTokens);
+
+        HttpRequest.Builder rb = HttpRequest.newBuilder()
+                .uri(URI.create(fullUrl))
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(timeoutSec))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()));
+        if (isAnthropic) {
+            rb.header("x-api-key", config.getApiKey());
+            rb.header("anthropic-version", "2023-06-01");
         } else {
-            log.info("Detected thinking-mode model ({}): omitting temperature so server default applies",
-                    config.getModelKey());
+            rb.header("Authorization", "Bearer " + config.getApiKey());
+        }
+        HttpRequest request = rb.build();
+
+        log.debug("AI request body (truncated): provider={}, model={}, thinking={}, structured={}, seed={}, contentLen={}",
+                provider, requestBody.getString("model"), thinking,
+                options.getStructuredSchema() != null, options.getSeed(), userContent.length());
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
+            throw new AiApiException(response.statusCode(), response.body(),
+                    "AI API HTTP " + response.statusCode() + ": " + response.body());
         }
 
-        // For thinking models, max_tokens covers BOTH reasoning_content and the
-        // final content. The Kimi docs recommend ≥ 16 000 to avoid the answer
-        // being truncated mid-thought.
-        int maxTokens = config.getMaxTokens() != null ? config.getMaxTokens() : 4096;
+        String content = isAnthropic
+                ? parseAnthropicResponse(response.body())
+                : parseOpenAiResponse(response.body());
+        log.info("AI model response received, length: {}", content.length());
+        return content;
+    }
+
+    /** 解析 max_tokens：optional 覆盖 → 思维模型最小 16000 → 配置默认 → 4096 兜底。 */
+    private int resolveMaxTokens(AiModelConfig config, AiCallOptions options, boolean thinking) {
+        int maxTokens = options.getMaxTokensOverride() != null
+                ? options.getMaxTokensOverride()
+                : (config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
         if (thinking && maxTokens < 16000) {
             log.info("Bumping max_tokens from {} → 16000 for thinking-mode model {}",
                     maxTokens, config.getModelKey());
             maxTokens = 16000;
         }
-        requestBody.put("max_tokens", maxTokens);
+        return maxTokens;
+    }
+
+    /** OpenAI / Moonshot / GLM / Qwen / DeepSeek 等兼容协议的请求体。 */
+    private JSONObject buildOpenAiRequestBody(AiModelConfig config, String systemPrompt, String userContent,
+                                               AiCallOptions options, boolean thinking, int maxTokens) {
+        JSONObject body = new JSONObject();
+        body.put("model", resolveModelId(config));
+        // Thinking-mode models lock temperature server-side (Moonshot 拒绝 ≠ 1 / GLM 也是),
+        // 因此只在非思维模型上传 temperature；options 优先于 config 的历史默认值。
+        if (!thinking) {
+            Double t = options.getTemperature() != null ? options.getTemperature()
+                    : (config.getTemperature() != null ? config.getTemperature() : 0.1);
+            body.put("temperature", t);
+        } else {
+            log.info("Thinking-mode model ({}): omitting temperature so server default applies",
+                    config.getModelKey());
+        }
+        if (options.getTopP() != null) {
+            body.put("top_p", options.getTopP());
+        }
+        if (options.getSeed() != null) {
+            // OpenAI / Moonshot / DeepSeek 都支持 seed；GLM 忽略；不会报错。
+            body.put("seed", options.getSeed());
+        }
+        body.put("max_tokens", maxTokens);
 
         JSONArray messages = new JSONArray();
         JSONObject systemMsg = new JSONObject();
         systemMsg.put("role", "system");
         systemMsg.put("content", systemPrompt);
         messages.add(systemMsg);
-
         JSONObject userMsg = new JSONObject();
         userMsg.put("role", "user");
         userMsg.put("content", userContent);
         messages.add(userMsg);
+        body.put("messages", messages);
 
-        requestBody.put("messages", messages);
+        // 结构化输出：优先用 json_schema，没有 schema 但要求 JSON 时回退 json_object。
+        if (options.getStructuredSchema() != null) {
+            JSONObject responseFormat = new JSONObject();
+            responseFormat.put("type", "json_schema");
+            JSONObject jsonSchema = new JSONObject();
+            jsonSchema.put("name", options.getStructuredSchemaName());
+            jsonSchema.put("strict", true);
+            jsonSchema.put("schema", options.getStructuredSchema());
+            responseFormat.put("json_schema", jsonSchema);
+            body.put("response_format", responseFormat);
+        } else if (options.isForceJsonObjectFallback()) {
+            JSONObject responseFormat = new JSONObject();
+            responseFormat.put("type", "json_object");
+            body.put("response_format", responseFormat);
+        }
+        return body;
+    }
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(fullUrl))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + config.getApiKey())
-                .timeout(Duration.ofSeconds(config.getTimeout() != null ? config.getTimeout() : 180))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
-                .build();
-
-        log.debug("AI request body (truncated): model={}, messages count={}, content length={}, thinking={}",
-                requestBody.getString("model"), messages.size(), userContent.length(), thinking);
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-        if (response.statusCode() != 200) {
-            log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
-            // Throw a typed exception so the retry layer can distinguish 4xx (permanent,
-            // fail fast) from 5xx/429 (transient, retry with backoff).
-            throw new AiApiException(response.statusCode(), response.body(),
-                    "AI API HTTP " + response.statusCode() + ": " + response.body());
+    /** Anthropic /v1/messages 请求体；用 tool_use 强制结构化输出。 */
+    private JSONObject buildAnthropicRequestBody(AiModelConfig config, String systemPrompt, String userContent,
+                                                  AiCallOptions options, boolean thinking, int maxTokens) {
+        JSONObject body = new JSONObject();
+        body.put("model", resolveModelId(config));
+        body.put("max_tokens", maxTokens);
+        // 启用 prompt 缓存时，system 必须用 content block 数组形式才能挂 cache_control。
+        // 5 分钟 ephemeral TTL；首次写入按 1.25× 价、命中按 0.1× 价。
+        if (options.isEnablePromptCache()) {
+            JSONArray sysBlocks = new JSONArray();
+            JSONObject block = new JSONObject();
+            block.put("type", "text");
+            block.put("text", systemPrompt);
+            JSONObject cc = new JSONObject();
+            cc.put("type", "ephemeral");
+            block.put("cache_control", cc);
+            sysBlocks.add(block);
+            body.put("system", sysBlocks);
+        } else {
+            body.put("system", systemPrompt);
         }
 
-        JSONObject responseBody = JSON.parseObject(response.body());
+        JSONArray messages = new JSONArray();
+        JSONObject userMsg = new JSONObject();
+        userMsg.put("role", "user");
+        userMsg.put("content", userContent);
+        messages.add(userMsg);
+        body.put("messages", messages);
+
+        if (!thinking) {
+            Double t = options.getTemperature() != null ? options.getTemperature()
+                    : (config.getTemperature() != null ? config.getTemperature() : 0.1);
+            body.put("temperature", t);
+        }
+        if (options.getTopP() != null) {
+            body.put("top_p", options.getTopP());
+        }
+        // Anthropic 不支持 seed，跳过即可。
+
+        // tool_use 强制结构化输出：定义一个 submit_review_result 工具并强制调用它，
+        // 这样 Claude 必须返回严格匹配 input_schema 的参数对象。
+        if (options.getStructuredSchema() != null) {
+            JSONArray tools = new JSONArray();
+            JSONObject tool = new JSONObject();
+            tool.put("name", options.getStructuredSchemaName());
+            tool.put("description", "返回结构化的文档审查结果。");
+            tool.put("input_schema", options.getStructuredSchema());
+            tools.add(tool);
+            body.put("tools", tools);
+            JSONObject toolChoice = new JSONObject();
+            toolChoice.put("type", "tool");
+            toolChoice.put("name", options.getStructuredSchemaName());
+            body.put("tool_choice", toolChoice);
+        }
+        return body;
+    }
+
+    private String resolveModelId(AiModelConfig config) {
+        return config.getModelKey() != null && !config.getModelKey().isBlank()
+                ? config.getModelKey() : config.getModelName();
+    }
+
+    /** 解析 OpenAI 兼容协议的响应；处理 thinking 模型的 reasoning_content 回退。 */
+    private String parseOpenAiResponse(String body) {
+        JSONObject responseBody = JSON.parseObject(body);
         JSONArray choices = responseBody.getJSONArray("choices");
         if (choices == null || choices.isEmpty()) {
-            log.error("AI model returned empty choices. Full response: {}", response.body());
+            log.error("AI model returned empty choices. Full response: {}", body);
             throw new RuntimeException("AI model returned empty response");
         }
-
         JSONObject message = choices.getJSONObject(0).getJSONObject("message");
-        // Thinking models return both `reasoning_content` (the chain-of-thought) and
-        // `content` (the final answer). We always want `content`; fall back to
-        // `reasoning_content` only if `content` is missing — that usually indicates
-        // the model was truncated before producing the final answer and the user
-        // still benefits from seeing the reasoning text.
         String content = message.getString("content");
         if (content == null || content.isBlank()) {
             String reasoning = message.getString("reasoning_content");
@@ -285,10 +406,34 @@ public class AiModelService {
                 content = reasoning;
             }
         }
-        if (content == null) content = "";
+        return content == null ? "" : content;
+    }
 
-        log.info("AI model response received, length: {}", content.length());
-        return content;
+    /**
+     * 解析 Anthropic /v1/messages 的响应。优先取 tool_use 的 input（结构化输出场景），
+     * 否则拼接 content[].text。
+     */
+    private String parseAnthropicResponse(String body) {
+        JSONObject responseBody = JSON.parseObject(body);
+        JSONArray content = responseBody.getJSONArray("content");
+        if (content == null || content.isEmpty()) {
+            log.error("Anthropic returned empty content. Full response: {}", body);
+            throw new RuntimeException("Anthropic returned empty response");
+        }
+        StringBuilder textBuf = new StringBuilder();
+        for (int i = 0; i < content.size(); i++) {
+            JSONObject block = content.getJSONObject(i);
+            String type = block.getString("type");
+            if ("tool_use".equals(type)) {
+                // 结构化输出主路径：直接返回 input 的 JSON 字符串。
+                JSONObject input = block.getJSONObject("input");
+                if (input != null) return input.toJSONString();
+            } else if ("text".equals(type)) {
+                String t = block.getString("text");
+                if (t != null) textBuf.append(t);
+            }
+        }
+        return textBuf.toString();
     }
 
     /**
@@ -354,7 +499,10 @@ public class AiModelService {
         dto.setTemperature(config.getTemperature() != null ? config.getTemperature() : 0.7);
         dto.setTimeout(config.getTimeout() != null ? config.getTimeout() : 180);
         dto.setEnabled(config.getIsEnabled());
-        dto.setThinkingMode(config.getThinkingMode() != null ? config.getThinkingMode() : Boolean.FALSE);
+        boolean isThinking = isThinkingModel(config);
+        dto.setThinkingMode(isThinking);
+        // 思维模型不能参与跨模型对比：温度服务器锁、seed 通常不支持、采样不收敛。
+        dto.setCrossModelEligible(!isThinking);
         dto.setCreatedAt(config.getCreatedAt());
         dto.setUpdatedAt(config.getUpdatedAt());
         return dto;

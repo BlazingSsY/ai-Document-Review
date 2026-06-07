@@ -1,8 +1,10 @@
 package com.aireview.util;
 
+import com.aireview.review.ReviewResultSchema;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.JSONWriter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -10,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -232,6 +235,159 @@ public class RuleParser {
         }
 
         return sp.toString();
+    }
+
+    /**
+     * 收敛性审查的四段式系统提示词。结构固定：
+     * <ol>
+     *   <li>ROLE + 任务（极简，不到 200 字）；</li>
+     *   <li>JSON Schema（机器可读，直接 stringify {@link ReviewResultSchema#schema()}）；</li>
+     *   <li>Few-shot 锚点：1 正例 + 1 不通过例 + 1 不适用例，含 severity / category 判定说明；</li>
+     *   <li>规则清单：调用方已按 {@code rule_code} 升序排序，每条以 {@code [R-XXX]} 编号；</li>
+     * </ol>
+     * 末尾追加严重度默认值兜底和"只能用清单内编号"的约束，把模型自由度压到最小。
+     */
+    public static String buildStructuredSystemPrompt(List<RuleEntry> rules) {
+        List<RuleEntry> sorted = new ArrayList<>(rules == null ? List.of() : rules);
+        sorted.sort(Comparator
+                .comparing((RuleEntry e) -> orderKey(e.code))
+                .thenComparing(e -> e.name == null ? "" : e.name));
+
+        StringBuilder sp = new StringBuilder();
+
+        // ① ROLE + 任务
+        sp.append("【角色与任务】\n");
+        sp.append("你是一名专业的文档审查员。请仅基于本提示词内列出的规则审查用户消息中的章节内容，使用中文回复。\n");
+        sp.append("禁止补充未在规则中出现的检查项；禁止臆断、推测、自由发挥。\n\n");
+
+        // ② JSON Schema
+        sp.append("【输出 Schema（必须严格遵守）】\n");
+        sp.append("你的输出必须是一个合法 JSON 对象，且符合以下 JSON Schema：\n");
+        sp.append("```json\n");
+        sp.append(JSON.toJSONString(ReviewResultSchema.schema(),
+                JSONWriter.Feature.PrettyFormat, JSONWriter.Feature.WriteMapNullValue));
+        sp.append("\n```\n");
+        sp.append("禁止输出任何解释、前后缀、markdown 围栏；只能是符合上述 schema 的 JSON 对象本身。\n\n");
+
+        // ③ Few-shot 锚点
+        sp.append("【判定锚点 / Few-shot】\n");
+        sp.append("severity 锚点（默认值 medium）：\n");
+        sp.append("  - high   = 缺失或错误会直接导致大纲不可用、不符合强制性标准条款；\n");
+        sp.append("  - medium = 影响审查或评审一致性，但不阻断；\n");
+        sp.append("  - low    = 表述/格式问题，不影响实质内容。\n");
+        sp.append("category 锚点：必须从 [格式, 完整性, 标准符合性, 逻辑一致性, 术语一致性, 其他] 中选；无法归类填 其他。\n");
+        sp.append("rule_code 锚点：必须使用本提示词【审查规则清单】中给出的 [R-XXX] 编号；本次未注入的编号一律不得使用。\n");
+        sp.append("location 锚点：按 \"一级标题 > 二级标题 > 三级标题\" 写，逐字与原文一致，禁止仅写 \"原文\" / \"表格中\" / \"上文\"。\n\n");
+        sp.append("示例 1（正例，识别为问题）：\n");
+        sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"severity\":\"high\",\"category\":\"完整性\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\"}],\"passed_items\":[]}\n");
+        sp.append("示例 2（反例，规则不适用 → 不产生 issue）：\n");
+        sp.append("{\"summary\":\"本切片为目录页，所有规则不适用\",\"issues\":[],\"passed_items\":[\"[R-001] 规则不适用于目录\"]}\n");
+        sp.append("示例 3（混合，部分通过部分不通过）：\n");
+        sp.append("{\"summary\":\"试验步骤完整，但术语不一致\",\"issues\":[{\"location\":\"5 试验步骤 > 5.3\",\"description\":\"同一项目混用 \\\"试件\\\" 与 \\\"样件\\\"\",\"suggestion\":\"统一为 \\\"试件\\\"\",\"rule\":\"术语一致性\",\"rule_code\":\"R-007\",\"severity\":\"low\",\"category\":\"术语一致性\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\"}],\"passed_items\":[\"[R-003] 试验步骤完整\"]}\n\n");
+
+        // ④ 规则清单
+        sp.append("【审查规则清单（按 rule_code 升序）】\n");
+        List<String> manifest = new ArrayList<>();
+        for (int i = 0; i < sorted.size(); i++) {
+            RuleEntry e = sorted.get(i);
+            String code = (e.code != null && !e.code.isBlank()) ? e.code : ("R-AUTO-" + String.format("%03d", i + 1));
+            manifest.add(code);
+            sp.append("\n[").append(code).append("] ");
+            if (e.name != null && !e.name.isBlank()) sp.append(e.name);
+            if (e.severityHint != null && !e.severityHint.isBlank()) {
+                sp.append("（默认严重度：").append(e.severityHint).append("）");
+            }
+            sp.append("\n");
+            if (e.body != null && !e.body.isBlank()) {
+                sp.append(e.body.trim()).append("\n");
+            }
+        }
+        sp.append("\n本次注入的 rule_code 清单：").append(String.join(", ", manifest)).append("\n");
+        sp.append("issues[].rule_code 必须且只能从该清单中选择；不在清单内的编号不允许出现。\n");
+
+        // 表格阅读规则（保留，原 prompt 中证实对 HTML 表格审查很关键）
+        sp.append("\n【表格阅读注意事项】\n");
+        sp.append("- 单元格内容为 \"/\"、\"-\"、\"—\"、\"无\"、\"N/A\" 时表示不适用，不应判定为缺失；\n");
+        sp.append("- rowspan/colspan 合并单元格的值同时适用于其覆盖的行/列，判定时按合并语义视为已填写；\n");
+        sp.append("- 一行只有一个 <td> 且以 \"注/备注/说明\" 开头的为补充说明行，不作为数据缺失依据；\n");
+        sp.append("- 章节正文中若出现 \"=== 以下为本章节引用的其他章节内容 ===\" 分隔块，仅用于补充上下文，不要对其内容套用规则。\n");
+        return sp.toString();
+    }
+
+    /**
+     * 批量审查系统提示词。在单切片四段结构的基础上：
+     * <ul>
+     *   <li>替换 Schema 段为 {@link ReviewResultSchema#batchSchema()}；</li>
+     *   <li>新增"批量输入约定"段：说明 ===CHUNK <id>=== 分隔符与 chunk_id 必须回填；</li>
+     *   <li>把 chunk_id 列表显式列出，要求模型按列表完整输出，不得遗漏或新增。</li>
+     * </ul>
+     * 其余 ROLE / Few-shot / 规则清单复用单切片版本，保证 prompt 缓存命中（同签名同前缀）。
+     */
+    public static String buildBatchStructuredSystemPrompt(List<RuleEntry> rules, List<String> chunkIds) {
+        // 复用单切片 prompt 主体作为前缀（命中 prompt 缓存的关键）
+        String basePrompt = buildStructuredSystemPrompt(rules);
+        // 把单切片 schema 段替换为 batch schema 段，保留 ROLE / Few-shot / 规则清单一字不差
+        String singleSchemaBlock = "【输出 Schema（必须严格遵守）】";
+        int schemaStart = basePrompt.indexOf(singleSchemaBlock);
+        int fewShotStart = basePrompt.indexOf("【判定锚点 / Few-shot】");
+        if (schemaStart < 0 || fewShotStart < 0 || fewShotStart <= schemaStart) {
+            // 解析失败：直接退化为前缀 + batch 附录
+            return basePrompt + "\n\n" + batchInputContract(chunkIds);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(basePrompt, 0, schemaStart);
+        sb.append("【输出 Schema（必须严格遵守 / 批量版本）】\n");
+        sb.append("你的输出必须是一个合法 JSON 对象，且符合以下 JSON Schema：\n");
+        sb.append("```json\n");
+        sb.append(JSON.toJSONString(ReviewResultSchema.batchSchema(),
+                JSONWriter.Feature.PrettyFormat, JSONWriter.Feature.WriteMapNullValue));
+        sb.append("\n```\n");
+        sb.append("禁止输出任何解释、前后缀、markdown 围栏；只能是符合上述 schema 的 JSON 对象本身。\n\n");
+        sb.append(basePrompt, fewShotStart, basePrompt.length());
+        sb.append("\n\n").append(batchInputContract(chunkIds));
+        return sb.toString();
+    }
+
+    private static String batchInputContract(List<String> chunkIds) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("【批量输入约定（极其重要）】\n");
+        sb.append("用户消息包含多段章节，按以下方式分隔：\n");
+        sb.append("  ===CHUNK <chunk_id>===\n");
+        sb.append("  章节: <一级标题>\n");
+        sb.append("  <章节正文>\n");
+        sb.append("规则：\n");
+        sb.append("1. 你必须为列表中的每一个 chunk_id 输出一条对应的 chunks[] 元素，且数量、顺序保持一致；\n");
+        sb.append("2. chunk_id 字段必须与输入完全一致，禁止重命名、合并或新增；\n");
+        sb.append("3. 每个 chunk 的 issues 必须只来自该 chunk 自己的正文，禁止跨 chunk 串味；\n");
+        sb.append("4. 即使某个 chunk 没有发现问题，也要返回对应元素，issues 设为空数组，并在 passed_items 中说明。\n");
+        if (chunkIds != null && !chunkIds.isEmpty()) {
+            sb.append("\n本次必须输出的 chunk_id 列表（顺序需保持）：")
+              .append(String.join(", ", chunkIds))
+              .append("\n");
+        }
+        return sb.toString();
+    }
+
+    /** 安全排序键：缺失或非法的 rule_code 排到最后。 */
+    private static String orderKey(String code) {
+        return (code == null || code.isBlank()) ? "ZZZZZZZZ" : code;
+    }
+
+    /**
+     * 一条规则在 prompt 中的最小载荷。
+     * code：用于编号与排序；name：人类可读名称；body：规则正文；severityHint：默认严重度（可空）。
+     */
+    public static final class RuleEntry {
+        public final String code;
+        public final String name;
+        public final String body;
+        public final String severityHint;
+        public RuleEntry(String code, String name, String body, String severityHint) {
+            this.code = code;
+            this.name = name;
+            this.body = body;
+            this.severityHint = severityHint;
+        }
     }
 
     /**
