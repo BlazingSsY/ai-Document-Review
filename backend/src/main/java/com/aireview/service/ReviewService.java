@@ -1,11 +1,16 @@
 package com.aireview.service;
 
 import com.aireview.dto.PageResponse;
+import com.aireview.dto.ManualCheckDecisionRequest;
 import com.aireview.dto.ReviewTaskDTO;
 import com.aireview.entity.AiModelConfig;
 import com.aireview.entity.ReviewTask;
+import com.aireview.entity.ReviewAuditLog;
 import com.aireview.entity.Rule;
+import com.aireview.entity.RuleCheck;
+import com.aireview.repository.ReviewAuditLogMapper;
 import com.aireview.repository.ReviewTaskMapper;
+import com.aireview.repository.RuleCheckMapper;
 import com.aireview.review.ChunkBatchPlanner;
 import com.aireview.review.ModelTier;
 import com.aireview.review.ReviewResultSchema;
@@ -32,6 +37,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
+import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -57,6 +67,9 @@ public class ReviewService {
     private final RuleService ruleService;
     private final AiModelService aiModelService;
     private final WebSocketService webSocketService;
+    private final RuleCheckMapper ruleCheckMapper;
+    private final ReviewAuditLogMapper reviewAuditLogMapper;
+    private final RagReviewService ragReviewService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -100,6 +113,12 @@ public class ReviewService {
     @Value("${review.parallel.chunk-concurrency}")
     private int chunkConcurrency;
 
+    @Value("${review.rag.enabled:true}")
+    private boolean ragReviewEnabled;
+
+    @Value("${review.rag.fallback-to-legacy:false}")
+    private boolean ragFallbackToLegacy;
+
     /**
      * 收敛性审查的统一参数。这些值不放配置是因为它们是「跨模型收敛」契约本身：
      * 改一动就会让历史 ai_result 与新结果失去可比性，所以集中放在代码里。
@@ -107,7 +126,7 @@ public class ReviewService {
     private static final double CONVERGENCE_TEMPERATURE = 0.0;
     private static final double CONVERGENCE_TOP_P = 1.0;
     private static final int CONVERGENCE_MAX_TOKENS = 8192;
-    /** 单切片 prompt 中规则部分的硬上限。超过则按 severity desc + rule_code asc 截断。 */
+    /** 单切片 prompt 中规则部分的硬上限。超过则按 rule_code asc 截断。 */
     private static final int RULE_BUDGET_TOKENS = 6000;
     /** 非思维模型的采样次数。两次种子不同，按 fingerprint 交集做高置信、对称差做"待复核"。 */
     private static final int NON_THINKING_SAMPLES = 2;
@@ -167,7 +186,7 @@ public class ReviewService {
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("You can only view your own tasks");
         }
-        return toDTO(task);
+        return toDTO(task, true);
     }
 
     /**
@@ -239,6 +258,81 @@ public class ReviewService {
         }
         reviewTaskMapper.deleteById(taskId);
         log.info("Review task deleted: {}", taskId);
+    }
+
+    public ReviewTaskDTO updateManualCheckDecision(String taskId, Long userId,
+                                                   ManualCheckDecisionRequest request) {
+        ReviewTask task = requireOwnedTask(taskId, userId);
+        if (task.getAiResult() == null) {
+            throw new IllegalArgumentException("No review result available for manual decision");
+        }
+        if (request == null || request.getCheckCode() == null || request.getCheckCode().isBlank()) {
+            throw new IllegalArgumentException("checkCode is required");
+        }
+
+        Map<String, Object> aiResult = new LinkedHashMap<>(task.getAiResult());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> allCheckResults = aiResult.get("allCheckResults") instanceof List<?> list
+                ? (List<Map<String, Object>>) (List<?>) list
+                : new ArrayList<>();
+        Map<String, Object> target = findCheckResult(allCheckResults, request.getCheckCode(), request.getSourceChunk());
+        if (target == null) {
+            throw new IllegalArgumentException("Check result not found: " + request.getCheckCode());
+        }
+
+        Map<String, Object> before = new LinkedHashMap<>(target);
+        String finalStatus = normalizeCheckStatus(request.getFinalStatus());
+        target.put("manualStatus", finalStatus);
+        target.put("manualAccepted", request.getAccepted());
+        target.put("manualComment", request.getComment() == null ? "" : request.getComment());
+        target.put("manualReviewerId", userId);
+        target.put("manualReviewedAt", LocalDateTime.now().toString());
+
+        syncChunkCheckResult(aiResult, target);
+        aiResult.put("manualReviewSummary", buildManualReviewSummary(allCheckResults));
+        task.setAiResult(aiResult);
+        task.setUpdatedAt(LocalDateTime.now());
+        reviewTaskMapper.updateById(task);
+
+        ReviewAuditLog audit = new ReviewAuditLog();
+        audit.setTaskId(taskId);
+        audit.setUserId(userId);
+        audit.setAction("manual_check_decision");
+        audit.setTargetType("check_result");
+        audit.setTargetId(String.valueOf(target.get("check_code")));
+        audit.setBeforeValue(before);
+        audit.setAfterValue(new LinkedHashMap<>(target));
+        audit.setComment(request.getComment());
+        audit.setCreatedAt(LocalDateTime.now());
+        reviewAuditLogMapper.insert(audit);
+
+        return toDTO(task, true);
+    }
+
+    public List<Map<String, Object>> listAuditLogs(String taskId, Long userId) {
+        requireOwnedTask(taskId, userId);
+        List<ReviewAuditLog> logs = reviewAuditLogMapper.findByTaskId(taskId);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ReviewAuditLog logEntry : logs) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", logEntry.getId());
+            row.put("taskId", logEntry.getTaskId());
+            row.put("userId", logEntry.getUserId());
+            row.put("action", logEntry.getAction());
+            row.put("targetType", logEntry.getTargetType());
+            row.put("targetId", logEntry.getTargetId());
+            row.put("beforeValue", logEntry.getBeforeValue());
+            row.put("afterValue", logEntry.getAfterValue());
+            row.put("comment", logEntry.getComment());
+            row.put("createdAt", logEntry.getCreatedAt());
+            out.add(row);
+        }
+        return out;
+    }
+
+    public byte[] exportAuditJson(String taskId, Long userId) throws IOException {
+        return objectMapper.writerWithDefaultPrettyPrinter()
+                .writeValueAsBytes(listAuditLogs(taskId, userId));
     }
 
     /**
@@ -339,6 +433,7 @@ public class ReviewService {
                     : rawChapters;
             List<Rule> rules = ruleService.getRulesByScenarioId(task.getScenarioId());
             List<RuleDispatcher.PreparedRule> preparedRules = RuleDispatcher.prepare(rules);
+            attachChecks(preparedRules);
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
             List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
 
@@ -482,6 +577,20 @@ public class ReviewService {
             updateTaskStatus(task, ReviewTask.STATUS_PROCESSING, null);
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "开始文件审查...", 5);
 
+            if (ragReviewEnabled) {
+                try {
+                    ragReviewService.executeReview(task, runStamp);
+                    return;
+                } catch (Exception ragEx) {
+                    if (!ragFallbackToLegacy) {
+                        throw ragEx;
+                    }
+                    log.warn("RAG review failed, falling back to legacy chunk review: {}", ragEx.getMessage());
+                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                            "RAG review failed, falling back to legacy chunk review: " + ragEx.getMessage(), 6);
+                }
+            }
+
             // 1. Parse Word document into chapters (by Heading 1)
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在解析文档结构（按一级标题拆分章节）...", 10);
             List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
@@ -510,6 +619,7 @@ public class ReviewService {
                 throw new RuntimeException("审查场景中没有找到有效规则，场景ID: " + task.getScenarioId());
             }
             List<RuleDispatcher.PreparedRule> preparedRules = RuleDispatcher.prepare(rules);
+            attachChecks(preparedRules);
             int globalCount = (int) preparedRules.stream().filter(RuleDispatcher.PreparedRule::isGlobal).count();
             int sectionCount = (int) preparedRules.stream().filter(RuleDispatcher.PreparedRule::isSectionSpecific).count();
             int docCount = (int) preparedRules.stream().filter(RuleDispatcher.PreparedRule::isDocumentSpecific).count();
@@ -884,8 +994,7 @@ public class ReviewService {
                     "R-DEFAULT-001",
                     "通用文档质量轻量审查",
                     "本片段未命中任何已配置规则。仅基于通用文档质量要求（错别字、引用一致性、字段完整性等）做轻量审查；"
-                            + "若没有问题，请保持 issues 为空数组，并在 summary 中说明本切片未命中规则。",
-                    "low");
+                            + "若没有问题，请保持 issues 为空数组，并在 summary 中说明本切片未命中规则。");
             return RuleParser.buildStructuredSystemPrompt(List.of(placeholder));
         }
 
@@ -901,7 +1010,7 @@ public class ReviewService {
                     code,
                     pr.getRule().getRuleName(),
                     pr.getBody(),
-                    null));
+                    toCheckEntries(code, pr.getChecks())));
         }
 
         // 按规则部分 token 上限截断；保留 global，丢失 section_specific 的尾部
@@ -911,6 +1020,44 @@ public class ReviewService {
                     entries.size(), kept.size(), RULE_BUDGET_TOKENS);
         }
         return RuleParser.buildStructuredSystemPrompt(kept);
+    }
+
+    private void attachChecks(List<RuleDispatcher.PreparedRule> preparedRules) {
+        if (preparedRules == null || preparedRules.isEmpty()) return;
+        List<Long> ruleIds = preparedRules.stream()
+                .map(pr -> pr.getRule() != null ? pr.getRule().getId() : null)
+                .filter(Objects::nonNull)
+                .toList();
+        if (ruleIds.isEmpty()) return;
+        List<RuleCheck> checks = ruleCheckMapper.findActiveByRuleIds(ruleIds);
+        Map<Long, List<RuleCheck>> byRuleId = new LinkedHashMap<>();
+        for (RuleCheck check : checks) {
+            if (check.getRuleId() == null) continue;
+            byRuleId.computeIfAbsent(check.getRuleId(), k -> new ArrayList<>()).add(check);
+        }
+        for (RuleDispatcher.PreparedRule pr : preparedRules) {
+            Long ruleId = pr.getRule() != null ? pr.getRule().getId() : null;
+            pr.setChecks(ruleId == null ? List.of() : byRuleId.getOrDefault(ruleId, List.of()));
+        }
+    }
+
+    private List<RuleParser.CheckEntry> toCheckEntries(String ruleCode, List<RuleCheck> checks) {
+        if (checks == null || checks.isEmpty()) return List.of();
+        List<RuleParser.CheckEntry> entries = new ArrayList<>();
+        int autoSeq = 1;
+        for (RuleCheck check : checks) {
+            String checkCode = check.getCheckCode();
+            if (checkCode == null || checkCode.isBlank()) {
+                checkCode = ruleCode + "-C" + String.format("%03d", autoSeq++);
+            }
+            entries.add(new RuleParser.CheckEntry(
+                    checkCode,
+                    check.getQuestion(),
+                    check.getPassCriteria(),
+                    check.getCategory(),
+                    check.getEvidenceRequired()));
+        }
+        return entries;
     }
 
     /**
@@ -957,6 +1104,13 @@ public class ReviewService {
         int tokens = 0;
         if (e.name != null) tokens += ChunkUtils.estimateTokens(e.name);
         if (e.body != null) tokens += ChunkUtils.estimateTokens(e.body);
+        if (e.checks != null) {
+            for (RuleParser.CheckEntry check : e.checks) {
+                if (check.checkCode != null) tokens += ChunkUtils.estimateTokens(check.checkCode);
+                if (check.question != null) tokens += ChunkUtils.estimateTokens(check.question);
+                if (check.passCriteria != null) tokens += ChunkUtils.estimateTokens(check.passCriteria);
+            }
+        }
         return tokens + 8; // 编号 / 分隔符的固定开销
     }
 
@@ -1144,6 +1298,7 @@ public class ReviewService {
         List<Integer> chunkIdxs = batch.getChunkIndices();
         // 1) 组装 chunk_id 列表（C-<idx+1>）和 user message
         List<String> chunkIds = new ArrayList<>(chunkIdxs.size());
+        Map<Integer, Set<Integer>> supportingRefsByChunk = new LinkedHashMap<>();
         StringBuilder userContent = new StringBuilder();
         for (int idx : chunkIdxs) {
             String cid = "C-" + (idx + 1);
@@ -1154,6 +1309,7 @@ public class ReviewService {
             userContent.append(chunk.getContent());
             Set<Integer> refIdx = ChapterReferenceResolver
                     .findReferencedChapters(chunk.getContent(), chunk.getLabel(), chapters);
+            supportingRefsByChunk.put(idx, refIdx);
             String supporting = ChapterReferenceResolver.renderSupportingContext(refIdx, chapters);
             if (!supporting.isEmpty()) userContent.append(supporting);
             userContent.append("\n\n");
@@ -1219,6 +1375,8 @@ public class ReviewService {
             chunkResult.put("chapterTitle", chunks.get(idx).getLabel());
             chunkResult.put("totalChunks", chunks.size());
             chunkResult.put("estimatedTokens", chunks.get(idx).getEstimatedTokens());
+            chunkResult.put("source", buildChunkSource(idx, chunks.get(idx)));
+            chunkResult.put("sourceRefs", buildChunkSourceRefs(idx, chunks.get(idx), supportingRefsByChunk.get(idx)));
             chunkResult.put("appliedRules", dispatches.get(idx).getAppliedRuleNames());
             chunkResult.put("samplingStrategy", sampleCount > 1 ? "double" : "single");
             chunkResult.put("sampleCount", chunkSamples.size());
@@ -1244,7 +1402,11 @@ public class ReviewService {
             if (code == null || code.isBlank()) {
                 code = "R-AUTO-" + String.format("%03d", autoSeq++);
             }
-            entries.add(new RuleParser.RuleEntry(code, pr.getRule().getRuleName(), pr.getBody(), null));
+            entries.add(new RuleParser.RuleEntry(
+                    code,
+                    pr.getRule().getRuleName(),
+                    pr.getBody(),
+                    toCheckEntries(code, pr.getChecks())));
         }
         return entries;
     }
@@ -1366,6 +1528,8 @@ public class ReviewService {
         chunkResult.put("chapterTitle", chunk.getLabel());
         chunkResult.put("totalChunks", totalChunks);
         chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
+        chunkResult.put("source", buildChunkSource(chunkIdx, chunk));
+        chunkResult.put("sourceRefs", buildChunkSourceRefs(chunkIdx, chunk, refIdx));
         chunkResult.put("appliedRules", dispatch.getAppliedRuleNames());
         chunkResult.put("samplingStrategy", sampleCount > 1 ? "double" : "single");
         chunkResult.put("sampleCount", sampleCount);
@@ -1430,6 +1594,7 @@ public class ReviewService {
             merged.put("summary", "");
             merged.put("issues", new ArrayList<>());
             merged.put("passed_items", new ArrayList<>());
+            merged.put("check_results", new ArrayList<>());
             return merged;
         }
         Map<String, Object> first = samples.get(0);
@@ -1478,7 +1643,57 @@ public class ReviewService {
             }
         }
         merged.put("passed_items", new ArrayList<>(passed));
+        merged.put("check_results", mergeCheckResults(samples));
         return merged;
+    }
+
+    private List<Map<String, Object>> mergeCheckResults(List<Map<String, Object>> samples) {
+        Map<String, List<Map<String, Object>>> byCheck = new LinkedHashMap<>();
+        for (Map<String, Object> sample : samples) {
+            Object results = sample.get("check_results");
+            if (!(results instanceof List<?> resultList)) continue;
+            for (Object item : resultList) {
+                if (!(item instanceof Map<?, ?>)) continue;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> check = (Map<String, Object>) item;
+                String checkCode = String.valueOf(check.getOrDefault("check_code", ""));
+                if (checkCode.isBlank()) continue;
+                byCheck.computeIfAbsent(checkCode, k -> new ArrayList<>()).add(check);
+            }
+        }
+
+        List<Map<String, Object>> merged = new ArrayList<>();
+        int total = samples.size();
+        for (Map.Entry<String, List<Map<String, Object>>> entry : byCheck.entrySet()) {
+            List<Map<String, Object>> occurrences = entry.getValue();
+            Map<String, Object> base = new LinkedHashMap<>(occurrences.get(0));
+            String chosenStatus = chooseMostConservativeStatus(occurrences);
+            base.put("status", chosenStatus);
+            if (total > 1) {
+                boolean allSame = occurrences.size() == total
+                        && occurrences.stream().allMatch(o -> chosenStatus.equals(String.valueOf(o.get("status"))));
+                base.put("confidence", allSame ? base.getOrDefault("confidence", "high") : "needs_review");
+                if (!allSame) {
+                    base.put("agreement", occurrences.size() + "/" + total);
+                }
+            } else {
+                base.putIfAbsent("confidence", "single");
+            }
+            merged.add(base);
+        }
+        return merged;
+    }
+
+    private String chooseMostConservativeStatus(List<Map<String, Object>> occurrences) {
+        List<String> order = List.of("Fail", "Partial", "Review", "N/A", "Pass");
+        for (String status : order) {
+            for (Map<String, Object> item : occurrences) {
+                if (status.equals(normalizeCheckStatus(item.get("status")))) {
+                    return status;
+                }
+            }
+        }
+        return "Review";
     }
 
     /**
@@ -1516,6 +1731,8 @@ public class ReviewService {
         chunkResult.put("totalChunks", totalChunks);
         chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
         chunkResult.put("contentLength", chunk.getContent().length());
+        chunkResult.put("source", buildChunkSource(chunkIdx, chunk));
+        chunkResult.put("sourceRefs", buildChunkSourceRefs(chunkIdx, chunk));
         chunkResult.put("appliedRules", dispatch.getAppliedRuleNames());
         chunkResult.put("failed", true);
         chunkResult.put("retryable", true);
@@ -1526,8 +1743,49 @@ public class ReviewService {
         result.put("summary", "切片审查失败，已保留为可重试切片");
         result.put("issues", new ArrayList<>());
         result.put("passed_items", new ArrayList<>());
+        result.put("check_results", new ArrayList<>());
         chunkResult.put("result", result);
         return chunkResult;
+    }
+
+    private Map<String, Object> buildChunkSource(int chunkIdx, ChunkUtils.ChunkResult chunk) {
+        Map<String, Object> source = new LinkedHashMap<>();
+        String text = chunk.getContent() == null ? "" : chunk.getContent();
+        source.put("blockId", "CHUNK-" + String.format("%03d", chunkIdx + 1));
+        source.put("chunk", chunkIdx + 1);
+        source.put("type", "document_chunk");
+        source.put("sectionPath", chunk.getLabel());
+        source.put("text", text);
+        source.put("textLength", text.length());
+        source.put("estimatedTokens", chunk.getEstimatedTokens());
+        return source;
+    }
+
+    private List<Map<String, Object>> buildChunkSourceRefs(int chunkIdx, ChunkUtils.ChunkResult chunk) {
+        return buildChunkSourceRefs(chunkIdx, chunk, null);
+    }
+
+    private List<Map<String, Object>> buildChunkSourceRefs(int chunkIdx, ChunkUtils.ChunkResult chunk,
+                                                           Set<Integer> supportingChapterIndices) {
+        List<Map<String, Object>> refs = new ArrayList<>();
+        Map<String, Object> ref = new LinkedHashMap<>();
+        ref.put("sourceId", "CHUNK-" + String.format("%03d", chunkIdx + 1));
+        ref.put("chunk", chunkIdx + 1);
+        ref.put("title", chunk.getLabel());
+        ref.put("sectionPath", chunk.getLabel());
+        ref.put("reason", "matched_chunk");
+        refs.add(ref);
+
+        if (supportingChapterIndices != null) {
+            for (Integer chapterIdx : new TreeSet<>(supportingChapterIndices)) {
+                if (chapterIdx == null || chapterIdx < 0) continue;
+                Map<String, Object> supportingRef = new LinkedHashMap<>();
+                supportingRef.put("sourceId", "CHAPTER-" + String.format("%03d", chapterIdx + 1));
+                supportingRef.put("reason", "referenced_chapter");
+                refs.add(supportingRef);
+            }
+        }
+        return refs;
     }
 
     private static long elapsedMs(long startNs) {
@@ -1720,12 +1978,13 @@ public class ReviewService {
         issues.add(issue);
         result.put("issues", issues);
         result.put("passed_items", new ArrayList<>());
+        result.put("check_results", new ArrayList<>());
         return result;
     }
 
     /**
      * Aggregate chunk review results into a unified result.
-     * Adds severity / category breakdowns so the dashboard and Excel export can
+     * Adds category and confidence breakdowns so the dashboard and Excel export can
      * surface the extended issue fields produced by the new system prompt schema.
      */
     private Map<String, Object> aggregateResults(List<Map<String, Object>> chunkResults) {
@@ -1738,11 +1997,12 @@ public class ReviewService {
         // 同一 fingerprint 多次命中合并 occurrences；占多就计多权重。
         Map<String, Map<String, Object>> dedupedByFp = new LinkedHashMap<>();
         List<Map<String, Object>> failedChunks = new ArrayList<>();
-        Map<String, Integer> severityCounts = new LinkedHashMap<>();
-        for (String s : ReviewResultSchema.SEVERITY_ENUM) severityCounts.put(s, 0);
         Map<String, Integer> categoryCounts = new LinkedHashMap<>();
         for (String c : ReviewResultSchema.CATEGORY_ENUM) categoryCounts.put(c, 0);
         Map<String, Integer> confidenceCounts = new LinkedHashMap<>();
+        Map<String, Integer> checkStatusCounts = new LinkedHashMap<>();
+        for (String s : ReviewResultSchema.CHECK_STATUS_ENUM) checkStatusCounts.put(s, 0);
+        List<Map<String, Object>> allCheckResults = new ArrayList<>();
         // passed_items 入聚合：按规则编号统计被各切片"通过/不适用"的次数，用于覆盖率
         Map<String, Integer> passedRuleCounts = new LinkedHashMap<>();
         Set<String> seenChapterPassed = new LinkedHashSet<>(); // chapter+passed 文本，避免重复
@@ -1775,13 +2035,15 @@ public class ReviewService {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> issueMap = (Map<String, Object>) item;
                     Map<String, Object> normalized = normalizeIssue(issueMap, chapterTitle);
+                    normalized.putIfAbsent("sourceChunk", chunk.get("chunk"));
+                    normalized.putIfAbsent("sourceTitle", chapterTitle);
+                    normalized.putIfAbsent("sourceRefs", chunk.get("sourceRefs"));
                     String fp = String.valueOf(normalized.getOrDefault("fingerprint",
                             issueFingerprint(chapterTitle, issueMap)));
                     Map<String, Object> existing = dedupedByFp.get(fp);
                     if (existing == null) {
                         normalized.put("occurrences", 1);
                         dedupedByFp.put(fp, normalized);
-                        severityCounts.merge(String.valueOf(normalized.get("severity")), 1, Integer::sum);
                         categoryCounts.merge(String.valueOf(normalized.get("category")), 1, Integer::sum);
                         confidenceCounts.merge(String.valueOf(normalized.getOrDefault("confidence", "single")),
                                 1, Integer::sum);
@@ -1806,6 +2068,20 @@ public class ReviewService {
                     passedRuleCounts.merge(ruleCode == null ? "(未编号)" : ruleCode, 1, Integer::sum);
                 }
             }
+            Object checkResults = resultMap.get("check_results");
+            if (checkResults instanceof List<?> checkList) {
+                for (Object item : checkList) {
+                    if (!(item instanceof Map<?, ?>)) continue;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> checkMap = (Map<String, Object>) item;
+                    Map<String, Object> normalized = normalizeCheckResult(checkMap, chapterTitle);
+                    normalized.putIfAbsent("sourceChunk", chunk.get("chunk"));
+                    normalized.putIfAbsent("sourceTitle", chapterTitle);
+                    normalized.putIfAbsent("sourceRefs", chunk.get("sourceRefs"));
+                    allCheckResults.add(normalized);
+                    checkStatusCounts.merge(String.valueOf(normalized.get("status")), 1, Integer::sum);
+                }
+            }
         }
 
         if (!scores.isEmpty()) {
@@ -1817,9 +2093,11 @@ public class ReviewService {
         aggregated.put("allIssues", allIssues);
         aggregated.put("failedChunkCount", failedChunks.size());
         aggregated.put("failedChunks", failedChunks);
-        aggregated.put("severityCounts", severityCounts);
         aggregated.put("categoryCounts", categoryCounts);
         aggregated.put("confidenceCounts", confidenceCounts);
+        aggregated.put("totalCheckResults", allCheckResults.size());
+        aggregated.put("allCheckResults", allCheckResults);
+        aggregated.put("checkStatusCounts", checkStatusCounts);
         aggregated.put("passedRuleCoverage", passedRuleCounts);
         return aggregated;
     }
@@ -1827,15 +2105,13 @@ public class ReviewService {
     /**
      * 把单条 issue 归一化到 schema 范围内：
      * <ul>
-     *   <li>severity / category 强制映射到枚举；未命中归 medium / 其他。</li>
+     *   <li>category 强制映射到枚举；未命中归其他。</li>
      *   <li>缺失 fingerprint 时按 chapterLabel + rule_code + location 现场补算。</li>
      *   <li>缺失 confidence 默认 single（旧任务兼容）。</li>
      * </ul>
      */
     private Map<String, Object> normalizeIssue(Map<String, Object> raw, String chapterLabel) {
         Map<String, Object> out = new LinkedHashMap<>(raw);
-        out.put("severity", forceEnum(raw.get("severity"), ReviewResultSchema.SEVERITY_ENUM, "medium",
-                this::severityAlias));
         out.put("category", forceEnum(raw.get("category"), ReviewResultSchema.CATEGORY_ENUM, "其他",
                 this::categoryAlias));
         if (!out.containsKey("confidence") || out.get("confidence") == null) {
@@ -1845,6 +2121,38 @@ public class ReviewService {
             out.put("fingerprint", issueFingerprint(chapterLabel, raw));
         }
         return out;
+    }
+
+    private Map<String, Object> normalizeCheckResult(Map<String, Object> raw, String chapterLabel) {
+        Map<String, Object> out = new LinkedHashMap<>(raw);
+        out.put("status", normalizeCheckStatus(raw.get("status")));
+        if (!out.containsKey("confidence") || out.get("confidence") == null) {
+            out.put("confidence", "single");
+        }
+        out.putIfAbsent("check_code", "");
+        out.putIfAbsent("rule_code", "");
+        out.putIfAbsent("check_question", "");
+        out.putIfAbsent("reason", "");
+        out.putIfAbsent("evidence", "");
+        out.putIfAbsent("suggestion", "");
+        out.putIfAbsent("missing_items", new ArrayList<>());
+        out.putIfAbsent("location", chapterLabel == null ? "" : chapterLabel);
+        return out;
+    }
+
+    private String normalizeCheckStatus(Object raw) {
+        if (raw == null) return "Review";
+        String s = raw.toString().trim();
+        if (s.isEmpty()) return "Review";
+        String lower = s.toLowerCase(Locale.ROOT);
+        return switch (lower) {
+            case "pass", "passed", "通过", "符合" -> "Pass";
+            case "partial", "partially_passed", "部分通过", "部分符合", "部分满足" -> "Partial";
+            case "fail", "failed", "不通过", "不符合", "未通过" -> "Fail";
+            case "n/a", "na", "not_applicable", "not applicable", "不适用" -> "N/A";
+            case "review", "needs_review", "待复核", "人工复核", "需复核" -> "Review";
+            default -> ReviewResultSchema.CHECK_STATUS_ENUM.contains(s) ? s : "Review";
+        };
     }
 
     /** 把任意输入强制映射到 enum；先走别名表，再做大小写不敏感匹配，否则归默认。 */
@@ -1857,15 +2165,6 @@ public class ReviewService {
         if (alias != null && allowed.contains(alias)) return alias;
         for (String a : allowed) if (a.equalsIgnoreCase(s)) return a;
         return fallback;
-    }
-
-    private String severityAlias(String s) {
-        return switch (s) {
-            case "high", "高", "严重", "critical", "致命" -> "high";
-            case "medium", "中", "mid", "moderate", "中等" -> "medium";
-            case "low", "低", "minor", "轻微" -> "low";
-            default -> null;
-        };
     }
 
     private String categoryAlias(String s) {
@@ -1934,11 +2233,34 @@ public class ReviewService {
             dataStyle.setBorderLeft(BorderStyle.THIN);
             dataStyle.setBorderRight(BorderStyle.THIN);
 
-            // Create header row — added 严重程度 / 问题分类 / 规则编码 to match the extended
-            // issue schema (severity / category / rule_code). 判定依据 now combines the rule
+            Object allCheckResultsObj = aiResult.get("allCheckResults");
+            if (allCheckResultsObj instanceof List<?> checkList && !checkList.isEmpty()) {
+                Row headerRow = sheet.createRow(0);
+                String[] headers = {"序号", "章节", "检查项编号", "规则编码", "判定", "检查项", "判定理由", "证据", "缺失项", "建议", "置信度", "人工复核"};
+                for (int i = 0; i < headers.length; i++) {
+                    Cell cell = headerRow.createCell(i);
+                    cell.setCellValue(headers[i]);
+                    cell.setCellStyle(headerStyle);
+                }
+                int rowNum = 1;
+                for (Object item : checkList) {
+                    if (!(item instanceof Map<?, ?>)) continue;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> check = (Map<String, Object>) item;
+                    writeCheckResultRow(sheet.createRow(rowNum), rowNum, check, dataStyle);
+                    rowNum++;
+                }
+                int[] widths = {2000, 6000, 5000, 4000, 3000, 12000, 12000, 12000, 9000, 10000, 3000, 3000};
+                for (int i = 0; i < widths.length; i++) sheet.setColumnWidth(i, widths[i]);
+                workbook.write(out);
+                return out.toByteArray();
+            }
+
+            // Create header row with category / rule_code to match the extended issue schema.
+            // 判定依据 now combines the rule
             // name with the evidence excerpt so reviewers can verify each finding inline.
             Row headerRow = sheet.createRow(0);
-            String[] headers = {"序号", "章节", "严重程度", "问题分类", "规则编码", "审查意见", "判定依据", "是否接受"};
+            String[] headers = {"序号", "章节", "问题分类", "规则编码", "审查意见", "判定依据", "是否接受"};
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = headerRow.createCell(i);
                 cell.setCellValue(headers[i]);
@@ -1986,23 +2308,102 @@ public class ReviewService {
             // Column widths (8 columns now)
             sheet.setColumnWidth(0, 2000);   // 序号
             sheet.setColumnWidth(1, 6000);   // 章节
-            sheet.setColumnWidth(2, 2800);   // 严重程度
-            sheet.setColumnWidth(3, 3600);   // 问题分类
-            sheet.setColumnWidth(4, 4000);   // 规则编码
-            sheet.setColumnWidth(5, 14000);  // 审查意见
-            sheet.setColumnWidth(6, 12000);  // 判定依据
-            sheet.setColumnWidth(7, 3000);   // 是否接受
+            sheet.setColumnWidth(2, 3600);   // 问题分类
+            sheet.setColumnWidth(3, 4000);   // 规则编码
+            sheet.setColumnWidth(4, 14000);  // 审查意见
+            sheet.setColumnWidth(5, 12000);  // 判定依据
+            sheet.setColumnWidth(6, 3000);   // 是否接受
 
             workbook.write(out);
             return out.toByteArray();
         }
     }
 
+    public byte[] exportReviewReportDocx(String taskId, Long userId) throws IOException {
+        ReviewTask task = requireOwnedTask(taskId, userId);
+        if (task.getAiResult() == null) {
+            throw new IllegalArgumentException("No review result available for export");
+        }
+
+        try (XWPFDocument document = new XWPFDocument();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            addDocParagraph(document, "机载文档审查报告", true, 18);
+            addDocParagraph(document, "文件名称：" + task.getFileName(), false, 11);
+            addDocParagraph(document, "任务编号：" + task.getId(), false, 11);
+            addDocParagraph(document, "审查模型：" + task.getSelectedModel(), false, 11);
+            addDocParagraph(document, "任务状态：" + task.getStatus(), false, 11);
+            addDocParagraph(document, "生成时间：" + LocalDateTime.now(), false, 11);
+
+            Map<String, Object> result = task.getAiResult();
+            addDocParagraph(document, "审查概要", true, 14);
+            addDocParagraph(document, "问题数：" + result.getOrDefault("totalIssues", 0)
+                    + "；检查项数：" + result.getOrDefault("totalCheckResults", 0)
+                    + "；失败切片：" + result.getOrDefault("failedChunkCount", 0), false, 11);
+            Object manualSummary = result.get("manualReviewSummary");
+            if (manualSummary != null) {
+                addDocParagraph(document, "人工复核：" + manualSummary, false, 11);
+            }
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> checks = result.get("allCheckResults") instanceof List<?> list
+                    ? (List<Map<String, Object>>) (List<?>) list
+                    : List.of();
+            addDocParagraph(document, "检查项判定矩阵", true, 14);
+            if (checks.isEmpty()) {
+                addDocParagraph(document, "当前任务没有检查项判定矩阵。", false, 11);
+            } else {
+                XWPFTable table = document.createTable(checks.size() + 1, 7);
+                String[] headers = {"序号", "章节", "检查项", "系统判定", "人工判定", "理由", "建议"};
+                XWPFTableRow header = table.getRow(0);
+                for (int i = 0; i < headers.length; i++) {
+                    header.getCell(i).setText(headers[i]);
+                }
+                for (int i = 0; i < checks.size(); i++) {
+                    Map<String, Object> check = checks.get(i);
+                    XWPFTableRow row = table.getRow(i + 1);
+                    row.getCell(0).setText(String.valueOf(i + 1));
+                    row.getCell(1).setText(firstNonBlank(strField(check, "sourceTitle"), strField(check, "location")));
+                    row.getCell(2).setText(firstNonBlank(strField(check, "check_question"), strField(check, "question")));
+                    row.getCell(3).setText(renderCheckStatus(strField(check, "status")));
+                    row.getCell(4).setText(renderCheckStatus(strField(check, "manualStatus")));
+                    row.getCell(5).setText(firstNonBlank(strField(check, "manualComment"), strField(check, "reason")));
+                    row.getCell(6).setText(strField(check, "suggestion"));
+                }
+            }
+
+            addDocParagraph(document, "审计日志", true, 14);
+            List<Map<String, Object>> auditLogs = listAuditLogs(taskId, userId);
+            if (auditLogs.isEmpty()) {
+                addDocParagraph(document, "暂无人工复核审计记录。", false, 11);
+            } else {
+                for (Map<String, Object> logEntry : auditLogs) {
+                    addDocParagraph(document,
+                            logEntry.get("createdAt") + " | " + logEntry.get("action")
+                                    + " | " + logEntry.get("targetId")
+                                    + " | " + Objects.toString(logEntry.get("comment"), ""),
+                            false,
+                            10);
+                }
+            }
+
+            document.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static void addDocParagraph(XWPFDocument document, String text, boolean bold, int fontSize) {
+        XWPFParagraph paragraph = document.createParagraph();
+        XWPFRun run = paragraph.createRun();
+        run.setBold(bold);
+        run.setFontSize(fontSize);
+        run.setText(text == null ? "" : text);
+    }
+
     /**
      * Write one issue into a sheet row. Columns:
-     *   0 序号 | 1 章节 | 2 严重程度 | 3 问题分类 | 4 规则编码 | 5 审查意见 | 6 判定依据 | 7 是否接受
+     *   0 序号 | 1 章节 | 2 问题分类 | 3 规则编码 | 4 审查意见 | 5 判定依据 | 6 是否接受
      *
-     * Falls back gracefully when older AI responses don't include severity/category/etc.
+     * Falls back gracefully when older AI responses don't include category/rule fields.
      */
     private static void writeIssueRow(Row row, int rowNum, Map<String, Object> issue,
                                        String fallbackChapterTitle, CellStyle dataStyle) {
@@ -2011,7 +2412,6 @@ public class ReviewService {
         String suggestion = strField(issue, "suggestion");
         String rule = strField(issue, "rule");
         String ruleCode = firstNonBlank(strField(issue, "rule_code"), strField(issue, "ruleCode"));
-        String severity = renderSeverity(strField(issue, "severity"));
         String category = strField(issue, "category");
         String evidence = strField(issue, "evidence");
 
@@ -2023,12 +2423,38 @@ public class ReviewService {
 
         cell(row, 0, String.valueOf(rowNum), dataStyle);
         cell(row, 1, location.isEmpty() ? fallbackChapterTitle : location, dataStyle);
-        cell(row, 2, severity, dataStyle);
-        cell(row, 3, category, dataStyle);
-        cell(row, 4, ruleCode, dataStyle);
-        cell(row, 5, opinion, dataStyle);
-        cell(row, 6, basis, dataStyle);
-        cell(row, 7, "", dataStyle);
+        cell(row, 2, category, dataStyle);
+        cell(row, 3, ruleCode, dataStyle);
+        cell(row, 4, opinion, dataStyle);
+        cell(row, 5, basis, dataStyle);
+        cell(row, 6, "", dataStyle);
+    }
+
+    private static void writeCheckResultRow(Row row, int rowNum, Map<String, Object> check, CellStyle dataStyle) {
+        String sourceTitle = firstNonBlank(strField(check, "sourceTitle"), strField(check, "location"));
+        String checkCode = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
+        String ruleCode = firstNonBlank(strField(check, "rule_code"), strField(check, "ruleCode"));
+        String status = renderCheckStatus(strField(check, "status"));
+        String question = firstNonBlank(strField(check, "check_question"), strField(check, "question"));
+        String reason = strField(check, "reason");
+        String evidence = strField(check, "evidence");
+        String missing = renderListField(check.get("missing_items"));
+        String suggestion = strField(check, "suggestion");
+        String confidence = strField(check, "confidence");
+        String manual = renderManualReview(check);
+
+        cell(row, 0, String.valueOf(rowNum), dataStyle);
+        cell(row, 1, sourceTitle, dataStyle);
+        cell(row, 2, checkCode, dataStyle);
+        cell(row, 3, ruleCode, dataStyle);
+        cell(row, 4, status, dataStyle);
+        cell(row, 5, question, dataStyle);
+        cell(row, 6, reason, dataStyle);
+        cell(row, 7, evidence, dataStyle);
+        cell(row, 8, missing, dataStyle);
+        cell(row, 9, suggestion, dataStyle);
+        cell(row, 10, confidence, dataStyle);
+        cell(row, 11, manual, dataStyle);
     }
 
     private static void cell(Row row, int idx, String value, CellStyle style) {
@@ -2046,14 +2472,116 @@ public class ReviewService {
         return a == null || a.isBlank() ? (b == null ? "" : b) : a;
     }
 
-    private static String renderSeverity(String raw) {
+    private static String renderListField(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().filter(Objects::nonNull).map(Object::toString)
+                    .reduce((a, b) -> a + "；" + b).orElse("");
+        }
+        return value == null ? "" : value.toString();
+    }
+
+    private static String renderManualReview(Map<String, Object> check) {
+        String manualStatus = renderCheckStatus(strField(check, "manualStatus"));
+        String accepted = "";
+        if (check.containsKey("manualAccepted")) {
+            accepted = Boolean.TRUE.equals(check.get("manualAccepted")) ? "接受系统意见" : "不接受系统意见";
+        }
+        String comment = strField(check, "manualComment");
+        List<String> parts = new ArrayList<>();
+        if (!manualStatus.isBlank()) parts.add("最终判定：" + manualStatus);
+        if (!accepted.isBlank()) parts.add(accepted);
+        if (!comment.isBlank()) parts.add("备注：" + comment);
+        return String.join("\n", parts);
+    }
+
+    private static String renderCheckStatus(String raw) {
         if (raw == null || raw.isBlank()) return "";
-        return switch (raw.trim().toLowerCase()) {
-            case "high", "高", "critical", "严重" -> "高";
-            case "medium", "中", "moderate" -> "中";
-            case "low", "低", "minor" -> "低";
+        return switch (raw.trim()) {
+            case "Pass" -> "通过";
+            case "Partial" -> "部分通过";
+            case "Fail" -> "不通过";
+            case "N/A" -> "不适用";
+            case "Review" -> "待复核";
             default -> raw.trim();
         };
+    }
+
+    private ReviewTask requireOwnedTask(String taskId, Long userId) {
+        ReviewTask task = reviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only view your own tasks");
+        }
+        return task;
+    }
+
+    private Map<String, Object> findCheckResult(List<Map<String, Object>> checks,
+                                                String checkCode,
+                                                Integer sourceChunk) {
+        for (Map<String, Object> check : checks) {
+            String code = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
+            if (!checkCode.equals(code)) continue;
+            if (sourceChunk == null) return check;
+            Object chunk = check.get("sourceChunk");
+            if (chunk instanceof Number n && n.intValue() == sourceChunk) return check;
+            if (chunk != null && String.valueOf(sourceChunk).equals(chunk.toString())) return check;
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void syncChunkCheckResult(Map<String, Object> aiResult, Map<String, Object> updated) {
+        Object chunkResultsObj = aiResult.get("chunkResults");
+        if (!(chunkResultsObj instanceof List<?> chunks)) return;
+        String checkCode = firstNonBlank(strField(updated, "check_code"), strField(updated, "checkCode"));
+        Object sourceChunk = updated.get("sourceChunk");
+        for (Object chunkObj : chunks) {
+            if (!(chunkObj instanceof Map<?, ?>)) continue;
+            Map<String, Object> chunk = (Map<String, Object>) chunkObj;
+            if (sourceChunk != null && !Objects.equals(String.valueOf(sourceChunk), String.valueOf(chunk.get("chunk")))) {
+                continue;
+            }
+            Object resultObj = chunk.get("result");
+            if (!(resultObj instanceof Map<?, ?>)) continue;
+            Map<String, Object> result = (Map<String, Object>) resultObj;
+            Object checksObj = result.get("check_results");
+            if (!(checksObj instanceof List<?> checkList)) continue;
+            for (Object item : checkList) {
+                if (!(item instanceof Map<?, ?>)) continue;
+                Map<String, Object> check = (Map<String, Object>) item;
+                String candidate = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
+                if (checkCode.equals(candidate)) {
+                    check.putAll(updated);
+                    return;
+                }
+            }
+        }
+    }
+
+    private Map<String, Object> buildManualReviewSummary(List<Map<String, Object>> checks) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        int reviewed = 0;
+        int accepted = 0;
+        Map<String, Integer> finalStatusCounts = new LinkedHashMap<>();
+        for (String s : ReviewResultSchema.CHECK_STATUS_ENUM) finalStatusCounts.put(s, 0);
+        for (Map<String, Object> check : checks) {
+            String manualStatus = strField(check, "manualStatus");
+            if (!manualStatus.isBlank()) {
+                reviewed++;
+                finalStatusCounts.merge(normalizeCheckStatus(manualStatus), 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(check.get("manualAccepted"))) {
+                accepted++;
+            }
+        }
+        summary.put("reviewed", reviewed);
+        summary.put("accepted", accepted);
+        summary.put("pending", Math.max(0, checks.size() - reviewed));
+        summary.put("finalStatusCounts", finalStatusCounts);
+        summary.put("updatedAt", LocalDateTime.now().toString());
+        return summary;
     }
 
     private void updateTaskStatus(ReviewTask task, String status, String failReason) {
@@ -2063,7 +2591,69 @@ public class ReviewService {
         reviewTaskMapper.updateById(task);
     }
 
+    private Map<String, Object> enrichAiResultWithOriginalSources(ReviewTask task) {
+        Map<String, Object> aiResult = task.getAiResult();
+        if (aiResult == null) return null;
+        Map<String, Object> enriched = new LinkedHashMap<>(aiResult);
+        if (!enriched.containsKey("originalSources")) {
+            enriched.put("originalSources", buildOriginalSources(task));
+            enriched.put("sourceTextMode", "original_word_document");
+        }
+        return enriched;
+    }
+
+    private List<Map<String, Object>> buildOriginalSources(ReviewTask task) {
+        List<Map<String, Object>> sources = new ArrayList<>();
+        if (task.getFilePath() == null || task.getFilePath().isBlank()) {
+            return sources;
+        }
+        try {
+            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
+            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
+            List<WordParser.Chapter> chapters = firstRealIdx > 0
+                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
+                    : rawChapters;
+
+            for (int i = 0; i < chapters.size(); i++) {
+                WordParser.Chapter chapter = chapters.get(i);
+                String content = chapter.getContent() == null ? "" : chapter.getContent();
+                Map<String, Object> source = new LinkedHashMap<>();
+                source.put("sourceId", "CHAPTER-" + String.format("%03d", i + 1));
+                source.put("type", "original_chapter");
+                source.put("title", chapter.getTitle());
+                source.put("sectionPath", chapter.getTitle());
+                source.put("text", content);
+                source.put("textLength", content.length());
+                source.put("estimatedTokens", ChunkUtils.estimateTokens(chapter.getFullText()));
+                sources.add(source);
+            }
+
+            List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
+            for (int i = 0; i < chunks.size(); i++) {
+                ChunkUtils.ChunkResult chunk = chunks.get(i);
+                String content = chunk.getContent() == null ? "" : chunk.getContent();
+                Map<String, Object> source = new LinkedHashMap<>();
+                source.put("sourceId", "CHUNK-" + String.format("%03d", i + 1));
+                source.put("type", "original_chunk");
+                source.put("chunk", i + 1);
+                source.put("title", chunk.getLabel());
+                source.put("sectionPath", chunk.getLabel());
+                source.put("text", content);
+                source.put("textLength", content.length());
+                source.put("estimatedTokens", chunk.getEstimatedTokens());
+                sources.add(source);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to build original source view for task {}: {}", task.getId(), e.getMessage());
+        }
+        return sources;
+    }
+
     private ReviewTaskDTO toDTO(ReviewTask task) {
+        return toDTO(task, false);
+    }
+
+    private ReviewTaskDTO toDTO(ReviewTask task, boolean includeOriginalSources) {
         ReviewTaskDTO dto = new ReviewTaskDTO();
         dto.setId(task.getId());
         dto.setUserId(task.getUserId());
@@ -2071,7 +2661,7 @@ public class ReviewService {
         dto.setScenarioId(task.getScenarioId());
         dto.setSelectedModel(task.getSelectedModel());
         dto.setStatus(task.getStatus());
-        dto.setAiResult(task.getAiResult());
+        dto.setAiResult(includeOriginalSources ? enrichAiResultWithOriginalSources(task) : task.getAiResult());
         dto.setCreatedAt(task.getCreatedAt());
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());

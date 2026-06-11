@@ -10,10 +10,16 @@ public class AiModelConfigDTO {
     private Long id;
     private String name;
     private String provider;
+    /**
+     * Model purpose: chat = document review LLM, embedding = vector embedding,
+     * reranker = retrieval reranking model.
+     */
+    private String modelType;
     private String modelKey;
     private String apiEndpoint;
     private String apiKey;
     private Integer maxTokens;
+    private Integer embeddingDimension;
     private Double temperature;
     private Integer timeout;
     private Boolean enabled;

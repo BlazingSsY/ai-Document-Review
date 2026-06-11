@@ -10,6 +10,7 @@ import {
   Select,
   Switch,
   Space,
+  Tabs,
   Typography,
   Tag,
   Tooltip,
@@ -28,10 +29,11 @@ import {
   suggestThinkingMode,
   AIModel,
   CreateModelParams,
+  ModelType,
 } from '../api/models';
-import { MODEL_PROVIDERS, PAGE_SIZE } from '../utils/constants';
+import { MODEL_PROVIDERS, MODEL_TYPES, PAGE_SIZE } from '../utils/constants';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 /**
  * 模型表格列宽的基准比例。各值之和 ({@link BASE_TABLE_WIDTH}) 等于"刚好能装下所有内容
@@ -60,6 +62,7 @@ function ModelConfigPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<AIModel | null>(null);
   const [saving, setSaving] = useState(false);
+  const [activeModelType, setActiveModelType] = useState<ModelType>('chat');
   const [form] = Form.useForm();
   const [isCustomProvider, setIsCustomProvider] = useState(false);
   const [testingInForm, setTestingInForm] = useState(false);
@@ -68,6 +71,9 @@ function ModelConfigPage() {
   // once the user flips the switch themselves we stop overriding their choice.
   const [thinkingTouched, setThinkingTouched] = useState(false);
   const thinkingMode = Form.useWatch('thinkingMode', form);
+  const modelType = (Form.useWatch('modelType', form) || activeModelType) as ModelType;
+  const isChatModel = modelType === 'chat';
+  const isEmbeddingModel = modelType === 'embedding';
 
   // Measure the table container and scale all column widths proportionally so the
   // 1080px-laptop layout and the 4K-monitor layout look the same shape — same
@@ -98,11 +104,22 @@ function ModelConfigPage() {
     () => Object.values(scaledWidths).reduce((sum, w) => sum + w, 0),
     [scaledWidths],
   );
+  const activeTypeLabel = MODEL_TYPES.find((item) => item.value === activeModelType)?.label || '模型';
+  const tabItems = MODEL_TYPES.map((item) => ({
+    key: item.value,
+    label: item.label,
+  }));
+
+  const handleTabChange = (key: string) => {
+    setActiveModelType(key as ModelType);
+    setPage(1);
+    setModels([]);
+  };
 
   const fetchModels = async () => {
     setLoading(true);
     try {
-      const res = await getModelList({ page, pageSize: PAGE_SIZE });
+      const res = await getModelList({ page, pageSize: PAGE_SIZE, modelType: activeModelType });
       setModels(res.data.data.records);
       setTotal(res.data.data.total);
     } catch {
@@ -114,7 +131,7 @@ function ModelConfigPage() {
 
   useEffect(() => {
     fetchModels();
-  }, [page]);
+  }, [page, activeModelType]);
 
   const openCreateModal = () => {
     setEditingModel(null);
@@ -122,7 +139,15 @@ function ModelConfigPage() {
     setThinkingTouched(false);
     form.resetFields();
     // 新增模型时，maxTokens 留空让用户按实际模型上下文窗口填写；temperature 默认 0.3（审查类任务偏稳定）
-    form.setFieldsValue({ maxTokens: undefined, temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false });
+    form.setFieldsValue({
+      modelType: activeModelType,
+      maxTokens: undefined,
+      embeddingDimension: undefined,
+      temperature: 0.3,
+      timeout: 180,
+      enabled: true,
+      thinkingMode: false,
+    });
     setModalOpen(true);
   };
 
@@ -135,12 +160,14 @@ function ModelConfigPage() {
     setThinkingTouched(true);
     form.setFieldsValue({
       name: model.name,
+      modelType: model.modelType || 'chat',
       providerSelect: knownProvider ? model.provider : '__custom__',
       providerCustom: knownProvider ? '' : model.provider,
       modelKey: model.modelKey,
       apiEndpoint: model.apiEndpoint,
       apiKey: model.apiKey,
       maxTokens: model.maxTokens,
+      embeddingDimension: model.embeddingDimension,
       temperature: model.temperature,
       timeout: model.timeout || 180,
       enabled: model.enabled,
@@ -155,7 +182,7 @@ function ModelConfigPage() {
    * the result if the user hasn't manually flipped the switch yet.
    */
   const handleModelKeyChange = (value: string) => {
-    if (thinkingTouched) return;
+    if (!isChatModel || thinkingTouched) return;
     const key = (value || '').trim();
     if (!key) return;
     suggestThinkingMode(key)
@@ -179,14 +206,16 @@ function ModelConfigPage() {
     const params: CreateModelParams = {
       name: values.name as string,
       provider,
+      modelType: (values.modelType as ModelType) || activeModelType,
       modelKey: values.modelKey as string,
       apiEndpoint: values.apiEndpoint as string,
       apiKey: values.apiKey as string,
-      maxTokens: values.maxTokens as number,
-      temperature: values.temperature as number,
+      maxTokens: (values.maxTokens as number) || 4096,
+      embeddingDimension: values.embeddingDimension as number | undefined,
+      temperature: (values.temperature as number) ?? 0.3,
       timeout: values.timeout as number,
       enabled: values.enabled as boolean,
-      thinkingMode: !!values.thinkingMode,
+      thinkingMode: ((values.modelType as ModelType) || activeModelType) === 'chat' ? !!values.thinkingMode : false,
     };
     setSaving(true);
     try {
@@ -231,7 +260,7 @@ function ModelConfigPage() {
   const handleTestInForm = async () => {
     try {
       const values = await form.validateFields([
-        'name', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature', 'timeout',
+        'name', 'modelType', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature', 'timeout',
       ]);
       const provider = values.providerSelect === '__custom__'
         ? (values.providerCustom as string)
@@ -241,12 +270,13 @@ function ModelConfigPage() {
         id: editingModel?.id,
         name: values.name as string,
         provider,
+        modelType: (values.modelType as ModelType) || activeModelType,
         modelKey: values.modelKey as string,
         apiEndpoint: values.apiEndpoint as string,
         apiKey: values.apiKey as string,
         temperature: values.temperature as number,
         timeout: values.timeout as number,
-        thinkingMode: !!form.getFieldValue('thinkingMode'),
+        thinkingMode: ((values.modelType as ModelType) || activeModelType) === 'chat' ? !!form.getFieldValue('thinkingMode') : false,
       });
       const data = res.data?.data;
       Modal.success({
@@ -317,7 +347,9 @@ function ModelConfigPage() {
       onHeaderCell: () => ({ style: { whiteSpace: 'nowrap' } }),
       render: (val: number, record) => (
         <span style={{ whiteSpace: 'nowrap' }}>
-          {record.thinkingMode ? (
+          {record.modelType !== 'chat' ? (
+            <Text type="secondary">不适用</Text>
+          ) : record.thinkingMode ? (
             <Tooltip title="思考模式下服务端会强制使用默认 temperature（如 Kimi K2.6 = 1.0），此字段仅作展示，发送请求时会被忽略">
               <span style={{ color: '#bfbfbf', textDecoration: 'line-through' }}>{val}</span>
             </Tooltip>
@@ -334,8 +366,10 @@ function ModelConfigPage() {
       width: scaledWidths.thinkingMode,
       align: 'center',
       onHeaderCell: () => ({ style: { whiteSpace: 'nowrap' } }),
-      render: (val: boolean) => (
-        val
+      render: (val: boolean, record) => (
+        record.modelType !== 'chat'
+          ? <Tag color="default">不适用</Tag>
+          : val
           ? <Tag color="purple">思考</Tag>
           : <Tag color="default">普通</Tag>
       ),
@@ -394,11 +428,18 @@ function ModelConfigPage() {
           icon={<PlusOutlined />}
           onClick={openCreateModal}
         >
-          添加模型
+          添加{activeTypeLabel}
         </Button>
       </div>
 
       <Card>
+        <Tabs
+          className="model-config-tabs"
+          type="card"
+          activeKey={activeModelType}
+          items={tabItems}
+          onChange={handleTabChange}
+        />
         <div ref={tableWrapperRef}>
           <Table
             columns={columns}
@@ -423,8 +464,10 @@ function ModelConfigPage() {
       </Card>
 
       <Modal
-        title={editingModel ? '编辑模型配置' : '添加模型配置'}
+        className="model-config-modal"
+        title={editingModel ? `编辑${activeTypeLabel}` : `添加${activeTypeLabel}`}
         open={modalOpen}
+        centered
         onCancel={() => {
           setModalOpen(false);
           setEditingModel(null);
@@ -432,14 +475,17 @@ function ModelConfigPage() {
         }}
         footer={null}
         destroyOnClose
-        width={560}
+        width={720}
       >
         <Form
           form={form}
           onFinish={handleSave}
           layout="vertical"
-          initialValues={{ temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false }}
+          initialValues={{ modelType: 'chat', temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false }}
         >
+          <Form.Item name="modelType" hidden>
+            <Input />
+          </Form.Item>
           <Form.Item
             name="name"
             label="模型名称"
@@ -474,10 +520,14 @@ function ModelConfigPage() {
             name="modelKey"
             label="模型标识"
             rules={[{ required: true, message: '请输入模型标识' }]}
-            extra="填写官方模型ID，例：gpt-4o、kimi-k2-thinking、kimi-k2.6、glm-5.1。系统会据此自动建议是否开启思考模式。"
+            extra={isChatModel
+              ? '填写官方模型ID，例：gpt-4o、kimi-k2-thinking、kimi-k2.6、glm-5.1。系统会据此自动建议是否开启思考模式。'
+              : isEmbeddingModel
+                ? '填写向量模型ID，例：text-embedding-3-large、bge-m3、jina-embeddings-v3。'
+                : '填写重排模型ID，例：bge-reranker-v2-m3、jina-reranker-v2-base-multilingual。'}
           >
             <Input
-              placeholder="例：gpt-4o, claude-3-opus, kimi-k2-thinking"
+              placeholder={isChatModel ? '例：gpt-4o, claude-3-opus, kimi-k2-thinking' : isEmbeddingModel ? '例：text-embedding-3-large' : '例：bge-reranker-v2-m3'}
               onBlur={(e) => handleModelKeyChange(e.target.value)}
             />
           </Form.Item>
@@ -485,7 +535,11 @@ function ModelConfigPage() {
             name="apiEndpoint"
             label="API 地址"
             rules={[{ required: true, message: '请输入 API 地址' }]}
-            extra="只需填写到 v1，例：https://api.minimaxi.com/v1，系统会自动补全 /chat/completions 路径"
+            extra={isChatModel
+              ? '只需填写到 v1，例：https://api.minimaxi.com/v1，系统会自动补全 /chat/completions 路径'
+              : isEmbeddingModel
+                ? '只需填写到 v1，系统会自动补全 /embeddings；如果供应商路径特殊，可直接填写完整 embeddings 地址。'
+                : '只需填写到 v1，系统会自动补全 /rerank；如果供应商路径特殊，可直接填写完整 rerank 地址。'}
           >
             <Input placeholder="例：https://api.minimaxi.com/v1" />
           </Form.Item>
@@ -499,29 +553,42 @@ function ModelConfigPage() {
             />
           </Form.Item>
           <Space size="large" style={{ width: '100%' }}>
-            <Form.Item
-              name="maxTokens"
-              label="最大 Token"
-              rules={[{ required: true, message: '请输入' }]}
-              extra={thinkingMode ? '思考模式下后端会保证 ≥ 16000' : undefined}
-            >
-              <InputNumber min={100} max={256000} placeholder="请输入" style={{ width: 160 }} />
-            </Form.Item>
-            <Form.Item
-              name="temperature"
-              label={
-                <span>
-                  Temperature&nbsp;
-                  <Tooltip title="Temperature 控制模型输出的随机性。值越低（接近0），输出越确定和保守；值越高（接近1），输出越多样和有创意。文件审查建议使用较低值（0.1~0.3）以获得更稳定的结果。">
-                    <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
-                  </Tooltip>
-                </span>
-              }
-              rules={[{ required: true, message: '请输入' }]}
-              extra={thinkingMode ? '已开启思考模式，发送请求时会自动省略此参数（服务端强制默认值）' : undefined}
-            >
-              <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} disabled={thinkingMode} />
-            </Form.Item>
+            {isChatModel && (
+              <Form.Item
+                name="maxTokens"
+                label="最大 Token"
+                rules={[{ required: true, message: '请输入' }]}
+                extra={thinkingMode ? '思考模式下后端会保证 ≥ 16000' : undefined}
+              >
+                <InputNumber min={100} max={256000} placeholder="请输入" style={{ width: 160 }} />
+              </Form.Item>
+            )}
+            {isEmbeddingModel && (
+              <Form.Item
+                name="embeddingDimension"
+                label="向量维度"
+                extra="可选；测试连接会返回实际维度。≤2000 使用 vector HNSW，≤4000 使用 halfvec HNSW，更高维度使用二值量化 HNSW 并按原向量重排。"
+              >
+                <InputNumber min={1} max={16000} placeholder="例：1024" style={{ width: 160 }} />
+              </Form.Item>
+            )}
+            {isChatModel && (
+              <Form.Item
+                name="temperature"
+                label={
+                  <span>
+                    Temperature&nbsp;
+                    <Tooltip title="Temperature 控制模型输出的随机性。值越低（接近0），输出越确定和保守；值越高（接近1），输出越多样和有创意。文件审查建议使用较低值（0.1~0.3）以获得更稳定的结果。">
+                      <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                    </Tooltip>
+                  </span>
+                }
+                rules={[{ required: true, message: '请输入' }]}
+                extra={thinkingMode ? '已开启思考模式，发送请求时会自动省略此参数（服务端强制默认值）' : undefined}
+              >
+                <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} disabled={thinkingMode} />
+              </Form.Item>
+            )}
             <Form.Item
               name="timeout"
               label="请求超时(s)"
@@ -532,24 +599,26 @@ function ModelConfigPage() {
             </Form.Item>
           </Space>
           <Space size="large" style={{ width: '100%' }}>
-            <Form.Item
-              name="thinkingMode"
-              label={
-                <span>
-                  思考模式&nbsp;
-                  <Tooltip title="开启后，调用此模型时后端会自动：① 不发送 temperature（服务端会用默认值，如 Kimi K2.6/GLM-5.1 = 1.0）；② 把 max_tokens 抬到 ≥ 16000，给推理过程留足空间；③ 优先取 content 字段、必要时回退到 reasoning_content。系统会根据模型标识自动建议，也可手动调整。">
-                    <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
-                  </Tooltip>
-                </span>
-              }
-              valuePropName="checked"
-            >
-              <Switch
-                checkedChildren="开启"
-                unCheckedChildren="关闭"
-                onChange={() => setThinkingTouched(true)}
-              />
-            </Form.Item>
+            {isChatModel && (
+              <Form.Item
+                name="thinkingMode"
+                label={
+                  <span>
+                    思考模式&nbsp;
+                    <Tooltip title="开启后，调用此模型时后端会自动：① 不发送 temperature（服务端会用默认值，如 Kimi K2.6/GLM-5.1 = 1.0）；② 把 max_tokens 抬到 ≥ 16000，给推理过程留足空间；③ 优先取 content 字段、必要时回退到 reasoning_content。系统会根据模型标识自动建议，也可手动调整。">
+                      <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                    </Tooltip>
+                  </span>
+                }
+                valuePropName="checked"
+              >
+                <Switch
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                  onChange={() => setThinkingTouched(true)}
+                />
+              </Form.Item>
+            )}
             <Form.Item name="enabled" label="启用状态" valuePropName="checked">
               <Switch checkedChildren="启用" unCheckedChildren="禁用" />
             </Form.Item>

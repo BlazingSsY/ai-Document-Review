@@ -190,7 +190,6 @@ public class RuleParser {
         sp.append("      \"suggestion\": \"修改建议\",\n");
         sp.append("      \"rule\": \"对应的审查规则名称（必填）\",\n");
         sp.append("      \"rule_code\": \"命中的规则编号，若规则未提供则留空\",\n");
-        sp.append("      \"severity\": \"high | medium | low，由模型按问题严重性自行判定，默认 medium\",\n");
         sp.append("      \"category\": \"问题分类，例如 格式、完整性、标准符合性、逻辑一致性\",\n");
         sp.append("      \"evidence\": \"判定依据：摘录支持该结论的原文片段或表格行\"\n");
         sp.append("    }\n");
@@ -242,7 +241,7 @@ public class RuleParser {
      * <ol>
      *   <li>ROLE + 任务（极简，不到 200 字）；</li>
      *   <li>JSON Schema（机器可读，直接 stringify {@link ReviewResultSchema#schema()}）；</li>
-     *   <li>Few-shot 锚点：1 正例 + 1 不通过例 + 1 不适用例，含 severity / category 判定说明；</li>
+     *   <li>Few-shot 锚点：1 正例 + 1 不通过例 + 1 不适用例，含 category 判定说明；</li>
      *   <li>规则清单：调用方已按 {@code rule_code} 升序排序，每条以 {@code [R-XXX]} 编号；</li>
      * </ol>
      * 末尾追加严重度默认值兜底和"只能用清单内编号"的约束，把模型自由度压到最小。
@@ -271,19 +270,15 @@ public class RuleParser {
 
         // ③ Few-shot 锚点
         sp.append("【判定锚点 / Few-shot】\n");
-        sp.append("severity 锚点（默认值 medium）：\n");
-        sp.append("  - high   = 缺失或错误会直接导致大纲不可用、不符合强制性标准条款；\n");
-        sp.append("  - medium = 影响审查或评审一致性，但不阻断；\n");
-        sp.append("  - low    = 表述/格式问题，不影响实质内容。\n");
         sp.append("category 锚点：必须从 [格式, 完整性, 标准符合性, 逻辑一致性, 术语一致性, 其他] 中选；无法归类填 其他。\n");
         sp.append("rule_code 锚点：必须使用本提示词【审查规则清单】中给出的 [R-XXX] 编号；本次未注入的编号一律不得使用。\n");
         sp.append("location 锚点：按 \"一级标题 > 二级标题 > 三级标题\" 写，逐字与原文一致，禁止仅写 \"原文\" / \"表格中\" / \"上文\"。\n\n");
         sp.append("示例 1（正例，识别为问题）：\n");
-        sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"severity\":\"high\",\"category\":\"完整性\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\"}],\"passed_items\":[]}\n");
+        sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"category\":\"完整性\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\"}],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"是否明确工作温度区间\",\"status\":\"Fail\",\"reason\":\"原文未给出明确温度上下限\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\",\"missing_items\":[\"工作温度区间\"],\"suggestion\":\"补充明确温度区间\",\"confidence\":\"high\"}]}\n");
         sp.append("示例 2（反例，规则不适用 → 不产生 issue）：\n");
-        sp.append("{\"summary\":\"本切片为目录页，所有规则不适用\",\"issues\":[],\"passed_items\":[\"[R-001] 规则不适用于目录\"]}\n");
+        sp.append("{\"summary\":\"本切片为目录页，所有规则不适用\",\"issues\":[],\"passed_items\":[\"[R-001] 规则不适用于目录\"],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"是否明确工作温度区间\",\"status\":\"N/A\",\"reason\":\"目录页不包含试验条件正文\",\"evidence\":\"当前切片为目录\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"high\"}]}\n");
         sp.append("示例 3（混合，部分通过部分不通过）：\n");
-        sp.append("{\"summary\":\"试验步骤完整，但术语不一致\",\"issues\":[{\"location\":\"5 试验步骤 > 5.3\",\"description\":\"同一项目混用 \\\"试件\\\" 与 \\\"样件\\\"\",\"suggestion\":\"统一为 \\\"试件\\\"\",\"rule\":\"术语一致性\",\"rule_code\":\"R-007\",\"severity\":\"low\",\"category\":\"术语一致性\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\"}],\"passed_items\":[\"[R-003] 试验步骤完整\"]}\n\n");
+        sp.append("{\"summary\":\"试验步骤完整，但术语不一致\",\"issues\":[{\"location\":\"5 试验步骤 > 5.3\",\"description\":\"同一项目混用 \\\"试件\\\" 与 \\\"样件\\\"\",\"suggestion\":\"统一为 \\\"试件\\\"\",\"rule\":\"术语一致性\",\"rule_code\":\"R-007\",\"category\":\"术语一致性\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\"}],\"passed_items\":[\"[R-003] 试验步骤完整\"],\"check_results\":[{\"check_code\":\"R-003-C001\",\"rule_code\":\"R-003\",\"check_question\":\"试验步骤是否完整\",\"status\":\"Pass\",\"reason\":\"步骤要素均已给出\",\"evidence\":\"原文列出准备、执行和记录步骤\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"high\"},{\"check_code\":\"R-007-C001\",\"rule_code\":\"R-007\",\"check_question\":\"术语是否一致\",\"status\":\"Fail\",\"reason\":\"同一对象出现两个术语\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\",\"missing_items\":[],\"suggestion\":\"统一术语\",\"confidence\":\"high\"}]}\n\n");
 
         // ④ 规则清单
         sp.append("【审查规则清单（按 rule_code 升序）】\n");
@@ -294,16 +289,33 @@ public class RuleParser {
             manifest.add(code);
             sp.append("\n[").append(code).append("] ");
             if (e.name != null && !e.name.isBlank()) sp.append(e.name);
-            if (e.severityHint != null && !e.severityHint.isBlank()) {
-                sp.append("（默认严重度：").append(e.severityHint).append("）");
-            }
             sp.append("\n");
             if (e.body != null && !e.body.isBlank()) {
                 sp.append(e.body.trim()).append("\n");
             }
+            if (e.checks != null && !e.checks.isEmpty()) {
+                sp.append("原子检查项（必须逐项输出 check_results）：\n");
+                for (CheckEntry check : e.checks) {
+                    sp.append("- [").append(check.checkCode).append("] ");
+                    sp.append(check.question == null ? "" : check.question);
+                    if (check.passCriteria != null && !check.passCriteria.isBlank()) {
+                        sp.append("；通过标准：").append(check.passCriteria);
+                    }
+                    if (check.category != null && !check.category.isBlank()) {
+                        sp.append("；分类：").append(check.category);
+                    }
+                    if (Boolean.TRUE.equals(check.evidenceRequired)) {
+                        sp.append("；必须给出证据");
+                    }
+                    sp.append("\n");
+                }
+            }
         }
         sp.append("\n本次注入的 rule_code 清单：").append(String.join(", ", manifest)).append("\n");
         sp.append("issues[].rule_code 必须且只能从该清单中选择；不在清单内的编号不允许出现。\n");
+        sp.append("若规则下列出了原子检查项，则必须为每个原子检查项输出一条 check_results[]；"
+                + "status 只能是 Pass、Partial、Fail、N/A、Review。"
+                + "证据不足不得判 Pass，应判 Review；部分满足判 Partial；不适用判 N/A。\n");
 
         // 表格阅读规则（保留，原 prompt 中证实对 HTML 表格审查很关键）
         sp.append("\n【表格阅读注意事项】\n");
@@ -375,18 +387,40 @@ public class RuleParser {
 
     /**
      * 一条规则在 prompt 中的最小载荷。
-     * code：用于编号与排序；name：人类可读名称；body：规则正文；severityHint：默认严重度（可空）。
+     * code：用于编号与排序；name：人类可读名称；body：规则正文。
      */
     public static final class RuleEntry {
         public final String code;
         public final String name;
         public final String body;
-        public final String severityHint;
-        public RuleEntry(String code, String name, String body, String severityHint) {
+        public final List<CheckEntry> checks;
+
+        public RuleEntry(String code, String name, String body) {
+            this(code, name, body, List.of());
+        }
+
+        public RuleEntry(String code, String name, String body, List<CheckEntry> checks) {
             this.code = code;
             this.name = name;
             this.body = body;
-            this.severityHint = severityHint;
+            this.checks = checks == null ? List.of() : checks;
+        }
+    }
+
+    public static final class CheckEntry {
+        public final String checkCode;
+        public final String question;
+        public final String passCriteria;
+        public final String category;
+        public final Boolean evidenceRequired;
+
+        public CheckEntry(String checkCode, String question, String passCriteria,
+                          String category, Boolean evidenceRequired) {
+            this.checkCode = checkCode;
+            this.question = question;
+            this.passCriteria = passCriteria;
+            this.category = category;
+            this.evidenceRequired = evidenceRequired;
         }
     }
 

@@ -1,0 +1,769 @@
+{
+  "taskId" : "b1bd4a77d4f116a12019834893f02c63",
+  "fileName" : "红标件环境试验大纲样例.docx",
+  "model" : "Qwen3.6-35B-A3B",
+  "timestamp" : "2026-06-10T02:01:28.434567044",
+  "result" : {
+    "totalChunks" : 40,
+    "chunkResults" : [ {
+      "chunk" : 1,
+      "chapterTitle" : "2 试验目的",
+      "totalChunks" : 40,
+      "estimatedTokens" : 70,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为试验目的章节，内容完整，但本次未注入审查规则清单，无法进行规则符合性判定。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，本切片无规则可判定", "本切片内容已审查，未命中任何注入规则" ]
+      },
+      "elapsedMs" : 62763,
+      "batchId" : "batch-001"
+    }, {
+      "chunk" : 2,
+      "chapterTitle" : "3 范围",
+      "totalChunks" : 40,
+      "estimatedTokens" : 164,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为范围章节，列出了试验项目类别，内容完整，但本次未注入审查规则清单，无法进行规则符合性判定。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，本切片无规则可判定", "本切片内容已审查，未命中任何注入规则" ]
+      },
+      "elapsedMs" : 62763,
+      "batchId" : "batch-001"
+    }, {
+      "chunk" : 3,
+      "chapterTitle" : "4 引用文件",
+      "totalChunks" : 40,
+      "estimatedTokens" : 385,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为引用文件章节，包含引用文件表格，版本列存在“/”、“N”、“”等符号，按表格阅读注意事项视为不适用或已填写，内容完整，但本次未注入审查规则清单，无法进行规则符合性判定。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，本切片无规则可判定", "本切片内容已审查，未命中任何注入规则" ]
+      },
+      "elapsedMs" : 62763,
+      "batchId" : "batch-001"
+    }, {
+      "chunk" : 4,
+      "chapterTitle" : "5 术语和缩略语",
+      "totalChunks" : 40,
+      "estimatedTokens" : 197,
+      "appliedRules" : [ "rules_temperature" ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 1,
+      "result" : {
+        "summary" : "本切片为术语和缩略语章节，内容为通用定义，不涉及温度变化试验大纲的具体实施参数与要求，所列审查规则均不适用。",
+        "issues" : [ ],
+        "passed_items" : [ "[DO160G-5-QTP-001] 至 [DO160G-5-QTP-015] 均不适用于术语章节" ]
+      },
+      "elapsedMs" : 166313,
+      "batchId" : "batch-012"
+    }, {
+      "chunk" : 5,
+      "chapterTitle" : "6 相关验证条款",
+      "totalChunks" : 40,
+      "estimatedTokens" : 683,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为相关验证条款章节，包含符合适航标准条款的表格，内容完整，但本次未注入审查规则清单，无法进行规则符合性判定。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，本切片无规则可判定", "本切片内容已审查，未命中任何注入规则" ]
+      },
+      "elapsedMs" : 62763,
+      "batchId" : "batch-001"
+    }, {
+      "chunk" : 6,
+      "chapterTitle" : "7 试验设备描述",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1885,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第7章试验设备描述，涵盖功能、接口、参数、构型、物理状态、交联及试验状态等内容。基于当前注入规则清单，未发现违规项。",
+        "issues" : [ ],
+        "passed_items" : [ "[无规则] 本切片内容完整，表格与正文对应关系清晰，格式规范。", "因本次未注入审查规则清单，未进行规则匹配检查" ]
+      },
+      "elapsedMs" : 83619,
+      "batchId" : "batch-002"
+    }, {
+      "chunk" : 7,
+      "chapterTitle" : "8 试验概述",
+      "totalChunks" : 40,
+      "estimatedTokens" : 4183,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第8章试验概述，包含试验项目一览表、预期周期及试验顺序安排。基于当前注入规则清单，未发现违规项。",
+        "issues" : [ ],
+        "passed_items" : [ "[无规则] 本切片试验项目、周期与顺序表格结构完整，逻辑清晰。", "因本次未注入审查规则清单，未进行规则匹配检查" ]
+      },
+      "elapsedMs" : 83619,
+      "batchId" : "batch-002"
+    }, {
+      "chunk" : 8,
+      "chapterTitle" : "9 试验通用要求",
+      "totalChunks" : 40,
+      "estimatedTokens" : 359,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第9章试验通用要求，规定了试验环境条件、允许误差、夹具及装置要求。基于当前注入规则清单，未发现违规项。",
+        "issues" : [ ],
+        "passed_items" : [ "[无规则] 本切片通用要求条款明确，符合常规技术文档编写规范。", "因本次未注入审查规则清单，未进行规则匹配检查" ]
+      },
+      "elapsedMs" : 83619,
+      "batchId" : "batch-002"
+    }, {
+      "chunk" : 9,
+      "chapterTitle" : "10 试验承试单位",
+      "totalChunks" : 40,
+      "estimatedTokens" : 131,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第10章试验承试单位，列出了环境试验承试单位信息表。基于当前注入规则清单，未发现违规项。",
+        "issues" : [ ],
+        "passed_items" : [ "[无规则] 本切片承试单位表格结构完整，备注说明清晰。", "因本次未注入审查规则清单，未进行规则匹配检查" ]
+      },
+      "elapsedMs" : 83619,
+      "batchId" : "batch-002"
+    }, {
+      "chunk" : 10,
+      "chapterTitle" : "11 试验人员",
+      "totalChunks" : 40,
+      "estimatedTokens" : 173,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第11章试验人员内容，明确了试验工程师与质量工程师的职责要求。因本次提示词未提供具体审查规则清单，未触发任何规则审查项，内容结构完整。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，无法进行规则匹配审查", "已按注入规则清单审查，清单为空，无命中项" ]
+      },
+      "elapsedMs" : 94384,
+      "batchId" : "batch-003"
+    }, {
+      "chunk" : 11,
+      "chapterTitle" : "12 试验组织及责任分工",
+      "totalChunks" : 40,
+      "estimatedTokens" : 395,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第12章试验组织及责任分工，详细列出了设备承制单位与试验承试单位的主要职责。因本次提示词未提供具体审查规则清单，未触发任何规则审查项，内容结构完整。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，无法进行规则匹配审查", "已按注入规则清单审查，清单为空，无命中项" ]
+      },
+      "elapsedMs" : 94384,
+      "batchId" : "batch-003"
+    }, {
+      "chunk" : 12,
+      "chapterTitle" : "13 设备功能检查",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1194,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第13章设备功能检查，包含ATP与QPAT试验要求及对应表格。因本次提示词未提供具体审查规则清单，未触发任何规则审查项，内容结构完整。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，无法进行规则匹配审查", "已按注入规则清单审查，清单为空，无命中项" ]
+      },
+      "elapsedMs" : 94384,
+      "batchId" : "batch-003"
+    }, {
+      "chunk" : 13,
+      "chapterTitle" : "14 温度和高度",
+      "totalChunks" : 40,
+      "estimatedTokens" : 5578,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第14章温度和高度，涵盖试验目的、要求、设备、布置、符合性要求、详细试验程序及判据。因本次提示词未提供具体审查规则清单，未触发任何规则审查项，内容结构完整。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，无法进行规则匹配审查", "已按注入规则清单审查，清单为空，无命中项" ]
+      },
+      "elapsedMs" : 94384,
+      "batchId" : "batch-003"
+    }, {
+      "chunk" : 14,
+      "chapterTitle" : "15 温度变化试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1822,
+      "appliedRules" : [ "rules_temperature" ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 1,
+      "result" : {
+        "summary" : "本切片为温度变化试验章节，试验目的、依据、参数、程序及判据基本明确，但设备名称、供应商件号、试验单位、资质确认及试验日期等关键信息缺失或为占位符。",
+        "issues" : [ {
+          "category" : "完整性",
+          "description" : "设备中文名称填写为占位符“XXX”，无法唯一指向具体被测对象",
+          "evidence" : "受试设备：XXX",
+          "location" : "15 温度变化试验 > 15.3 受试/陪试设备",
+          "rule" : "设备中文名称完整性",
+          "rule_code" : "DO160G-5-QTP-002",
+          "severity" : "high",
+          "suggestion" : "替换为设备实际中文名称",
+          "fingerprint" : "1b07dfd7dabfc416799f709e3985aff9e7ff0e32",
+          "confidence" : "single"
+        }, {
+          "category" : "完整性",
+          "description" : "未提供被测设备的供应商件号",
+          "evidence" : "15.3节仅列出受试设备名称，无件号信息",
+          "location" : "15 温度变化试验 > 15.3 受试/陪试设备",
+          "rule" : "供应商件号完整性",
+          "rule_code" : "DO160G-5-QTP-003",
+          "severity" : "high",
+          "suggestion" : "补充设备供应商件号，并确保与构型文件一致",
+          "fingerprint" : "a56ce4db8624e7575914be69635b9d85bff98358",
+          "confidence" : "single"
+        }, {
+          "category" : "完整性",
+          "description" : "未明确承担本次温度变化试验的具体试验单位名称",
+          "evidence" : "15.4节仅列出设备型号，无试验单位信息",
+          "location" : "15 温度变化试验 > 15.4 试验设备、测试设备及要求",
+          "rule" : "试验单位完整性",
+          "rule_code" : "DO160G-5-QTP-004",
+          "severity" : "medium",
+          "suggestion" : "补充试验单位全称",
+          "fingerprint" : "e1deab596f7989a505a7a7931f455e9bcc0ed3e7",
+          "confidence" : "single"
+        }, {
+          "category" : "完整性",
+          "description" : "仅引用“10试验人员”章节，未给出明确的资质确认结果（是/否）",
+          "evidence" : "确保试验人员资质符合“10试验人员”的要求。",
+          "location" : "15 温度变化试验 > 15.6 受试设备、试验装置（试验前）的制造符合性要求",
+          "rule" : "试验资质确认",
+          "rule_code" : "DO160G-5-QTP-005",
+          "severity" : "medium",
+          "suggestion" : "补充明确的资质确认结论或检查表勾选结果",
+          "fingerprint" : "3b325122e7a2106bdb67de040d40e488d52b25b2",
+          "confidence" : "single"
+        }, {
+          "category" : "完整性",
+          "description" : "未明确温度变化试验的具体日期或计划日期",
+          "evidence" : "15.6节未提及试验日期",
+          "location" : "15 温度变化试验 > 15.6 受试设备、试验装置（试验前）的制造符合性要求",
+          "rule" : "试验日期完整性",
+          "rule_code" : "DO160G-5-QTP-006",
+          "severity" : "medium",
+          "suggestion" : "补充试验日期或计划试验时间安排",
+          "fingerprint" : "e2d3de5417170e98c2dd0de24614a91f78fb6508",
+          "confidence" : "single"
+        } ],
+        "passed_items" : [ "[DO160G-5-QTP-001] 鉴定试验类别明确为B类设备", "[DO160G-5-QTP-007] 产品构型引用6.1节明确", "[DO160G-5-QTP-008] 设备安装区域明确为飞机设备舱前电子舱", "[DO160G-5-QTP-009] 环境鉴定等级明确为B类", "[DO160G-5-QTP-010] QTP主体内容覆盖试验条件、程序、判据等", "[DO160G-5-QTP-011] 明确进行温度变化鉴定试验", "[DO160G-5-QTP-012] 明确按DO-160G第5.3.1节执行", "[DO160G-5-QTP-013] 温度变化关键参数完整且带单位", "[DO160G-5-QTP-014] 明确试验前中后功能性能测试安排", "[DO160G-5-QTP-015] 明确合格判据为Pass/Fail" ]
+      },
+      "elapsedMs" : 166313,
+      "batchId" : "batch-012"
+    }, {
+      "chunk" : 15,
+      "chapterTitle" : "16 湿热试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1476,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第16章湿热试验，涵盖试验目的、条件要求、设备仪器、布置连接、试验程序及判据。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，所有规则检查项不适用/通过", "C-15 章节结构完整，内容符合常规试验大纲格式，无规则命中项" ]
+      },
+      "elapsedMs" : 55587,
+      "batchId" : "batch-004"
+    }, {
+      "chunk" : 16,
+      "chapterTitle" : "17 工作冲击和坠撞安全试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 2702,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第17章工作冲击和坠撞安全试验，涵盖试验目的、条件要求、设备仪器、布置连接、试验程序及判据。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，所有规则检查项不适用/通过", "C-16 章节结构完整，内容符合常规试验大纲格式，无规则命中项" ]
+      },
+      "elapsedMs" : 55587,
+      "batchId" : "batch-004"
+    }, {
+      "chunk" : 17,
+      "chapterTitle" : "18 振动试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 2046,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第18章振动试验，涵盖试验目的、条件要求、设备仪器、布置连接、试验程序及判据。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，所有规则检查项不适用/通过", "C-17 章节结构完整，内容符合常规试验大纲格式，无规则命中项" ]
+      },
+      "elapsedMs" : 55587,
+      "batchId" : "batch-004"
+    }, {
+      "chunk" : 18,
+      "chapterTitle" : "19 防爆性试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1256,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第19章防爆性试验，涵盖试验目的、条件要求、设备仪器、布置连接、试验程序及判据。",
+        "issues" : [ ],
+        "passed_items" : [ "本次未注入审查规则清单，所有规则检查项不适用/通过", "C-18 章节结构完整，内容符合常规试验大纲格式，无规则命中项" ]
+      },
+      "elapsedMs" : 55587,
+      "batchId" : "batch-004"
+    }, {
+      "chunk" : 19,
+      "chapterTitle" : "20 防水试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1173,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第20章防水试验内容，因本次未注入审查规则清单，无法进行规则匹配与问题判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入审查规则清单，无法进行规则匹配", "未注入审查规则清单，无法进行规则匹配检查" ]
+      },
+      "elapsedMs" : 72404,
+      "batchId" : "batch-005"
+    }, {
+      "chunk" : 20,
+      "chapterTitle" : "21 磁效应试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1405,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第21章磁效应试验内容，因本次未注入审查规则清单，无法进行规则匹配与问题判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入审查规则清单，无法进行规则匹配", "未注入审查规则清单，无法进行规则匹配检查" ]
+      },
+      "elapsedMs" : 72404,
+      "batchId" : "batch-005"
+    }, {
+      "chunk" : 21,
+      "chapterTitle" : "22 电源输入试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 7949,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第22章电源输入试验，涵盖试验目的、要求、设备清单、试验布置、制造符合性要求、详细试验程序（含稳态电压、瞬时电源中断、浪涌电压、欠压、冲击电流及脉动电压）及试验判据。内容结构完整，参数引用明确。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入审查规则清单，本切片内容未触发任何规则检查", "未注入审查规则清单，无法进行规则匹配检查" ]
+      },
+      "elapsedMs" : 47726,
+      "batchId" : "batch-006"
+    }, {
+      "chunk" : 22,
+      "chapterTitle" : "23 电压尖峰试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1631,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第23章电压尖峰试验，涵盖试验目的、要求、设备清单、试验布置、制造符合性要求、试验程序及试验判据。内容结构完整，参数与DO-160G第17章A类设备要求对应。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入审查规则清单，本切片内容未触发任何规则检查", "未注入审查规则清单，无法进行规则匹配检查" ]
+      },
+      "elapsedMs" : 47726,
+      "batchId" : "batch-006"
+    }, {
+      "chunk" : 23,
+      "chapterTitle" : "24 音频传导敏感性",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1470,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第24章音频传导敏感性试验内容，涵盖试验目的、要求、设备、布置、程序及判据，章节结构完整。",
+        "issues" : [ ],
+        "passed_items" : [ "本批次未注入审查规则清单，本切片默认通过", "未注入审查规则清单，无法进行规则匹配检查" ]
+      },
+      "elapsedMs" : 60646,
+      "batchId" : "batch-007"
+    }, {
+      "chunk" : 24,
+      "chapterTitle" : "25 感应信号敏感性",
+      "totalChunks" : 40,
+      "estimatedTokens" : 3039,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第25章感应信号敏感性试验内容，涵盖试验目的、要求、设备、布置、程序及判据，章节结构完整。",
+        "issues" : [ ],
+        "passed_items" : [ "本批次未注入审查规则清单，本切片默认通过", "未注入审查规则清单，无法进行规则匹配检查" ]
+      },
+      "elapsedMs" : 60646,
+      "batchId" : "batch-007"
+    }, {
+      "chunk" : 25,
+      "chapterTitle" : "26 射频敏感度",
+      "totalChunks" : 40,
+      "estimatedTokens" : 3697,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第26章射频敏感度试验内容，涵盖试验目的、要求、设备、布置、程序及判据，章节结构完整。",
+        "issues" : [ ],
+        "passed_items" : [ "本批次未注入审查规则清单，本切片默认通过", "未注入审查规则清单，无法进行规则匹配检查" ]
+      },
+      "elapsedMs" : 60646,
+      "batchId" : "batch-007"
+    }, {
+      "chunk" : 26,
+      "chapterTitle" : "27 射频能量发射",
+      "totalChunks" : 40,
+      "estimatedTokens" : 2661,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第27章射频能量发射章节，包含试验目的、要求、设备、布置、程序及判据等内容，章节结构完整。因本次提示词未提供审查规则清单，无法进行规则匹配与问题判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未提供审查规则清单，本切片内容未触发任何规则检查", "本次未注入审查规则清单，无规则可判定" ]
+      },
+      "elapsedMs" : 115474,
+      "batchId" : "batch-008"
+    }, {
+      "chunk" : 27,
+      "chapterTitle" : "28 闪电感应瞬态敏感性",
+      "totalChunks" : 40,
+      "estimatedTokens" : 3125,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第28章闪电感应瞬态敏感性章节，包含试验目的、要求、设备、布置、程序及判据等内容，章节结构完整。因本次提示词未提供审查规则清单，无法进行规则匹配与问题判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未提供审查规则清单，本切片内容未触发任何规则检查", "本次未注入审查规则清单，无规则可判定" ]
+      },
+      "elapsedMs" : 115474,
+      "batchId" : "batch-008"
+    }, {
+      "chunk" : 28,
+      "chapterTitle" : "29 静电放电",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1396,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第29章静电放电章节，包含试验目的、要求、设备、布置、程序及判据等内容，章节结构完整。因本次提示词未提供审查规则清单，无法进行规则匹配与问题判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未提供审查规则清单，本切片内容未触发任何规则检查", "本次未注入审查规则清单，无规则可判定" ]
+      },
+      "elapsedMs" : 115474,
+      "batchId" : "batch-008"
+    }, {
+      "chunk" : 29,
+      "chapterTitle" : "30 可燃性试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1362,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第30章可燃性试验章节，包含试验目的、要求、设备、布置、程序及判据等内容，章节结构完整。因本次提示词未提供审查规则清单，无法进行规则匹配与问题判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未提供审查规则清单，本切片内容未触发任何规则检查", "本次未注入审查规则清单，无规则可判定" ]
+      },
+      "elapsedMs" : 115474,
+      "batchId" : "batch-008"
+    }, {
+      "chunk" : 30,
+      "chapterTitle" : "31 加速度试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1682,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为加速度试验章节，内容结构完整，包含试验目的、条件、设备、布置、程序及判据，格式规范。",
+        "issues" : [ ],
+        "passed_items" : [ "[规则清单为空] 本切片内容结构完整，格式规范，无注入规则可判定", "章节结构完整，符合常规试验大纲格式", "试验程序步骤逻辑连贯，判据明确" ]
+      },
+      "elapsedMs" : 88278,
+      "batchId" : "batch-009"
+    }, {
+      "chunk" : 31,
+      "chapterTitle" : "32 流体敏感性试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1585,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为流体敏感性试验章节，内容结构完整，包含试验目的、污染液条件、设备、布置、程序及判据，格式规范。",
+        "issues" : [ ],
+        "passed_items" : [ "[规则清单为空] 本切片内容结构完整，格式规范，无注入规则可判定", "章节结构完整，符合常规试验大纲格式", "试验程序步骤逻辑连贯，判据明确" ]
+      },
+      "elapsedMs" : 88278,
+      "batchId" : "batch-009"
+    }, {
+      "chunk" : 32,
+      "chapterTitle" : "33 砂尘试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1518,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为砂尘试验章节，内容结构完整，包含试验目的、条件、设备、布置、程序及判据，格式规范。",
+        "issues" : [ ],
+        "passed_items" : [ "[规则清单为空] 本切片内容结构完整，格式规范，无注入规则可判定", "章节结构完整，符合常规试验大纲格式", "试验程序步骤逻辑连贯，判据明确" ]
+      },
+      "elapsedMs" : 88278,
+      "batchId" : "batch-009"
+    }, {
+      "chunk" : 33,
+      "chapterTitle" : "34 霉菌试验",
+      "totalChunks" : 40,
+      "estimatedTokens" : 4389,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为霉菌试验章节，内容结构完整，包含试验目的、条件、菌种、设备、布置、程序及判据，格式规范。",
+        "issues" : [ ],
+        "passed_items" : [ "[规则清单为空] 本切片内容结构完整，格式规范，无注入规则可判定", "章节结构完整，符合常规试验大纲格式", "试验程序步骤逻辑连贯，判据明确" ]
+      },
+      "elapsedMs" : 88278,
+      "batchId" : "batch-009"
+    }, {
+      "chunk" : 34,
+      "chapterTitle" : "35 试验记录",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1092,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为35 试验记录章节，内容涵盖数据处理、记录、故障分类与处理、合格判据及异常处理。因本次未注入审查规则清单，未触发任何规则判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入规则清单，无问题", "本切片内容已审阅，因未注入审查规则清单，未触发具体问题" ]
+      },
+      "elapsedMs" : 69439,
+      "batchId" : "batch-010"
+    }, {
+      "chunk" : 35,
+      "chapterTitle" : "36 试验的终止与恢复处理",
+      "totalChunks" : 40,
+      "estimatedTokens" : 196,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为36 试验的终止与恢复处理章节，明确了终止条件与恢复流程。因本次未注入审查规则清单，未触发任何规则判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入规则清单，无问题", "本切片内容已审阅，因未注入审查规则清单，未触发具体问题" ]
+      },
+      "elapsedMs" : 69439,
+      "batchId" : "batch-010"
+    }, {
+      "chunk" : 36,
+      "chapterTitle" : "37 试验报告有关要求",
+      "totalChunks" : 40,
+      "estimatedTokens" : 151,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为37 试验报告有关要求章节，列出了试验报告应包含的内容要素。因本次未注入审查规则清单，未触发任何规则判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入规则清单，无问题", "本切片内容已审阅，因未注入审查规则清单，未触发具体问题" ]
+      },
+      "elapsedMs" : 69439,
+      "batchId" : "batch-010"
+    }, {
+      "chunk" : 37,
+      "chapterTitle" : "38 记录",
+      "totalChunks" : 40,
+      "estimatedTokens" : 38,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为38 记录章节，指引查阅附录A、B、C中的相关表格。因本次未注入审查规则清单，未触发任何规则判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入规则清单，无问题", "本切片内容已审阅，因未注入审查规则清单，未触发具体问题" ]
+      },
+      "elapsedMs" : 69439,
+      "batchId" : "batch-010"
+    }, {
+      "chunk" : 38,
+      "chapterTitle" : "第 38 部分",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1202,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第 38 部分检测记录表，包含环境试验检查记录表及详细检测项目。因本次未注入审查规则清单，未触发任何规则判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入规则清单，无问题", "本切片内容已审阅，因未注入审查规则清单，未触发具体问题" ]
+      },
+      "elapsedMs" : 69439,
+      "batchId" : "batch-010"
+    }, {
+      "chunk" : 39,
+      "chapterTitle" : "第 39 部分",
+      "totalChunks" : 40,
+      "estimatedTokens" : 598,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第 39 部分试验故障报告及相关分析、纠正措施报告表。因本次未注入审查规则清单，未触发任何规则判定。",
+        "issues" : [ ],
+        "passed_items" : [ "未注入规则清单，无问题", "本切片内容已审阅，因未注入审查规则清单，未触发具体问题" ]
+      },
+      "elapsedMs" : 69439,
+      "batchId" : "batch-010"
+    }, {
+      "chunk" : 40,
+      "chapterTitle" : "第 40 部分",
+      "totalChunks" : 40,
+      "estimatedTokens" : 1445,
+      "appliedRules" : [ ],
+      "samplingStrategy" : "double",
+      "sampleCount" : 2,
+      "result" : {
+        "summary" : "本切片为第40部分，包含试验前、中、后检测记录表模板。因本次未注入具体审查规则清单，且表格均为空白模板，未发现可依据规则判定的问题。",
+        "issues" : [ ],
+        "passed_items" : [ "[无规则注入] 本切片内容为空白记录表模板，未触发任何审查规则", "本次未注入审查规则清单，本切片内容为空白记录表模板，无规则可匹配" ]
+      },
+      "elapsedMs" : 67980,
+      "batchId" : "batch-011"
+    } ],
+    "totalIssues" : 5,
+    "allIssues" : [ {
+      "category" : "完整性",
+      "description" : "设备中文名称填写为占位符“XXX”，无法唯一指向具体被测对象",
+      "evidence" : "受试设备：XXX",
+      "location" : "15 温度变化试验 > 15.3 受试/陪试设备",
+      "rule" : "设备中文名称完整性",
+      "rule_code" : "DO160G-5-QTP-002",
+      "severity" : "high",
+      "suggestion" : "替换为设备实际中文名称",
+      "fingerprint" : "1b07dfd7dabfc416799f709e3985aff9e7ff0e32",
+      "confidence" : "single",
+      "occurrences" : 1
+    }, {
+      "category" : "完整性",
+      "description" : "未提供被测设备的供应商件号",
+      "evidence" : "15.3节仅列出受试设备名称，无件号信息",
+      "location" : "15 温度变化试验 > 15.3 受试/陪试设备",
+      "rule" : "供应商件号完整性",
+      "rule_code" : "DO160G-5-QTP-003",
+      "severity" : "high",
+      "suggestion" : "补充设备供应商件号，并确保与构型文件一致",
+      "fingerprint" : "a56ce4db8624e7575914be69635b9d85bff98358",
+      "confidence" : "single",
+      "occurrences" : 1
+    }, {
+      "category" : "完整性",
+      "description" : "未明确承担本次温度变化试验的具体试验单位名称",
+      "evidence" : "15.4节仅列出设备型号，无试验单位信息",
+      "location" : "15 温度变化试验 > 15.4 试验设备、测试设备及要求",
+      "rule" : "试验单位完整性",
+      "rule_code" : "DO160G-5-QTP-004",
+      "severity" : "medium",
+      "suggestion" : "补充试验单位全称",
+      "fingerprint" : "e1deab596f7989a505a7a7931f455e9bcc0ed3e7",
+      "confidence" : "single",
+      "occurrences" : 1
+    }, {
+      "category" : "完整性",
+      "description" : "仅引用“10试验人员”章节，未给出明确的资质确认结果（是/否）",
+      "evidence" : "确保试验人员资质符合“10试验人员”的要求。",
+      "location" : "15 温度变化试验 > 15.6 受试设备、试验装置（试验前）的制造符合性要求",
+      "rule" : "试验资质确认",
+      "rule_code" : "DO160G-5-QTP-005",
+      "severity" : "medium",
+      "suggestion" : "补充明确的资质确认结论或检查表勾选结果",
+      "fingerprint" : "3b325122e7a2106bdb67de040d40e488d52b25b2",
+      "confidence" : "single",
+      "occurrences" : 1
+    }, {
+      "category" : "完整性",
+      "description" : "未明确温度变化试验的具体日期或计划日期",
+      "evidence" : "15.6节未提及试验日期",
+      "location" : "15 温度变化试验 > 15.6 受试设备、试验装置（试验前）的制造符合性要求",
+      "rule" : "试验日期完整性",
+      "rule_code" : "DO160G-5-QTP-006",
+      "severity" : "medium",
+      "suggestion" : "补充试验日期或计划试验时间安排",
+      "fingerprint" : "e2d3de5417170e98c2dd0de24614a91f78fb6508",
+      "confidence" : "single",
+      "occurrences" : 1
+    } ],
+    "failedChunkCount" : 0,
+    "failedChunks" : [ ],
+    "severityCounts" : {
+      "high" : 2,
+      "medium" : 3,
+      "low" : 0
+    },
+    "categoryCounts" : {
+      "格式" : 0,
+      "完整性" : 5,
+      "标准符合性" : 0,
+      "逻辑一致性" : 0,
+      "术语一致性" : 0,
+      "其他" : 0
+    },
+    "confidenceCounts" : {
+      "single" : 5
+    },
+    "passedRuleCoverage" : {
+      "(未编号)" : 71,
+      "DO160G-5-QTP-001" : 2,
+      "无规则" : 4,
+      "DO160G-5-QTP-007" : 1,
+      "DO160G-5-QTP-008" : 1,
+      "DO160G-5-QTP-009" : 1,
+      "DO160G-5-QTP-010" : 1,
+      "DO160G-5-QTP-011" : 1,
+      "DO160G-5-QTP-012" : 1,
+      "DO160G-5-QTP-013" : 1,
+      "DO160G-5-QTP-014" : 1,
+      "DO160G-5-QTP-015" : 1,
+      "规则清单为空" : 4,
+      "无规则注入" : 1
+    },
+    "crossModelEligible" : true,
+    "samplingStrategy" : "double",
+    "modelName" : "Qwen3.6-35B-A3B",
+    "modelKey" : "Qwen/Qwen3.6-35B-A3B",
+    "modelTier" : "LIGHT",
+    "batchFallbacks" : [ ],
+    "batchTotalCount" : 12,
+    "batchFallbackCount" : 0
+  }
+}

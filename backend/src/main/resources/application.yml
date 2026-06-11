@@ -77,6 +77,17 @@ review:
     # chunkReviewExecutor 池子大小 = 此值 × async.max-pool-size，会自动跟随，
     # 因此调这一处即可，不需要动 AsyncConfig。
     chunk-concurrency: 6
+  rag:
+    enabled: true
+    fallback-to-legacy: false
+    block-max-chars: 1800
+    embedding-batch-size: 24
+    recall-top-k: 20
+    rerank-top-n: 6
+    vector-index:
+      enabled: true
+      hnsw-ef-search: 100
+      binary-candidate-multiplier: 4
   # v2 管线提示词 → rule_checks 迁移配置。
   # 把 run-on-startup 改成 true 并重启一次，迁移会跑一遍并把 markdown 报告
   # 写到 report-dir；看完报告后改回 false。

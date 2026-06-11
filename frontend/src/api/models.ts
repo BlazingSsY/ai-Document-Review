@@ -1,14 +1,18 @@
 import request, { ApiResponse } from './request';
 import { PaginatedResult } from './rules';
 
+export type ModelType = 'chat' | 'embedding' | 'reranker';
+
 export interface AIModel {
   id: number;
   name: string;
   provider: string;
+  modelType: ModelType;
   modelKey: string;
   apiEndpoint: string;
   apiKey: string;
   maxTokens: number;
+  embeddingDimension?: number;
   temperature: number;
   timeout: number;
   enabled: boolean;
@@ -26,10 +30,12 @@ export interface AIModel {
 export interface CreateModelParams {
   name: string;
   provider: string;
+  modelType: ModelType;
   modelKey: string;
   apiEndpoint: string;
   apiKey: string;
   maxTokens: number;
+  embeddingDimension?: number;
   temperature: number;
   timeout: number;
   enabled: boolean;
@@ -39,6 +45,7 @@ export interface CreateModelParams {
 export interface ModelListParams {
   page: number;
   pageSize: number;
+  modelType?: ModelType;
 }
 
 export function getModelList(params: ModelListParams) {
@@ -48,8 +55,10 @@ export function getModelList(params: ModelListParams) {
   });
 }
 
-export function getEnabledModels() {
-  return request.get<ApiResponse<AIModel[]>>('/models/enabled');
+export function getEnabledModels(modelType: ModelType = 'chat') {
+  return request.get<ApiResponse<AIModel[]>>('/models/enabled', {
+    params: { modelType },
+  });
 }
 
 export function getModelDetail(id: number) {
@@ -77,6 +86,8 @@ export interface TestConnectionResult {
   resolvedUrl: string;
   latencyMs: number;
   reply: string;
+  modelType?: ModelType;
+  embeddingDimension?: number;
 }
 
 export interface TestConnectionParams extends Partial<CreateModelParams> {

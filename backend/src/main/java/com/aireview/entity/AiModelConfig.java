@@ -16,6 +16,8 @@ public class AiModelConfig {
 
     private String provider;
 
+    private String modelType;
+
     private String modelKey;
 
     private String apiKey;
@@ -25,6 +27,8 @@ public class AiModelConfig {
     private Integer contextWindow;
 
     private Integer maxTokens;
+
+    private Integer embeddingDimension;
 
     private Double temperature;
 

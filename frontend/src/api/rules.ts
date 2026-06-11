@@ -19,6 +19,30 @@ export interface Rule {
   keywords?: string[];
   description?: string;
   sourceFile?: string;
+  checks?: RuleCheck[];
+}
+
+export interface RuleCheck {
+  id: number;
+  ruleId: number;
+  checkCode: string;
+  checkType: string;
+  question: string;
+  passCriteria: string;
+  category?: string;
+  evidenceRequired: boolean;
+  displayOrder: number;
+  isActive: boolean;
+}
+
+export interface ChecklistImportResult {
+  sourceFile: string;
+  generatedRuleFile: string;
+  ruleCode: string;
+  ruleCount: number;
+  checkCount: number;
+  canonicalJson: string;
+  importedRules: Rule[];
 }
 
 export interface RuleMetadataUpdate {
@@ -69,6 +93,12 @@ export function getRuleDetail(id: number) {
 export function uploadRule(formData: FormData) {
   // Backend now returns a list (one rule file can expand into multiple rules)
   return request.post<ApiResponse<Rule[]>>('/rules/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+}
+
+export function importChecklist(formData: FormData) {
+  return request.post<ApiResponse<ChecklistImportResult>>('/rules/import-checklist', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
 }

@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getRuleList, uploadRule, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
+  getRuleList, uploadRule, importChecklist, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
   getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
 } from '../api/rules';
 import RuleUploader from '../components/RuleUploader';
@@ -167,15 +167,24 @@ function RuleListPage() {
   // Rule operations
   const handleUpload = async () => {
     if (!uploadFile || !currentLibrary) { message.warning('请选择规则文件'); return; }
+    const isExcel = /\.(xlsx|xls)$/i.test(uploadFile.name);
     setUploading(true);
     try {
       const formData = new FormData();
       formData.append('file', uploadFile);
       formData.append('libraryId', String(currentLibrary.id));
-      const res = await uploadRule(formData);
-      const created = res.data?.data ?? [];
-      const n = Array.isArray(created) ? created.length : 0;
-      message.success(n > 1 ? `规则上传成功，共解析 ${n} 条规则` : '规则上传成功');
+      if (isExcel) {
+        const res = await importChecklist(formData);
+        const result = res.data.data;
+        message.success(
+          `Excel 检查单导入成功，共生成 ${result.ruleCount} 条规则、${result.checkCount} 个检查项`,
+        );
+      } else {
+        const res = await uploadRule(formData);
+        const created = res.data?.data ?? [];
+        const n = Array.isArray(created) ? created.length : 0;
+        message.success(n > 1 ? `规则上传成功，共解析 ${n} 条规则` : '规则上传成功');
+      }
       setUploadModalOpen(false);
       setUploadFile(null);
       uploadForm.resetFields();
@@ -544,8 +553,16 @@ function RuleListPage() {
         footer={null} destroyOnClose>
         <Form form={uploadForm} onFinish={handleUpload} layout="vertical">
           <Form.Item label="规则文件" required>
-            <RuleUploader onFileSelect={(file) => setUploadFile(file)} />
+            <RuleUploader
+              onFileSelect={(file) => setUploadFile(file)}
+              onFileRemove={() => setUploadFile(null)}
+            />
           </Form.Item>
+          {uploadFile && /\.(xlsx|xls)$/i.test(uploadFile.name) && (
+            <Text type="secondary">
+              Excel 文件将按检查单格式解析，并自动生成规则及原子检查项。
+            </Text>
+          )}
           <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
             <Space>
               <Button onClick={() => setUploadModalOpen(false)}>取消</Button>

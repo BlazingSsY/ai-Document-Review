@@ -168,6 +168,50 @@ body {
   font-weight: 600;
 }
 
+/* Keep all functional pop-up dialogs visually centered in the viewport.
+   Ant Design defaults to a fixed top offset, which made dialogs appear low in
+   this layout after nested page headers and dense content were added. */
+.ant-modal-root .ant-modal-wrap {
+  position: fixed;
+  inset: 0;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: auto;
+  padding: 24px;
+}
+
+.ant-modal-root .ant-modal {
+  top: auto !important;
+  margin: auto !important;
+  padding-bottom: 0 !important;
+  max-height: calc(100vh - 48px);
+}
+
+.ant-modal-root .ant-modal-content {
+  display: flex;
+  max-height: calc(100vh - 48px);
+  flex-direction: column;
+}
+
+.ant-modal-root .ant-modal-body {
+  overflow-y: auto;
+}
+
+.model-config-modal .ant-modal-body {
+  max-height: calc(100vh - 180px);
+  padding-right: 18px;
+}
+
+.model-config-tabs .ant-tabs-nav {
+  margin-bottom: 16px;
+}
+
+.model-config-tabs .ant-tabs-tab {
+  min-width: 150px;
+  justify-content: center;
+}
+
 /* ==================== Cards & Tables ==================== */
 
 .ant-card {

@@ -6,13 +6,14 @@ const { Dragger } = Upload;
 
 interface RuleUploaderProps {
   onFileSelect: (file: File) => void;
+  onFileRemove?: () => void;
 }
 
-function RuleUploader({ onFileSelect }: RuleUploaderProps) {
+function RuleUploader({ onFileSelect, onFileRemove }: RuleUploaderProps) {
   const props: UploadProps = {
     name: 'file',
     multiple: false,
-    accept: '.md,.json,.txt,.yaml,.yml',
+    accept: '.md,.json,.txt,.yaml,.yml,.xlsx,.xls',
     maxCount: 1,
     beforeUpload: (file) => {
       const isValidSize = file.size / 1024 / 1024 < 5;
@@ -23,6 +24,9 @@ function RuleUploader({ onFileSelect }: RuleUploaderProps) {
       onFileSelect(file);
       return false;
     },
+    onRemove: () => {
+      onFileRemove?.();
+    },
   };
 
   return (
@@ -31,7 +35,9 @@ function RuleUploader({ onFileSelect }: RuleUploaderProps) {
         <InboxOutlined />
       </p>
       <p className="ant-upload-text">点击或拖拽规则文件到此区域上传</p>
-      <p className="ant-upload-hint">支持 .md / .json / .txt / .yaml 格式，大小不超过 5MB</p>
+      <p className="ant-upload-hint">
+        支持 .md / .json 规则文件，以及 .xlsx / .xls Excel 检查单，大小不超过 5MB
+      </p>
     </Dragger>
   );
 }

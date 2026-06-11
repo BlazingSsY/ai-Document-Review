@@ -26,4 +26,5 @@ public class RuleDTO {
     private List<String> keywords;
     private String description;
     private String sourceFile;
+    private List<RuleCheckDTO> checks;
 }

@@ -54,6 +54,35 @@ public class MultiRuleParser {
         private final String content;    // exact body that will be persisted into rules.content
         private final RuleMetadata metadata;
         private final String description;
+        private final List<ParsedCheck> checks;
+
+        public ParsedRule(String name, String fileType, String content,
+                          RuleMetadata metadata, String description) {
+            this(name, fileType, content, metadata, description, List.of());
+        }
+
+        public ParsedRule(String name, String fileType, String content,
+                          RuleMetadata metadata, String description,
+                          List<ParsedCheck> checks) {
+            this.name = name;
+            this.fileType = fileType;
+            this.content = content;
+            this.metadata = metadata;
+            this.description = description;
+            this.checks = checks == null ? List.of() : checks;
+        }
+    }
+
+    /** Atomic check rows persisted into rule_checks for the evidence-based pipeline. */
+    @Data
+    public static class ParsedCheck {
+        private final String checkCode;
+        private final String checkType;
+        private final String question;
+        private final String passCriteria;
+        private final String category;
+        private final Boolean evidenceRequired;
+        private final Integer displayOrder;
     }
 
     /**
@@ -81,6 +110,11 @@ public class MultiRuleParser {
             if (root == null) {
                 out.add(parseSingle(originalFilename, "json", content));
                 return out;
+            }
+
+            List<ParsedRule> canonical = parseCanonicalRulePack(originalFilename, root);
+            if (!canonical.isEmpty()) {
+                return canonical;
             }
 
             // Multi-rule container: dict of rules under "section_prompts" (試驗大綱 format),
@@ -118,6 +152,140 @@ public class MultiRuleParser {
 
         if (out.isEmpty()) out.add(parseSingle(originalFilename, "json", content));
         return out;
+    }
+
+    private static List<ParsedRule> parseCanonicalRulePack(String originalFilename, JSONObject root) {
+        List<ParsedRule> out = new ArrayList<>();
+
+        Object rulesObj = root.get("rules");
+        if (rulesObj instanceof JSONArray rules) {
+            for (int i = 0; i < rules.size(); i++) {
+                Object item = rules.get(i);
+                if (item instanceof JSONObject obj) {
+                    ParsedRule pr = buildCanonicalRule(originalFilename, obj, i + 1);
+                    if (pr != null) out.add(pr);
+                }
+            }
+            return out;
+        }
+
+        if (root.get("checks") instanceof JSONArray) {
+            ParsedRule pr = buildCanonicalRule(originalFilename, root, 1);
+            if (pr != null) out.add(pr);
+        }
+        return out;
+    }
+
+    private static ParsedRule buildCanonicalRule(String originalFilename, JSONObject obj, int order) {
+        String code = firstString(obj, "rule_code", "ruleCode", "code");
+        String name = firstNonBlank(
+                firstString(obj, "name", "rule_name", "ruleName", "title"),
+                code,
+                stripExtension(originalFilename) + "-" + order);
+        String description = firstString(obj, "description", "desc", "confirm_target", "target");
+
+        RuleMetadata meta = new RuleMetadata();
+        meta.setRuleCode(code);
+        String type = normalizeRuleType(firstString(obj, "rule_type", "ruleType", "type"));
+        meta.setRuleType(type == null ? RuleMetadata.TYPE_GLOBAL : type);
+        meta.setDocumentType(firstString(obj, "document_type", "documentType"));
+        meta.setSections(parseStringArray(firstPresent(obj, "sections", "target_sections")));
+        meta.setKeywords(parseStringArray(firstPresent(obj, "keywords", "scope", "Scope")));
+
+        JSONObject appliesTo = obj.getJSONObject("applies_to");
+        if (appliesTo != null) {
+            if (meta.getDocumentType() == null || meta.getDocumentType().isBlank()) {
+                meta.setDocumentType(firstString(appliesTo, "document_type", "documentType"));
+            }
+            meta.setSections(mergeStrings(meta.getSections(),
+                    parseStringArray(firstPresent(appliesTo, "sections", "target_sections"))));
+            meta.setKeywords(mergeStrings(meta.getKeywords(),
+                    parseStringArray(firstPresent(appliesTo, "keywords", "scope", "Scope"))));
+        }
+
+        List<ParsedCheck> checks = parseCanonicalChecks(obj, code, name, description);
+        String body = renderCanonicalRuleBody(name, code, description, checks, obj);
+        return new ParsedRule(name, "md", body, meta, description, checks);
+    }
+
+    private static List<ParsedCheck> parseCanonicalChecks(JSONObject obj, String ruleCode,
+                                                          String ruleName, String ruleDescription) {
+        List<ParsedCheck> checks = new ArrayList<>();
+        JSONArray arr = obj.getJSONArray("checks");
+        if (arr != null) {
+            for (int i = 0; i < arr.size(); i++) {
+                Object item = arr.get(i);
+                if (item instanceof JSONObject checkObj) {
+                    checks.add(toParsedCheck(checkObj, ruleCode, i + 1));
+                }
+            }
+        }
+        if (!checks.isEmpty()) return checks;
+
+        String fallbackCode = ruleCode == null || ruleCode.isBlank()
+                ? "CHECK-001"
+                : ruleCode + "._default";
+        checks.add(new ParsedCheck(
+                fallbackCode,
+                defaultString(firstString(obj, "check_type", "checkType"), "presence"),
+                firstNonBlank(firstString(obj, "question", "check_item", "checkItem"), ruleName),
+                firstNonBlank(firstString(obj, "pass_criteria", "passCriteria", "criteria", "requirement"),
+                        ruleDescription, "文档中存在能够满足该检查项的明确证据"),
+                firstString(obj, "category"),
+                firstBoolean(obj, "evidence_required", "evidenceRequired", true),
+                1));
+        return checks;
+    }
+
+    private static ParsedCheck toParsedCheck(JSONObject obj, String ruleCode, int order) {
+        String checkCode = firstString(obj, "check_code", "checkCode", "code");
+        if (checkCode == null || checkCode.isBlank()) {
+            String prefix = ruleCode == null || ruleCode.isBlank() ? "CHECK" : ruleCode;
+            checkCode = prefix + "-" + String.format("%03d", order);
+        }
+        String question = firstNonBlank(
+                firstString(obj, "question", "check_item", "checkItem", "name", "title"),
+                "检查项 " + order);
+        String passCriteria = firstNonBlank(
+                firstString(obj, "pass_criteria", "passCriteria", "criteria", "requirement", "confirm_target", "target"),
+                question);
+        return new ParsedCheck(
+                checkCode,
+                defaultString(firstString(obj, "check_type", "checkType", "type"), "presence"),
+                question,
+                passCriteria,
+                firstString(obj, "category"),
+                firstBoolean(obj, "evidence_required", "evidenceRequired", true),
+                firstInteger(obj, "display_order", "displayOrder", order));
+    }
+
+    private static String renderCanonicalRuleBody(String name, String code, String description,
+                                                  List<ParsedCheck> checks, JSONObject original) {
+        StringBuilder md = new StringBuilder();
+        md.append("# ").append(name).append("\n\n");
+        if (code != null && !code.isBlank()) {
+            md.append("- 规则编号：").append(code).append("\n");
+        }
+        if (description != null && !description.isBlank()) {
+            md.append("- 规则说明：").append(description).append("\n");
+        }
+        md.append("\n## 原子检查项\n\n");
+        for (ParsedCheck c : checks) {
+            md.append("### ").append(c.getCheckCode()).append("\n\n");
+            md.append("- 检查问题：").append(c.getQuestion()).append("\n");
+            md.append("- 通过准则：").append(c.getPassCriteria()).append("\n");
+            md.append("- 检查类型：").append(c.getCheckType()).append("\n");
+            if (c.getCategory() != null && !c.getCategory().isBlank()) {
+                md.append("- 分类：").append(c.getCategory()).append("\n");
+            }
+            md.append("- 需要原文证据：")
+                    .append(Boolean.FALSE.equals(c.getEvidenceRequired()) ? "否" : "是")
+                    .append("\n\n");
+        }
+        if (checks.isEmpty()) {
+            md.append(JSON.toJSONString(original)).append("\n");
+        }
+        return md.toString().trim();
     }
 
     private static ParsedRule buildSubRule(String originalFilename, String key, JSONObject body) {
@@ -382,6 +550,85 @@ public class MultiRuleParser {
         String cleaned = text.replaceAll("\\s+", " ").trim();
         if (cleaned.length() > 140) cleaned = cleaned.substring(0, 137) + "...";
         return cleaned;
+    }
+
+    private static String firstString(JSONObject obj, String... keys) {
+        Object value = firstPresent(obj, keys);
+        if (value == null) return null;
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value;
+        }
+        return null;
+    }
+
+    private static String defaultString(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static Boolean firstBoolean(JSONObject obj, String key1, String key2, boolean fallback) {
+        Object value = firstPresent(obj, key1, key2);
+        if (value == null) return fallback;
+        if (value instanceof Boolean b) return b;
+        String s = String.valueOf(value).trim();
+        if ("true".equalsIgnoreCase(s) || "1".equals(s) || "yes".equalsIgnoreCase(s)) return true;
+        if ("false".equalsIgnoreCase(s) || "0".equals(s) || "no".equalsIgnoreCase(s)) return false;
+        return fallback;
+    }
+
+    private static Integer firstInteger(JSONObject obj, String key1, String key2, int fallback) {
+        Object value = firstPresent(obj, key1, key2);
+        if (value instanceof Number number) return number.intValue();
+        if (value != null) {
+            try {
+                return Integer.parseInt(String.valueOf(value).trim());
+            } catch (NumberFormatException ignored) {
+                return fallback;
+            }
+        }
+        return fallback;
+    }
+
+    private static List<String> parseStringArray(Object value) {
+        List<String> out = new ArrayList<>();
+        if (value == null) return out;
+        if (value instanceof JSONArray arr) {
+            for (int i = 0; i < arr.size(); i++) {
+                String s = arr.getString(i);
+                if (s != null && !s.isBlank() && !out.contains(s.trim())) {
+                    out.add(s.trim());
+                }
+            }
+            return out;
+        }
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                if (item == null) continue;
+                String s = String.valueOf(item).trim();
+                if (!s.isEmpty() && !out.contains(s)) out.add(s);
+            }
+            return out;
+        }
+        for (String part : String.valueOf(value).split("[,，、;；\\s]+")) {
+            String s = part.trim();
+            if (!s.isEmpty() && !out.contains(s)) out.add(s);
+        }
+        return out;
+    }
+
+    private static List<String> mergeStrings(List<String> left, List<String> right) {
+        List<String> out = new ArrayList<>(left == null ? List.of() : left);
+        if (right != null) {
+            for (String item : right) {
+                if (item != null && !item.isBlank() && !out.contains(item)) out.add(item);
+            }
+        }
+        return out;
     }
 
     @SafeVarargs

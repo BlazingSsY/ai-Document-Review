@@ -1,9 +1,12 @@
 package com.aireview.service;
 
 import com.aireview.dto.PageResponse;
+import com.aireview.dto.RuleCheckDTO;
 import com.aireview.dto.RuleDTO;
 import com.aireview.dto.RuleMetadataUpdateRequest;
 import com.aireview.entity.Rule;
+import com.aireview.entity.RuleCheck;
+import com.aireview.repository.RuleCheckMapper;
 import com.aireview.repository.RuleMapper;
 import com.aireview.util.MultiRuleParser;
 import com.aireview.util.RuleMetadata;
@@ -32,6 +35,7 @@ import java.util.UUID;
 public class RuleService {
 
     private final RuleMapper ruleMapper;
+    private final RuleCheckMapper ruleCheckMapper;
     private final com.aireview.repository.UserRuleAssignmentMapper userRuleAssignmentMapper;
 
     @Value("${file.rules-dir}")
@@ -55,24 +59,35 @@ public class RuleService {
             throw new IllegalArgumentException("File name is required");
         }
 
+        String content = new String(file.getBytes(), StandardCharsets.UTF_8);
+        return importRuleContent(originalFilename, content, creatorId, libraryId, true);
+    }
+
+    public List<RuleDTO> importRuleContent(String originalFilename, String content,
+                                           Long creatorId, Long libraryId,
+                                           boolean persistSourceFile) throws IOException {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            throw new IllegalArgumentException("File name is required");
+        }
+
         String fileType = RuleParser.detectFileType(originalFilename);
         if ("unknown".equals(fileType)) {
             throw new IllegalArgumentException("Unsupported rule file format. Only .md and .json are supported.");
         }
-
-        String content = new String(file.getBytes(), StandardCharsets.UTF_8);
 
         List<String> errors = RuleParser.validate(content, fileType);
         if (!errors.isEmpty()) {
             throw new IllegalArgumentException("Rule validation failed: " + String.join("; ", errors));
         }
 
-        // Persist original file once to disk (handy for debugging / re-export).
-        Path uploadDir = Path.of(rulesDir);
-        Files.createDirectories(uploadDir);
-        String savedFileName = UUID.randomUUID() + "_" + originalFilename;
-        Path savedPath = uploadDir.resolve(savedFileName);
-        Files.write(savedPath, file.getBytes());
+        if (persistSourceFile) {
+            // Persist original file once to disk (handy for debugging / re-export).
+            Path uploadDir = Path.of(rulesDir);
+            Files.createDirectories(uploadDir);
+            String savedFileName = UUID.randomUUID() + "_" + originalFilename;
+            Path savedPath = uploadDir.resolve(savedFileName);
+            Files.writeString(savedPath, content, StandardCharsets.UTF_8);
+        }
 
         // Split into one-or-more parsed rules.
         List<MultiRuleParser.ParsedRule> parsed = MultiRuleParser.parse(originalFilename, fileType, content);
@@ -97,11 +112,29 @@ public class RuleService {
             }
             rule.setDescription(pr.getDescription());
             ruleMapper.insert(rule);
+            persistChecks(rule.getId(), pr.getChecks());
             out.add(toDTO(rule));
         }
         log.info("Rule file '{}' expanded into {} rule row(s) (creator={}, library={})",
                 originalFilename, out.size(), creatorId, libraryId);
         return out;
+    }
+
+    private void persistChecks(Long ruleId, List<MultiRuleParser.ParsedCheck> checks) {
+        if (ruleId == null || checks == null || checks.isEmpty()) return;
+        for (MultiRuleParser.ParsedCheck parsed : checks) {
+            RuleCheck check = new RuleCheck();
+            check.setRuleId(ruleId);
+            check.setCheckCode(parsed.getCheckCode());
+            check.setCheckType(parsed.getCheckType());
+            check.setQuestion(parsed.getQuestion());
+            check.setPassCriteria(parsed.getPassCriteria());
+            check.setCategory(parsed.getCategory());
+            check.setEvidenceRequired(parsed.getEvidenceRequired());
+            check.setDisplayOrder(parsed.getDisplayOrder());
+            check.setIsActive(true);
+            ruleCheckMapper.insert(check);
+        }
     }
 
     /** Back-compatible single-rule upload used by callers that don't yet expect multi-rule responses. */
@@ -262,6 +295,24 @@ public class RuleService {
                     dto.setKeywords(meta.getKeywords());
             }
         }
+        dto.setChecks(ruleCheckMapper.findActiveByRuleId(rule.getId()).stream()
+                .map(this::toCheckDTO)
+                .toList());
+        return dto;
+    }
+
+    private RuleCheckDTO toCheckDTO(RuleCheck check) {
+        RuleCheckDTO dto = new RuleCheckDTO();
+        dto.setId(check.getId());
+        dto.setRuleId(check.getRuleId());
+        dto.setCheckCode(check.getCheckCode());
+        dto.setCheckType(check.getCheckType());
+        dto.setQuestion(check.getQuestion());
+        dto.setPassCriteria(check.getPassCriteria());
+        dto.setCategory(check.getCategory());
+        dto.setEvidenceRequired(check.getEvidenceRequired());
+        dto.setDisplayOrder(check.getDisplayOrder());
+        dto.setIsActive(check.getIsActive());
         return dto;
     }
 

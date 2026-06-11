@@ -18,6 +18,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -28,13 +30,22 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class AiModelService {
 
+    public static final String MODEL_TYPE_CHAT = "chat";
+    public static final String MODEL_TYPE_EMBEDDING = "embedding";
+    public static final String MODEL_TYPE_RERANKER = "reranker";
+    private static final int MAX_PGVECTOR_DIMENSIONS = 16000;
+
     private final AiModelConfigMapper aiModelConfigMapper;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
             .build();
 
+    public record RerankResult(int index, double score) {
+    }
+
     public AiModelConfigDTO createConfig(AiModelConfigDTO dto) {
         AiModelConfig config = toEntity(dto);
+        validateEmbeddingDimension(config);
         config.setCreatedAt(LocalDateTime.now());
         config.setUpdatedAt(LocalDateTime.now());
         aiModelConfigMapper.insert(config);
@@ -49,16 +60,19 @@ public class AiModelService {
         }
         if (dto.getName() != null) config.setModelName(dto.getName());
         if (dto.getProvider() != null) config.setProvider(dto.getProvider());
+        if (dto.getModelType() != null) config.setModelType(normalizeModelType(dto.getModelType()));
         if (dto.getModelKey() != null) config.setModelKey(dto.getModelKey());
         if (dto.getApiEndpoint() != null) config.setEndpoint(dto.getApiEndpoint());
         if (dto.getApiKey() != null && !dto.getApiKey().isBlank() && !dto.getApiKey().contains("****")) {
             config.setApiKey(dto.getApiKey());
         }
         if (dto.getMaxTokens() != null) config.setMaxTokens(dto.getMaxTokens());
+        if (dto.getEmbeddingDimension() != null) config.setEmbeddingDimension(dto.getEmbeddingDimension());
         if (dto.getTemperature() != null) config.setTemperature(dto.getTemperature());
         if (dto.getTimeout() != null) config.setTimeout(dto.getTimeout());
         if (dto.getEnabled() != null) config.setIsEnabled(dto.getEnabled());
         if (dto.getThinkingMode() != null) config.setThinkingMode(dto.getThinkingMode());
+        validateEmbeddingDimension(config);
         config.setUpdatedAt(LocalDateTime.now());
         aiModelConfigMapper.updateById(config);
         log.info("AI model config updated: {}", config.getModelName());
@@ -79,15 +93,33 @@ public class AiModelService {
     }
 
     public PageResponse<AiModelConfigDTO> listConfigs(int page, int size) {
+        return listConfigs(page, size, null);
+    }
+
+    public PageResponse<AiModelConfigDTO> listConfigs(int page, int size, String modelType) {
         Page<AiModelConfig> pageParam = new Page<>(page, size);
-        Page<AiModelConfig> result = aiModelConfigMapper.selectPage(pageParam, null);
+        LambdaQueryWrapper<AiModelConfig> query = new LambdaQueryWrapper<>();
+        String normalizedType = (modelType == null || modelType.isBlank()) ? null : normalizeModelType(modelType);
+        if (normalizedType != null) {
+            query.eq(AiModelConfig::getModelType, normalizedType);
+        }
+        query.orderByDesc(AiModelConfig::getCreatedAt);
+        Page<AiModelConfig> result = aiModelConfigMapper.selectPage(pageParam, query);
         List<AiModelConfigDTO> records = result.getRecords().stream().map(this::toDTO).toList();
         return PageResponse.of(records, result.getTotal(), page, size);
     }
 
     public List<AiModelConfigDTO> listEnabledConfigs() {
+        return listEnabledConfigs(null);
+    }
+
+    public List<AiModelConfigDTO> listEnabledConfigs(String modelType) {
         LambdaQueryWrapper<AiModelConfig> query = new LambdaQueryWrapper<>();
         query.eq(AiModelConfig::getIsEnabled, true);
+        String normalizedType = normalizeModelType(modelType);
+        if (normalizedType != null) {
+            query.eq(AiModelConfig::getModelType, normalizedType);
+        }
         List<AiModelConfig> configs = aiModelConfigMapper.selectList(query);
         return configs.stream().map(this::toDTO).toList();
     }
@@ -112,12 +144,86 @@ public class AiModelService {
     public AiModelConfig getEnabledModel(String modelName) {
         LambdaQueryWrapper<AiModelConfig> query = new LambdaQueryWrapper<>();
         query.eq(AiModelConfig::getModelName, modelName)
+             .eq(AiModelConfig::getModelType, MODEL_TYPE_CHAT)
              .eq(AiModelConfig::getIsEnabled, true);
         AiModelConfig config = aiModelConfigMapper.selectOne(query);
         if (config == null) {
             throw new IllegalArgumentException("AI model not found or disabled: " + modelName);
         }
         return config;
+    }
+
+    public AiModelConfig getFirstEnabledModelByType(String modelType) {
+        String normalizedType = normalizeModelType(modelType);
+        LambdaQueryWrapper<AiModelConfig> query = new LambdaQueryWrapper<>();
+        query.eq(AiModelConfig::getModelType, normalizedType)
+             .eq(AiModelConfig::getIsEnabled, true)
+             .orderByDesc(AiModelConfig::getUpdatedAt)
+             .last("LIMIT 1");
+        return aiModelConfigMapper.selectOne(query);
+    }
+
+    public List<List<Double>> embedTexts(AiModelConfig embeddingModel, List<String> texts) throws Exception {
+        if (embeddingModel == null) {
+            throw new IllegalArgumentException("Embedding model is required");
+        }
+        if (!MODEL_TYPE_EMBEDDING.equals(normalizeModelType(embeddingModel.getModelType()))) {
+            throw new IllegalArgumentException("Model is not an embedding model: " + embeddingModel.getModelName());
+        }
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+
+        JSONObject body = new JSONObject();
+        body.put("model", resolveModelId(embeddingModel));
+        JSONArray input = new JSONArray();
+        input.addAll(texts);
+        body.put("input", input);
+
+        JSONObject response = postJson(embeddingModel, buildFullApiUrl(embeddingModel), body);
+        List<List<Double>> vectors = parseEmbeddingVectors(response);
+        if (vectors.size() != texts.size()) {
+            throw new RuntimeException("Embedding API returned " + vectors.size()
+                    + " vector(s) for " + texts.size() + " input text(s)");
+        }
+        return vectors;
+    }
+
+    public List<Double> embedText(AiModelConfig embeddingModel, String text) throws Exception {
+        List<List<Double>> vectors = embedTexts(embeddingModel, List.of(text == null ? "" : text));
+        return vectors.isEmpty() ? List.of() : vectors.get(0);
+    }
+
+    public List<RerankResult> rerank(AiModelConfig rerankerModel, String queryText,
+                                      List<String> documents, int topN) throws Exception {
+        if (rerankerModel == null) {
+            throw new IllegalArgumentException("Reranker model is required");
+        }
+        if (!MODEL_TYPE_RERANKER.equals(normalizeModelType(rerankerModel.getModelType()))) {
+            throw new IllegalArgumentException("Model is not a reranker model: " + rerankerModel.getModelName());
+        }
+        if (documents == null || documents.isEmpty()) {
+            return List.of();
+        }
+
+        JSONObject body = new JSONObject();
+        body.put("model", resolveModelId(rerankerModel));
+        body.put("query", queryText == null ? "" : queryText);
+        JSONArray docs = new JSONArray();
+        docs.addAll(documents);
+        body.put("documents", docs);
+        body.put("top_n", Math.max(1, Math.min(topN, documents.size())));
+
+        JSONObject response = postJson(rerankerModel, buildFullApiUrl(rerankerModel), body);
+        List<RerankResult> parsed = parseRerankResults(response);
+        if (parsed.isEmpty()) {
+            throw new RuntimeException("Reranker API returned no ranked result");
+        }
+        return parsed.stream()
+                .filter(r -> r.index() >= 0 && r.index() < documents.size())
+                .sorted(Comparator.comparingDouble(RerankResult::score).reversed())
+                .limit(Math.max(1, Math.min(topN, documents.size())))
+                .toList();
     }
 
     /**
@@ -133,6 +239,7 @@ public class AiModelService {
         AiModelConfig probe = new AiModelConfig();
         probe.setModelName(dto.getName() != null ? dto.getName() : "test-probe");
         probe.setProvider(dto.getProvider() != null ? dto.getProvider() : "openai");
+        probe.setModelType(normalizeModelType(dto.getModelType(), persistedFallback));
         probe.setModelKey(dto.getModelKey() != null && !dto.getModelKey().isBlank()
                 ? dto.getModelKey() : probe.getModelName());
         probe.setEndpoint(dto.getApiEndpoint());
@@ -177,18 +284,200 @@ public class AiModelService {
         }
 
         long start = System.currentTimeMillis();
-        String reply = callAiModel(probe, "你是一个用于连接性测试的助手，请用一个汉字回答 \"好\"。",
-                "ping");
+        Map<String, Object> result = testTypedModelConnection(probe);
         long elapsed = System.currentTimeMillis() - start;
 
-        Map<String, Object> result = new java.util.LinkedHashMap<>();
         result.put("ok", true);
         result.put("resolvedUrl", buildFullApiUrl(probe));
         result.put("latencyMs", elapsed);
+        return result;
+    }
+
+    private Map<String, Object> testTypedModelConnection(AiModelConfig probe) throws Exception {
+        String type = normalizeModelType(probe.getModelType());
+        if (MODEL_TYPE_EMBEDDING.equals(type)) {
+            return testEmbeddingConnection(probe);
+        }
+        if (MODEL_TYPE_RERANKER.equals(type)) {
+            return testRerankerConnection(probe);
+        }
+        String reply = callAiModel(probe, "你是一个用于连接性测试的助手，请用一个汉字回答 \"好\"。",
+                "ping");
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("modelType", MODEL_TYPE_CHAT);
         String snippet = reply == null ? "" : reply.trim();
         if (snippet.length() > 80) snippet = snippet.substring(0, 80) + "...";
         result.put("reply", snippet);
         return result;
+    }
+
+    private Map<String, Object> testEmbeddingConnection(AiModelConfig probe) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("model", resolveModelId(probe));
+        body.put("input", "ping");
+        JSONObject response = postJson(probe, buildFullApiUrl(probe), body);
+
+        int dimension = 0;
+        JSONArray data = response.getJSONArray("data");
+        if (data != null && !data.isEmpty()) {
+            JSONObject first = data.getJSONObject(0);
+            JSONArray embedding = first != null ? first.getJSONArray("embedding") : null;
+            dimension = embedding != null ? embedding.size() : 0;
+        }
+        if (dimension <= 0) {
+            JSONArray embedding = response.getJSONArray("embedding");
+            dimension = embedding != null ? embedding.size() : 0;
+        }
+        if (dimension <= 0) {
+            throw new RuntimeException("Embedding API 未返回向量，请检查模型类型、地址和模型标识");
+        }
+
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("modelType", MODEL_TYPE_EMBEDDING);
+        result.put("embeddingDimension", dimension);
+        result.put("reply", "向量维度 " + dimension);
+        return result;
+    }
+
+    private Map<String, Object> testRerankerConnection(AiModelConfig probe) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("model", resolveModelId(probe));
+        body.put("query", "文档审查");
+        JSONArray documents = new JSONArray();
+        documents.add("文档审查需要依据规则定位证据");
+        documents.add("天气晴朗");
+        body.put("documents", documents);
+        body.put("top_n", 1);
+        JSONObject response = postJson(probe, buildFullApiUrl(probe), body);
+
+        boolean hasRankedResult = false;
+        JSONArray results = response.getJSONArray("results");
+        if (results != null && !results.isEmpty()) {
+            hasRankedResult = true;
+        }
+        JSONArray data = response.getJSONArray("data");
+        if (!hasRankedResult && data != null && !data.isEmpty()) {
+            hasRankedResult = true;
+        }
+        if (!hasRankedResult) {
+            Object ranked = response.get("ranked_documents");
+            hasRankedResult = ranked instanceof JSONArray arr && !arr.isEmpty();
+        }
+        if (!hasRankedResult) {
+            throw new RuntimeException("Reranker API 未返回重排结果，请检查模型类型、地址和模型标识");
+        }
+
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("modelType", MODEL_TYPE_RERANKER);
+        result.put("reply", "重排接口返回正常");
+        return result;
+    }
+
+    private JSONObject postJson(AiModelConfig config, String fullUrl, JSONObject requestBody) throws Exception {
+        int timeoutSec = config.getTimeout() != null ? config.getTimeout() : 60;
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(fullUrl))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + config.getApiKey())
+                .timeout(Duration.ofSeconds(timeoutSec))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new AiApiException(response.statusCode(), response.body(),
+                    "AI API HTTP " + response.statusCode() + ": " + response.body());
+        }
+        return JSON.parseObject(response.body());
+    }
+
+    private List<List<Double>> parseEmbeddingVectors(JSONObject response) {
+        List<List<Double>> vectors = new ArrayList<>();
+        JSONArray data = response.getJSONArray("data");
+        if (data != null && !data.isEmpty()) {
+            for (int i = 0; i < data.size(); i++) {
+                JSONObject item = data.getJSONObject(i);
+                JSONArray embedding = item != null ? item.getJSONArray("embedding") : null;
+                if (embedding != null) {
+                    vectors.add(toDoubleList(embedding));
+                }
+            }
+        }
+        if (vectors.isEmpty()) {
+            JSONArray embedding = response.getJSONArray("embedding");
+            if (embedding != null) {
+                vectors.add(toDoubleList(embedding));
+            }
+        }
+        return vectors;
+    }
+
+    private List<Double> toDoubleList(JSONArray array) {
+        List<Double> values = new ArrayList<>(array.size());
+        for (int i = 0; i < array.size(); i++) {
+            Object value = array.get(i);
+            if (value instanceof Number n) {
+                values.add(n.doubleValue());
+            } else if (value != null) {
+                values.add(Double.parseDouble(value.toString()));
+            }
+        }
+        return values;
+    }
+
+    private List<RerankResult> parseRerankResults(JSONObject response) {
+        JSONArray array = response.getJSONArray("results");
+        if (array == null || array.isEmpty()) {
+            array = response.getJSONArray("data");
+        }
+        if (array == null || array.isEmpty()) {
+            array = response.getJSONArray("ranked_documents");
+        }
+        if (array == null) {
+            return List.of();
+        }
+
+        List<RerankResult> results = new ArrayList<>();
+        for (int i = 0; i < array.size(); i++) {
+            JSONObject item = array.getJSONObject(i);
+            if (item == null) continue;
+            Integer index = firstInteger(item, "index", "document_index", "documentIndex", "id");
+            if (index == null) index = i;
+            Double score = firstDouble(item, "relevance_score", "relevanceScore", "score");
+            if (score == null) score = 1.0d / (i + 1);
+            results.add(new RerankResult(index, score));
+        }
+        return results;
+    }
+
+    private Integer firstInteger(JSONObject object, String... keys) {
+        for (String key : keys) {
+            Object value = object.get(key);
+            if (value instanceof Number n) return n.intValue();
+            if (value != null) {
+                try {
+                    return Integer.parseInt(value.toString());
+                } catch (NumberFormatException ignored) {
+                    // try next key
+                }
+            }
+        }
+        return null;
+    }
+
+    private Double firstDouble(JSONObject object, String... keys) {
+        for (String key : keys) {
+            Object value = object.get(key);
+            if (value instanceof Number n) return n.doubleValue();
+            if (value != null) {
+                try {
+                    return Double.parseDouble(value.toString());
+                } catch (NumberFormatException ignored) {
+                    // try next key
+                }
+            }
+        }
+        return null;
     }
 
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent) throws Exception {
@@ -210,6 +499,10 @@ public class AiModelService {
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent,
                                AiCallOptions options) throws Exception {
         if (options == null) options = AiCallOptions.defaults();
+        if (!MODEL_TYPE_CHAT.equals(normalizeModelType(config.getModelType()))) {
+            throw new IllegalArgumentException("Only chat models can be used for document review: "
+                    + config.getModelName());
+        }
         String fullUrl = buildFullApiUrl(config);
         log.info("Calling AI model: {} at {} (resolved URL: {})", config.getModelName(), config.getEndpoint(), fullUrl);
 
@@ -492,10 +785,12 @@ public class AiModelService {
         dto.setId(config.getId());
         dto.setName(config.getModelName());
         dto.setProvider(config.getProvider() != null ? config.getProvider() : "openai");
+        dto.setModelType(normalizeModelType(config.getModelType()));
         dto.setModelKey(config.getModelKey() != null ? config.getModelKey() : config.getModelName());
         dto.setApiEndpoint(config.getEndpoint());
         dto.setApiKey(maskApiKey(config.getApiKey()));
         dto.setMaxTokens(config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
+        dto.setEmbeddingDimension(config.getEmbeddingDimension());
         dto.setTemperature(config.getTemperature() != null ? config.getTemperature() : 0.7);
         dto.setTimeout(config.getTimeout() != null ? config.getTimeout() : 180);
         dto.setEnabled(config.getIsEnabled());
@@ -512,11 +807,13 @@ public class AiModelService {
         AiModelConfig config = new AiModelConfig();
         config.setModelName(dto.getName());
         config.setProvider(dto.getProvider() != null ? dto.getProvider() : "openai");
+        config.setModelType(normalizeModelType(dto.getModelType()));
         config.setModelKey(dto.getModelKey() != null ? dto.getModelKey() : dto.getName());
         config.setApiKey(dto.getApiKey());
         config.setEndpoint(dto.getApiEndpoint());
         config.setContextWindow(128000);
         config.setMaxTokens(dto.getMaxTokens() != null ? dto.getMaxTokens() : 4096);
+        config.setEmbeddingDimension(dto.getEmbeddingDimension());
         config.setTemperature(dto.getTemperature() != null ? dto.getTemperature() : 0.7);
         config.setTimeout(dto.getTimeout() != null ? dto.getTimeout() : 180);
         config.setIsEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
@@ -526,6 +823,40 @@ public class AiModelService {
                 ? dto.getThinkingMode()
                 : matchesThinkingPattern(dto.getModelKey() != null ? dto.getModelKey() : dto.getName()));
         return config;
+    }
+
+    private String normalizeModelType(String modelType) {
+        if (modelType == null || modelType.isBlank()) {
+            return MODEL_TYPE_CHAT;
+        }
+        String normalized = modelType.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case MODEL_TYPE_CHAT, "llm", "completion", "chat-completion" -> MODEL_TYPE_CHAT;
+            case MODEL_TYPE_EMBEDDING, "embeddings", "vector" -> MODEL_TYPE_EMBEDDING;
+            case MODEL_TYPE_RERANKER, "rerank", "ranker" -> MODEL_TYPE_RERANKER;
+            default -> throw new IllegalArgumentException("Unsupported model type: " + modelType);
+        };
+    }
+
+    private String normalizeModelType(String modelType, AiModelConfig persistedFallback) {
+        if (modelType != null && !modelType.isBlank()) {
+            return normalizeModelType(modelType);
+        }
+        if (persistedFallback != null && persistedFallback.getModelType() != null) {
+            return normalizeModelType(persistedFallback.getModelType());
+        }
+        return MODEL_TYPE_CHAT;
+    }
+
+    private void validateEmbeddingDimension(AiModelConfig config) {
+        if (!MODEL_TYPE_EMBEDDING.equals(normalizeModelType(config.getModelType()))) {
+            return;
+        }
+        Integer dimension = config.getEmbeddingDimension();
+        if (dimension != null && (dimension < 1 || dimension > MAX_PGVECTOR_DIMENSIONS)) {
+            throw new IllegalArgumentException(
+                    "Embedding dimension must be between 1 and " + MAX_PGVECTOR_DIMENSIONS);
+        }
     }
 
     private String buildFullApiUrl(AiModelConfig config) {
@@ -545,6 +876,20 @@ public class AiModelService {
         // 移除末尾的斜杠
         if (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+        }
+
+        String modelType = normalizeModelType(config.getModelType());
+        if (MODEL_TYPE_EMBEDDING.equals(modelType)) {
+            if (baseUrl.endsWith("/embeddings") || baseUrl.contains("/embeddings/")) {
+                return baseUrl;
+            }
+            return baseUrl.endsWith("/v1") ? baseUrl + "/embeddings" : baseUrl + "/v1/embeddings";
+        }
+        if (MODEL_TYPE_RERANKER.equals(modelType)) {
+            if (baseUrl.endsWith("/rerank") || baseUrl.contains("/rerank/")) {
+                return baseUrl;
+            }
+            return baseUrl.endsWith("/v1") ? baseUrl + "/rerank" : baseUrl + "/v1/rerank";
         }
 
         // 根据提供商添加API路径

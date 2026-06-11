@@ -64,6 +64,30 @@ export function exportReviewExcel(taskId: string) {
   });
 }
 
+export interface ManualCheckDecisionParams {
+  checkCode: string;
+  sourceChunk?: number;
+  finalStatus: string;
+  accepted?: boolean;
+  comment?: string;
+}
+
+export function updateCheckDecision(taskId: string, params: ManualCheckDecisionParams) {
+  return request.put<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}/check-decisions`, params);
+}
+
+export function exportReviewAudit(taskId: string) {
+  return request.get(`/reviews/tasks/${taskId}/audit/export`, {
+    responseType: 'blob',
+  });
+}
+
+export function exportReviewReport(taskId: string) {
+  return request.get(`/reviews/tasks/${taskId}/report`, {
+    responseType: 'blob',
+  });
+}
+
 export function getReviewStats() {
   return request.get<ApiResponse<{
     total: number;

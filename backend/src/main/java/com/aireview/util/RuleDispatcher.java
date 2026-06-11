@@ -1,6 +1,7 @@
 package com.aireview.util;
 
 import com.aireview.entity.Rule;
+import com.aireview.entity.RuleCheck;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
@@ -37,6 +38,7 @@ public class RuleDispatcher {
         private final Rule rule;
         private final RuleMetadata metadata;
         private final String body; // content with frontmatter stripped
+        private List<RuleCheck> checks = List.of();
 
         public boolean isGlobal() { return metadata == null || metadata.isGlobal(); }
         public boolean isSectionSpecific() { return metadata != null && metadata.isSectionSpecific(); }

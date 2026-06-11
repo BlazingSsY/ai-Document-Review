@@ -10,25 +10,24 @@ import java.util.List;
  *
  * <p>所有 provider 都用同一份 schema 强制结构化输出 —— OpenAI 兼容协议走
  * {@code response_format=json_schema}，Anthropic 走 {@code tool_use+tool_choice}。
- * Schema 字段、枚举锚点（severity / category）由本类集中维护，避免散落在 prompt
+ * Schema 字段、枚举锚点（category）由本类集中维护，避免散落在 prompt
  * 字符串里造成版本漂移。
  *
  * <p>Schema 约定：
  * <ul>
  *   <li>{@code summary}：当前切片的中文总结。</li>
- *   <li>{@code issues[]}：每条问题必须填齐 rule_code / severity / category / location /
+ *   <li>{@code issues[]}：每条问题必须填齐 rule_code / category / location /
  *       description / suggestion / evidence；这些字段就是跨模型可对比的最小集。</li>
  *   <li>{@code passed_items[]}：通过或不适用的检查项（建议带上 [R-XXX] 编号）。</li>
  * </ul>
  *
- * <p>severity / category 用 enum 写死，模型不允许自由发挥；当无法判断时强制
- * 输出 {@code medium} / {@code 其他}。
+ * <p>category 用 enum 写死，模型不允许自由发挥；当无法判断时强制输出 {@code 其他}。
  */
 public final class ReviewResultSchema {
 
-    public static final List<String> SEVERITY_ENUM = List.of("high", "medium", "low");
     public static final List<String> CATEGORY_ENUM = List.of(
             "格式", "完整性", "标准符合性", "逻辑一致性", "术语一致性", "其他");
+    public static final List<String> CHECK_STATUS_ENUM = List.of("Pass", "Partial", "Fail", "N/A", "Review");
 
     public static final String SCHEMA_NAME = "review_result";
     public static final String BATCH_SCHEMA_NAME = "batch_review_result";
@@ -46,14 +45,13 @@ public final class ReviewResultSchema {
         issueProps.put("suggestion", strProp("修改建议。"));
         issueProps.put("rule", strProp("命中的规则名称。"));
         issueProps.put("rule_code", strProp("命中的规则编号，必须使用本次注入清单内的 [R-XXX] 编号。"));
-        issueProps.put("severity", enumProp(SEVERITY_ENUM, "严重度。无法判断时填 medium。"));
         issueProps.put("category", enumProp(CATEGORY_ENUM, "问题分类。无法归类时填 其他。"));
         issueProps.put("evidence", strProp("判定依据：摘录支持该结论的原文片段或表格行。"));
 
         JSONObject issueSchema = new JSONObject();
         issueSchema.put("type", "object");
         issueSchema.put("required", JSON.parseArray(JSON.toJSONString(List.of(
-                "location", "description", "suggestion", "rule_code", "severity", "category", "evidence"))));
+                "location", "description", "suggestion", "rule_code", "category", "evidence"))));
         issueSchema.put("properties", issueProps);
         issueSchema.put("additionalProperties", false);
 
@@ -65,14 +63,43 @@ public final class ReviewResultSchema {
         passedArr.put("type", "array");
         passedArr.put("items", strProp(null));
 
+        JSONObject missingArr = new JSONObject();
+        missingArr.put("type", "array");
+        missingArr.put("items", strProp("缺失项或需补充的信息。"));
+
+        JSONObject checkProps = new JSONObject();
+        checkProps.put("check_code", strProp("原子检查项编号，必须使用本次注入清单内的编号。"));
+        checkProps.put("rule_code", strProp("所属规则编号，必须使用本次注入清单内的规则编号。"));
+        checkProps.put("check_question", strProp("检查项问题。"));
+        checkProps.put("status", enumProp(CHECK_STATUS_ENUM, "五级判定：Pass、Partial、Fail、N/A、Review。"));
+        checkProps.put("reason", strProp("判定理由，说明为何给出该状态。"));
+        checkProps.put("evidence", strProp("证据原文摘录；证据不足时写明未找到直接证据。"));
+        checkProps.put("missing_items", missingArr);
+        checkProps.put("suggestion", strProp("整改建议；Pass/N/A 可为空字符串。"));
+        checkProps.put("confidence", enumProp(List.of("high", "medium", "low", "needs_review"),
+                "置信度。证据不足、冲突或模型不确定时填 needs_review。"));
+
+        JSONObject checkSchema = new JSONObject();
+        checkSchema.put("type", "object");
+        checkSchema.put("required", JSON.parseArray(JSON.toJSONString(List.of(
+                "check_code", "rule_code", "check_question", "status", "reason",
+                "evidence", "missing_items", "suggestion", "confidence"))));
+        checkSchema.put("properties", checkProps);
+        checkSchema.put("additionalProperties", false);
+
+        JSONObject checkArr = new JSONObject();
+        checkArr.put("type", "array");
+        checkArr.put("items", checkSchema);
+
         JSONObject rootProps = new JSONObject();
         rootProps.put("summary", strProp("本切片审查总结（中文）。"));
         rootProps.put("issues", issuesArr);
         rootProps.put("passed_items", passedArr);
+        rootProps.put("check_results", checkArr);
 
         JSONObject root = new JSONObject();
         root.put("type", "object");
-        root.put("required", JSON.parseArray(JSON.toJSONString(List.of("summary", "issues", "passed_items"))));
+        root.put("required", JSON.parseArray(JSON.toJSONString(List.of("summary", "issues", "passed_items", "check_results"))));
         root.put("properties", rootProps);
         root.put("additionalProperties", false);
         return root;
@@ -90,7 +117,7 @@ public final class ReviewResultSchema {
         JSONObject chunkItem = new JSONObject();
         chunkItem.put("type", "object");
         chunkItem.put("required", JSON.parseArray(JSON.toJSONString(
-                List.of("chunk_id", "summary", "issues", "passed_items"))));
+                List.of("chunk_id", "summary", "issues", "passed_items", "check_results"))));
         JSONObject chunkProps = new JSONObject();
         chunkProps.put("chunk_id", strProp("批次中该切片的唯一标记，必须与 user message 中的 ===CHUNK <id>=== 对齐。"));
         // 把单切片 schema 的 properties 嫁接进来，避免重复定义
@@ -98,6 +125,7 @@ public final class ReviewResultSchema {
         chunkProps.put("summary", innerProps.getJSONObject("summary"));
         chunkProps.put("issues", innerProps.getJSONObject("issues"));
         chunkProps.put("passed_items", innerProps.getJSONObject("passed_items"));
+        chunkProps.put("check_results", innerProps.getJSONObject("check_results"));
         chunkItem.put("properties", chunkProps);
         chunkItem.put("additionalProperties", false);
 

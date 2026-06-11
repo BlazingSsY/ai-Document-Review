@@ -1,9 +1,11 @@
 package com.aireview.controller;
 
 import com.aireview.dto.ApiResponse;
+import com.aireview.dto.ChecklistImportResultDTO;
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.RuleDTO;
 import com.aireview.dto.RuleMetadataUpdateRequest;
+import com.aireview.service.ChecklistRuleImportService;
 import com.aireview.service.RuleService;
 import com.aireview.util.SecurityUtils;
 
@@ -22,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class RuleController {
 
     private final RuleService ruleService;
+    private final ChecklistRuleImportService checklistRuleImportService;
 
     @PostMapping("/upload")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
@@ -40,6 +43,24 @@ public class RuleController {
         } catch (Exception e) {
             log.error("Rule upload failed", e);
             return ApiResponse.error("规则上传失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/import-checklist")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<ChecklistImportResultDTO> importChecklist(@RequestParam("file") MultipartFile file,
+                                                                 @RequestParam(required = false) Long libraryId,
+                                                                 Authentication authentication) {
+        try {
+            Long userId = SecurityUtils.getUserId(authentication);
+            ChecklistImportResultDTO result = checklistRuleImportService.importQtpChecklist(file, userId, libraryId);
+            return ApiResponse.success("检查单导入成功，共生成 "
+                    + result.getCheckCount() + " 个原子检查项", result);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Checklist import failed", e);
+            return ApiResponse.error("检查单导入失败: " + e.getMessage());
         }
     }
 

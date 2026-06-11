@@ -199,9 +199,9 @@ public class PromptsMigrationRunner implements ApplicationRunner {
                                 String passCriteria, String category) {
         String sql = "INSERT INTO rule_checks "
                 + "(rule_id, check_code, check_type, question, pass_criteria, "
-                + " fail_severity, category, evidence_required, display_order, is_active, created_at, updated_at) "
+                + " category, evidence_required, display_order, is_active, created_at, updated_at) "
                 + "VALUES (:rule_id, :check_code, 'presence', :question, :pass_criteria, "
-                + " 'medium', :category, TRUE, 0, TRUE, NOW(), NOW()) "
+                + " :category, TRUE, 0, TRUE, NOW(), NOW()) "
                 + "ON CONFLICT (rule_id, check_code) DO UPDATE SET "
                 + " question = EXCLUDED.question, "
                 + " pass_criteria = EXCLUDED.pass_criteria, "

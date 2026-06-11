@@ -1,6 +1,7 @@
 package com.aireview.controller;
 
 import com.aireview.dto.ApiResponse;
+import com.aireview.dto.ManualCheckDecisionRequest;
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.ReviewTaskDTO;
 import com.aireview.service.ReviewService;
@@ -15,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -170,6 +172,36 @@ public class ReviewController {
         }
     }
 
+    @PutMapping("/tasks/{taskId}/check-decisions")
+    public ApiResponse<ReviewTaskDTO> updateCheckDecision(@PathVariable String taskId,
+                                                          @RequestBody ManualCheckDecisionRequest request,
+                                                          Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            ReviewTaskDTO task = reviewService.updateManualCheckDecision(taskId, userId, request);
+            return ApiResponse.success("Manual decision saved", task);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to update manual check decision", e);
+            return ApiResponse.error("Failed to update manual decision: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/tasks/{taskId}/audit")
+    public ApiResponse<List<Map<String, Object>>> listAuditLogs(@PathVariable String taskId,
+                                                                Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            return ApiResponse.success(reviewService.listAuditLogs(taskId, userId));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to list audit logs", e);
+            return ApiResponse.error("Failed to list audit logs: " + e.getMessage());
+        }
+    }
+
     /**
      * Export review results as Excel file.
      */
@@ -189,6 +221,46 @@ public class ReviewController {
             return ResponseEntity.badRequest().build();
         } catch (Exception e) {
             log.error("Failed to export result", e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    @GetMapping("/tasks/{taskId}/audit/export")
+    public ResponseEntity<byte[]> exportAudit(@PathVariable String taskId,
+                                              Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            byte[] json = reviewService.exportAuditJson(taskId, userId);
+            String fileName = URLEncoder.encode("审计日志_" + taskId.substring(0, 8) + ".json",
+                    StandardCharsets.UTF_8);
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + fileName)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(json);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        } catch (Exception e) {
+            log.error("Failed to export audit logs", e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    @GetMapping("/tasks/{taskId}/report")
+    public ResponseEntity<byte[]> exportReport(@PathVariable String taskId,
+                                               Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            byte[] docx = reviewService.exportReviewReportDocx(taskId, userId);
+            String fileName = URLEncoder.encode("审查报告_" + taskId.substring(0, 8) + ".docx",
+                    StandardCharsets.UTF_8);
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + fileName)
+                    .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                    .body(docx);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        } catch (Exception e) {
+            log.error("Failed to export review report", e);
             return ResponseEntity.internalServerError().build();
         }
     }

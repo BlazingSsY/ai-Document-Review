@@ -18,30 +18,20 @@ export const STATUS_COLORS: Record<string, string> = {
   rejected: 'warning',
 };
 
-export const SEVERITY_COLORS: Record<string, string> = {
-  high: '#f5222d',
-  medium: '#fa8c16',
-  low: '#52c41a',
-};
-
-export const SEVERITY_LABELS: Record<string, string> = {
-  high: '高',
-  medium: '中',
-  low: '低',
-};
-
-export const SEVERITY_TAG_COLORS: Record<string, string> = {
-  high: 'red',
-  medium: 'orange',
-  low: 'green',
-};
-
 export const MODEL_PROVIDERS = [
   { label: 'OpenAI', value: 'openai' },
   { label: 'Anthropic', value: 'anthropic' },
   { label: 'Moonshot', value: 'moonshot' },
   { label: '阿里通义', value: 'alibaba' },
+  { label: 'Jina AI', value: 'jina' },
+  { label: 'Cohere', value: 'cohere' },
   { label: '自定义', value: 'custom' },
+];
+
+export const MODEL_TYPES = [
+  { label: '审查大模型', value: 'chat' },
+  { label: 'Embedding 模型', value: 'embedding' },
+  { label: 'Reranker 模型', value: 'reranker' },
 ];
 
 export const PAGE_SIZE = 10;

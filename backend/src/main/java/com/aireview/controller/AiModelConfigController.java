@@ -72,9 +72,10 @@ public class AiModelConfigController {
     @GetMapping
     public ApiResponse<PageResponse<AiModelConfigDTO>> list(
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size) {
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String modelType) {
         try {
-            PageResponse<AiModelConfigDTO> result = aiModelService.listConfigs(page, size);
+            PageResponse<AiModelConfigDTO> result = aiModelService.listConfigs(page, size, modelType);
             return ApiResponse.success(result);
         } catch (Exception e) {
             log.error("Failed to list AI model configs", e);
@@ -83,9 +84,10 @@ public class AiModelConfigController {
     }
 
     @GetMapping("/enabled")
-    public ApiResponse<List<AiModelConfigDTO>> listEnabled() {
+    public ApiResponse<List<AiModelConfigDTO>> listEnabled(
+            @RequestParam(required = false) String modelType) {
         try {
-            List<AiModelConfigDTO> result = aiModelService.listEnabledConfigs();
+            List<AiModelConfigDTO> result = aiModelService.listEnabledConfigs(modelType);
             return ApiResponse.success(result);
         } catch (Exception e) {
             log.error("Failed to list enabled AI models", e);
