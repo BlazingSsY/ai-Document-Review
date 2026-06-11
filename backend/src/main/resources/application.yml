@@ -78,8 +78,9 @@ review:
     # 因此调这一处即可，不需要动 AsyncConfig。
     chunk-concurrency: 6
   rag:
-    enabled: true
-    fallback-to-legacy: false
+    # 注：enabled / fallback-to-legacy 已废弃（RAG 与 CHUNK 现在通过前端侧边栏二选一
+    # 进入，两条管线物理隔离、独立运行）。保留下面的 RAG 调参以便 RagReviewService
+    # 复用同一组 review.rag.* 配置。
     check-concurrency: 4
     failed-check-retry-attempts: 1
     block-max-chars: 1800

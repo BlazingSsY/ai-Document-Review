@@ -1,6 +1,6 @@
 package com.aireview.repository;
 
-import com.aireview.entity.DocumentBlock;
+import com.aireview.entity.RagDocumentBlock;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
@@ -32,14 +32,14 @@ public class DocumentVectorRepository {
     private final JdbcTemplate jdbcTemplate;
 
     public void deleteByTaskId(String taskId) {
-        jdbcTemplate.update("DELETE FROM document_blocks WHERE task_id = ?", taskId);
+        jdbcTemplate.update("DELETE FROM rag_document_blocks WHERE task_id = ?", taskId);
     }
 
-    public void saveAll(List<DocumentBlock> blocks) {
+    public void saveAll(List<RagDocumentBlock> blocks) {
         if (blocks == null || blocks.isEmpty()) return;
 
         String sql = """
-                INSERT INTO document_blocks (
+                INSERT INTO rag_document_blocks (
                     task_id, block_id, block_type, chapter_index, block_index,
                     section_path, text_content, text_hash, embedding_model,
                     embedding, embedding_dimension, created_at
@@ -59,7 +59,7 @@ public class DocumentVectorRepository {
         jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
-                DocumentBlock block = blocks.get(i);
+                RagDocumentBlock block = blocks.get(i);
                 validateDimension(block.getEmbeddingDimension());
                 ps.setString(1, block.getTaskId());
                 ps.setString(2, block.getBlockId());
@@ -92,7 +92,7 @@ public class DocumentVectorRepository {
         validateDimension(dimension);
         String model = requireModel(embeddingModel);
         String strategy = indexStrategy(dimension);
-        String indexName = "idx_doc_blocks_hnsw_" + strategy + "_" + dimension + "_" + shortHash(model);
+        String indexName = "idx_rag_doc_blocks_hnsw_" + strategy + "_" + dimension + "_" + shortHash(model);
         String modelLiteral = model.replace("'", "''");
         String expression;
         String operatorClass;
@@ -109,7 +109,7 @@ public class DocumentVectorRepository {
         }
 
         String sql = "CREATE INDEX IF NOT EXISTS " + indexName
-                + " ON document_blocks USING hnsw ((" + expression + ") " + operatorClass + ")"
+                + " ON rag_document_blocks USING hnsw ((" + expression + ") " + operatorClass + ")"
                 + " WHERE embedding IS NOT NULL"
                 + " AND embedding_dimension = " + dimension
                 + " AND embedding_model = '" + modelLiteral + "'";
@@ -121,7 +121,7 @@ public class DocumentVectorRepository {
     }
 
     @Transactional(readOnly = true)
-    public List<ScoredDocumentBlock> findNearest(String taskId,
+    public List<ScoredRagDocumentBlock> findNearest(String taskId,
                                                  String embeddingModel,
                                                  List<Double> queryVector,
                                                  int limit,
@@ -148,7 +148,7 @@ public class DocumentVectorRepository {
                 Math.max(2, binaryCandidateMultiplier));
     }
 
-    private List<ScoredDocumentBlock> queryCosine(String taskId,
+    private List<ScoredRagDocumentBlock> queryCosine(String taskId,
                                                    String model,
                                                    String queryVector,
                                                    int dimension,
@@ -163,7 +163,7 @@ public class DocumentVectorRepository {
                        section_path, text_content, text_hash, embedding_model,
                        embedding_dimension, created_at,
                        1 - (%s <=> %s) AS similarity
-                FROM document_blocks
+                FROM rag_document_blocks
                 WHERE task_id = ?
                   AND embedding_model = '%s'
                   AND embedding_dimension = %d
@@ -180,7 +180,7 @@ public class DocumentVectorRepository {
         }, this::mapScoredBlock);
     }
 
-    private List<ScoredDocumentBlock> queryBinaryQuantized(String taskId,
+    private List<ScoredRagDocumentBlock> queryBinaryQuantized(String taskId,
                                                             String model,
                                                             String queryVector,
                                                             int dimension,
@@ -195,7 +195,7 @@ public class DocumentVectorRepository {
                     SELECT id, task_id, block_id, block_type, chapter_index, block_index,
                            section_path, text_content, text_hash, embedding_model,
                            embedding_dimension, created_at, embedding
-                    FROM document_blocks
+                    FROM rag_document_blocks
                     WHERE task_id = ?
                       AND embedding_model = '%s'
                       AND embedding_dimension = %d
@@ -222,8 +222,8 @@ public class DocumentVectorRepository {
         }, this::mapScoredBlock);
     }
 
-    private ScoredDocumentBlock mapScoredBlock(ResultSet rs, int rowNum) throws SQLException {
-        DocumentBlock block = new DocumentBlock();
+    private ScoredRagDocumentBlock mapScoredBlock(ResultSet rs, int rowNum) throws SQLException {
+        RagDocumentBlock block = new RagDocumentBlock();
         block.setId(rs.getLong("id"));
         block.setTaskId(rs.getString("task_id"));
         block.setBlockId(rs.getString("block_id"));
@@ -237,7 +237,7 @@ public class DocumentVectorRepository {
         block.setEmbeddingDimension(rs.getInt("embedding_dimension"));
         Timestamp createdAt = rs.getTimestamp("created_at");
         block.setCreatedAt(createdAt != null ? createdAt.toLocalDateTime() : null);
-        return new ScoredDocumentBlock(block, rs.getDouble("similarity"));
+        return new ScoredRagDocumentBlock(block, rs.getDouble("similarity"));
     }
 
     private static String toVectorLiteral(List<Double> vector) {
@@ -281,6 +281,6 @@ public class DocumentVectorRepository {
         }
     }
 
-    public record ScoredDocumentBlock(DocumentBlock block, double score) {
+    public record ScoredRagDocumentBlock(RagDocumentBlock block, double score) {
     }
 }

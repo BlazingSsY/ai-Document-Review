@@ -1,17 +1,24 @@
 package com.aireview.service;
 
+import com.aireview.dto.ManualCheckDecisionRequest;
+import com.aireview.dto.PageResponse;
+import com.aireview.dto.ReviewTaskDTO;
 import com.aireview.entity.AiModelConfig;
-import com.aireview.entity.DocumentBlock;
-import com.aireview.entity.ReviewTask;
-import com.aireview.entity.Rule;
-import com.aireview.entity.RuleCheck;
+import com.aireview.entity.RagDocumentBlock;
+import com.aireview.entity.RagReviewAuditLog;
+import com.aireview.entity.RagReviewTask;
+import com.aireview.entity.RagRule;
+import com.aireview.entity.RagRuleCheck;
 import com.aireview.repository.DocumentVectorRepository;
-import com.aireview.repository.ReviewTaskMapper;
-import com.aireview.repository.RuleCheckMapper;
+import com.aireview.repository.RagReviewAuditLogMapper;
+import com.aireview.repository.RagReviewTaskMapper;
+import com.aireview.repository.RagRuleCheckMapper;
 import com.aireview.review.ReviewResultSchema;
 import com.aireview.review.llm.JsonExtractor;
 import com.aireview.util.ChunkUtils;
 import com.aireview.util.WordParser;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,19 +27,31 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -41,13 +60,29 @@ import java.util.concurrent.atomic.AtomicInteger;
 @RequiredArgsConstructor
 public class RagReviewService {
 
-    private final ReviewTaskMapper reviewTaskMapper;
-    private final RuleService ruleService;
-    private final RuleCheckMapper ruleCheckMapper;
+    private final RagReviewTaskMapper ragReviewTaskMapper;
+    private final RagReviewAuditLogMapper ragReviewAuditLogMapper;
+    private final RagRuleService ragRuleService;
+    private final RagRuleCheckMapper ragRuleCheckMapper;
     private final DocumentVectorRepository documentVectorRepository;
     private final AiModelService aiModelService;
     private final WebSocketService webSocketService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Value("${file.documents-dir}")
+    private String documentsDir;
+
+    /** Tracks cancelled task IDs so the async loop can exit early. */
+    private final Set<String> cancelledTasks = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Self-reference to invoke {@code @Async} methods through the Spring proxy.
+     * Same reason as in {@link ReviewService}: {@code this.executeReviewAsync(...)}
+     * bypasses AOP and would run synchronously on the caller's thread.
+     */
+    @Lazy
+    @Autowired
+    private RagReviewService self;
 
     @Autowired
     @Qualifier("ragCheckExecutor")
@@ -80,13 +115,300 @@ public class RagReviewService {
     @Value("${review.rag.check-concurrency:4}")
     private int checkConcurrency;
 
+    // ==============================================================================
+    //  Controller-facing API (task CRUD + manual decisions + exports).
+    //  Mirrors the surface of chunk's {@link ReviewService} so the RAG controller is
+    //  a thin parallel of the chunk controller. The differences are purely table-level
+    //  (rag_review_tasks / rag_review_audit_logs) and the pipeline that runs underneath
+    //  (RAG: vector recall + per-check eval, defined further down in this file).
+    // ==============================================================================
+
+    /**
+     * Submit a RAG review task: upload the document and start async processing.
+     */
+    public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
+                                      String selectedModel, Long userId) throws IOException {
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
+            throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
+        }
+
+        Path uploadDir = Path.of(documentsDir);
+        Files.createDirectories(uploadDir);
+        String savedFileName = UUID.randomUUID() + "_" + originalFilename;
+        Path savedPath = uploadDir.resolve(savedFileName);
+        Files.write(savedPath, file.getBytes());
+
+        RagReviewTask task = new RagReviewTask();
+        task.setUserId(userId);
+        task.setFileName(originalFilename);
+        task.setFilePath(savedPath.toString());
+        task.setScenarioId(scenarioId);
+        task.setSelectedModel(selectedModel);
+        task.setStatus(RagReviewTask.STATUS_PENDING);
+        task.setCreatedAt(LocalDateTime.now());
+        task.setUpdatedAt(LocalDateTime.now());
+        ragReviewTaskMapper.insert(task);
+
+        log.info("RAG review task created: {} for file {} using model {}",
+                task.getId(), originalFilename, selectedModel);
+
+        // Use the proxy so @Async actually fires.
+        self.executeReviewAsync(task.getId());
+        return toDTO(task);
+    }
+
+    public ReviewTaskDTO getTask(String taskId, Long userId) {
+        RagReviewTask task = ragReviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only view your own tasks");
+        }
+        return toDTO(task);
+    }
+
+    public PageResponse<ReviewTaskDTO> listTasks(Long userId, int page, int size, String status) {
+        Page<RagReviewTask> pageParam = new Page<>(page, size);
+        LambdaQueryWrapper<RagReviewTask> query = new LambdaQueryWrapper<>();
+        query.eq(RagReviewTask::getUserId, userId);
+        if (status != null && !status.isBlank()) {
+            query.eq(RagReviewTask::getStatus, status.toUpperCase());
+        }
+        query.orderByDesc(RagReviewTask::getCreatedAt);
+        Page<RagReviewTask> result = ragReviewTaskMapper.selectPage(pageParam, query);
+        List<ReviewTaskDTO> records = result.getRecords().stream().map(this::toDTO).toList();
+        return PageResponse.of(records, result.getTotal(), page, size);
+    }
+
+    /**
+     * Lightweight listing for cross-pipeline merges. Returns recent tasks (sorted
+     * desc) up to a limit, with the {@code reviewMode} field populated. Used by the
+     * unified workbench list endpoint.
+     */
+    public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit) {
+        LambdaQueryWrapper<RagReviewTask> query = new LambdaQueryWrapper<>();
+        query.eq(RagReviewTask::getUserId, userId);
+        query.orderByDesc(RagReviewTask::getCreatedAt);
+        Page<RagReviewTask> pageParam = new Page<>(1, Math.max(1, limit));
+        return ragReviewTaskMapper.selectPage(pageParam, query).getRecords()
+                .stream().map(this::toDTO).toList();
+    }
+
+    public Map<String, Object> getStats(Long userId) {
+        LambdaQueryWrapper<RagReviewTask> baseQuery = new LambdaQueryWrapper<>();
+        baseQuery.eq(RagReviewTask::getUserId, userId);
+        long total = ragReviewTaskMapper.selectCount(baseQuery);
+        long completed = ragReviewTaskMapper.selectCount(
+                new LambdaQueryWrapper<RagReviewTask>()
+                        .eq(RagReviewTask::getUserId, userId)
+                        .eq(RagReviewTask::getStatus, RagReviewTask.STATUS_COMPLETED));
+        long processing = ragReviewTaskMapper.selectCount(
+                new LambdaQueryWrapper<RagReviewTask>()
+                        .eq(RagReviewTask::getUserId, userId)
+                        .eq(RagReviewTask::getStatus, RagReviewTask.STATUS_PROCESSING));
+        long failed = ragReviewTaskMapper.selectCount(
+                new LambdaQueryWrapper<RagReviewTask>()
+                        .eq(RagReviewTask::getUserId, userId)
+                        .eq(RagReviewTask::getStatus, RagReviewTask.STATUS_FAILED));
+        long todayCount = ragReviewTaskMapper.selectCount(
+                new LambdaQueryWrapper<RagReviewTask>()
+                        .eq(RagReviewTask::getUserId, userId)
+                        .ge(RagReviewTask::getCreatedAt, LocalDateTime.now().toLocalDate().atStartOfDay()));
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("total", total);
+        stats.put("completed", completed);
+        stats.put("processing", processing);
+        stats.put("failed", failed);
+        stats.put("todayCount", todayCount);
+        return stats;
+    }
+
+    public void deleteTask(String taskId, Long userId) {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        if (RagReviewTask.STATUS_PROCESSING.equals(task.getStatus())) {
+            throw new IllegalArgumentException("Cannot delete a task that is currently processing. Cancel it first.");
+        }
+        ragReviewTaskMapper.deleteById(taskId);
+        log.info("RAG review task deleted: {}", taskId);
+    }
+
+    public void cancelTask(String taskId, Long userId) {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        String status = task.getStatus();
+        if (!RagReviewTask.STATUS_PENDING.equals(status) && !RagReviewTask.STATUS_PROCESSING.equals(status)) {
+            throw new IllegalArgumentException("Only pending or processing tasks can be cancelled");
+        }
+        cancelledTasks.add(taskId);
+        updateTaskStatus(task, RagReviewTask.STATUS_CANCELLED, "User cancelled");
+        webSocketService.sendTaskUpdate(taskId, RagReviewTask.STATUS_CANCELLED, "Task cancelled by user");
+        log.info("RAG review task cancelled: {}", taskId);
+    }
+
+    public ReviewTaskDTO reReview(String taskId, Long userId) {
+        RagReviewTask original = requireOwnedTask(taskId, userId);
+        RagReviewTask task = new RagReviewTask();
+        task.setUserId(userId);
+        task.setFileName(original.getFileName());
+        task.setFilePath(original.getFilePath());
+        task.setScenarioId(original.getScenarioId());
+        task.setSelectedModel(original.getSelectedModel());
+        task.setStatus(RagReviewTask.STATUS_PENDING);
+        task.setCreatedAt(LocalDateTime.now());
+        task.setUpdatedAt(LocalDateTime.now());
+        ragReviewTaskMapper.insert(task);
+        log.info("RAG re-review task created: {} from original: {}", task.getId(), taskId);
+        self.executeReviewAsync(task.getId());
+        return toDTO(task);
+    }
+
+    /**
+     * RAG retry-failed-checks: re-runs the full task with the same scenario/model.
+     *
+     * <p>Why a full re-run (not selective retry like chunk): RAG operates per atomic
+     * check, and a single check costs only one AI call. Selective retry would require
+     * pickle-loading individual check states. Re-running the whole document is simpler
+     * and only marginally more expensive — the vector index is reused; recall is
+     * deterministic; only the LLM eval pass repeats.
+     */
+    public ReviewTaskDTO retryFailedChunks(String taskId, Long userId) {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        if (RagReviewTask.STATUS_PROCESSING.equals(task.getStatus())) {
+            throw new IllegalArgumentException("Task is currently processing");
+        }
+        updateTaskStatus(task, RagReviewTask.STATUS_PROCESSING, null);
+        webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
+                "RAG 重新审查所有检查项...", 5);
+        self.executeReviewAsync(taskId);
+        return toDTO(task);
+    }
+
+    public ReviewTaskDTO updateManualCheckDecision(String taskId, Long userId,
+                                                    ManualCheckDecisionRequest request) {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        if (task.getAiResult() == null) {
+            throw new IllegalArgumentException("No review result available for manual decision");
+        }
+        if (request == null || request.getCheckCode() == null || request.getCheckCode().isBlank()) {
+            throw new IllegalArgumentException("checkCode is required");
+        }
+
+        Map<String, Object> aiResult = new LinkedHashMap<>(task.getAiResult());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> allCheckResults = aiResult.get("allCheckResults") instanceof List<?> list
+                ? (List<Map<String, Object>>) (List<?>) list
+                : new ArrayList<>();
+        Map<String, Object> target = ReviewExportUtil.findCheckResult(
+                allCheckResults, request.getCheckCode(), request.getSourceChunk());
+        if (target == null) {
+            throw new IllegalArgumentException("Check result not found: " + request.getCheckCode());
+        }
+
+        Map<String, Object> before = new LinkedHashMap<>(target);
+        String finalStatus = normalizeCheckStatus(request.getFinalStatus());
+        target.put("manualStatus", finalStatus);
+        target.put("manualAccepted", request.getAccepted());
+        target.put("manualComment", request.getComment() == null ? "" : request.getComment());
+        target.put("manualReviewerId", userId);
+        target.put("manualReviewedAt", LocalDateTime.now().toString());
+
+        ReviewExportUtil.syncChunkCheckResult(aiResult, target);
+        aiResult.put("manualReviewSummary", ReviewExportUtil.buildManualReviewSummary(allCheckResults));
+        task.setAiResult(aiResult);
+        task.setUpdatedAt(LocalDateTime.now());
+        ragReviewTaskMapper.updateById(task);
+
+        RagReviewAuditLog audit = new RagReviewAuditLog();
+        audit.setTaskId(taskId);
+        audit.setUserId(userId);
+        audit.setAction("manual_check_decision");
+        audit.setTargetType("check_result");
+        audit.setTargetId(String.valueOf(target.get("check_code")));
+        audit.setBeforeValue(before);
+        audit.setAfterValue(new LinkedHashMap<>(target));
+        audit.setComment(request.getComment());
+        audit.setCreatedAt(LocalDateTime.now());
+        ragReviewAuditLogMapper.insert(audit);
+
+        return toDTO(task);
+    }
+
+    public List<Map<String, Object>> listAuditLogs(String taskId, Long userId) {
+        requireOwnedTask(taskId, userId);
+        List<RagReviewAuditLog> logs = ragReviewAuditLogMapper.findByTaskId(taskId);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (RagReviewAuditLog logEntry : logs) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", logEntry.getId());
+            row.put("taskId", logEntry.getTaskId());
+            row.put("userId", logEntry.getUserId());
+            row.put("action", logEntry.getAction());
+            row.put("targetType", logEntry.getTargetType());
+            row.put("targetId", logEntry.getTargetId());
+            row.put("beforeValue", logEntry.getBeforeValue());
+            row.put("afterValue", logEntry.getAfterValue());
+            row.put("comment", logEntry.getComment());
+            row.put("createdAt", logEntry.getCreatedAt());
+            out.add(row);
+        }
+        return out;
+    }
+
+    public byte[] exportAuditJson(String taskId, Long userId) throws IOException {
+        return ReviewExportUtil.toAuditJson(listAuditLogs(taskId, userId), objectMapper);
+    }
+
+    public byte[] exportResultToExcel(String taskId, Long userId) throws IOException {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        return ReviewExportUtil.toExcel(task.getAiResult());
+    }
+
+    public byte[] exportReviewReportDocx(String taskId, Long userId) throws IOException {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        return ReviewExportUtil.toReportDocx(task.getFileName(), task.getId(),
+                task.getSelectedModel(), task.getStatus(), task.getAiResult(),
+                listAuditLogs(taskId, userId));
+    }
+
+    private RagReviewTask requireOwnedTask(String taskId, Long userId) {
+        RagReviewTask task = ragReviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only access your own tasks");
+        }
+        return task;
+    }
+
+    private ReviewTaskDTO toDTO(RagReviewTask task) {
+        ReviewTaskDTO dto = new ReviewTaskDTO();
+        dto.setId(task.getId());
+        dto.setUserId(task.getUserId());
+        dto.setFileName(task.getFileName());
+        dto.setScenarioId(task.getScenarioId());
+        dto.setSelectedModel(task.getSelectedModel());
+        dto.setStatus(task.getStatus());
+        dto.setAiResult(task.getAiResult());
+        dto.setCreatedAt(task.getCreatedAt());
+        dto.setUpdatedAt(task.getUpdatedAt());
+        dto.setFailReason(task.getFailReason());
+        dto.setReviewMode("RAG");
+        return dto;
+    }
+
+    // ============================ Pipeline ============================
+    // Everything below is the AI execution pipeline. Called from
+    // executeReviewAsync(taskId) only.
+
     /**
      * Parses and vectorizes the uploaded document before any checklist item is sent
      * to the chat model. This makes document preparation an explicit pipeline stage.
      */
-    public PreparedDocument prepareDocumentVectors(ReviewTask task) throws Exception {
+    public PreparedDocument prepareDocumentVectors(RagReviewTask task) throws Exception {
         String taskId = task.getId();
-        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+        webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                 "RAG: 正在解析上传文档...", 8);
 
         List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
@@ -103,15 +425,15 @@ public class RagReviewService {
             throw new IllegalStateException("RAG review requires an enabled embedding model");
         }
 
-        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+        webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                 "RAG: 正在构建原文分块...", 15);
-        List<DocumentBlock> blocks = buildBlocks(taskId, chapters);
+        List<RagDocumentBlock> blocks = buildBlocks(taskId, chapters);
         if (blocks.isEmpty()) {
             throw new IllegalStateException("No source blocks were produced from the uploaded document");
         }
         documentVectorRepository.deleteByTaskId(taskId);
 
-        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+        webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                 "RAG: 正在向量化 " + blocks.size() + " 个原文分块...", 25);
         embedBlocks(blocks, embeddingModel);
         documentVectorRepository.saveAll(blocks);
@@ -119,7 +441,7 @@ public class RagReviewService {
         String vectorIndexStrategy = vectorIndexEnabled
                 ? documentVectorRepository.ensureHnswIndex(embeddingModel.getModelName(), embeddingDimension)
                 : "exact";
-        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+        webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                 "RAG: 文档向量化完成，pgvector " + vectorIndexStrategy
                         + " 索引已就绪（维度 " + embeddingDimension + "）", 34);
 
@@ -127,20 +449,47 @@ public class RagReviewService {
                 embeddingDimension, vectorIndexStrategy);
     }
 
-    public void executeReview(ReviewTask task, String runStamp) throws Exception {
+    public void executeReview(RagReviewTask task, String runStamp) throws Exception {
         executeReview(task, runStamp, prepareDocumentVectors(task));
     }
 
-    public void executeReview(ReviewTask task, String runStamp,
+    /**
+     * Public async entry for the RAG pipeline. Called by {@code RagReviewController}
+     * (or by the chunk-side controller via dispatch). Loads the task from
+     * {@code rag_review_tasks} and runs through {@link #prepareDocumentVectors} →
+     * {@link #executeReview}.
+     */
+    @Async("reviewTaskExecutor")
+    public void executeReviewAsync(String taskId) {
+        RagReviewTask task = ragReviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            log.error("RAG task not found for async execution: {}", taskId);
+            return;
+        }
+        String runStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        try {
+            updateTaskStatus(task, RagReviewTask.STATUS_PROCESSING, null);
+            webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
+                    "RAG 审查启动，开始文档向量化...", 5);
+            executeReview(task, runStamp);
+        } catch (Exception e) {
+            log.error("RAG review task failed: {}", taskId, e);
+            updateTaskStatus(task, RagReviewTask.STATUS_FAILED, e.getMessage());
+            webSocketService.sendTaskUpdate(taskId, RagReviewTask.STATUS_FAILED,
+                    "审查失败: " + e.getMessage());
+        }
+    }
+
+    public void executeReview(RagReviewTask task, String runStamp,
                               PreparedDocument preparedDocument) throws Exception {
         String taskId = task.getId();
         AiModelConfig chatModel = aiModelService.getEnabledModel(task.getSelectedModel());
         AiModelConfig embeddingModel = preparedDocument.embeddingModel();
         AiModelConfig rerankerModel =
                 aiModelService.getFirstEnabledModelByType(AiModelService.MODEL_TYPE_RERANKER);
-        List<DocumentBlock> blocks = preparedDocument.blocks();
+        List<RagDocumentBlock> blocks = preparedDocument.blocks();
 
-        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+        webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                 "RAG: 正在加载检查规则...", 38);
         List<CheckPlan> plans = buildCheckPlans(task.getScenarioId());
         if (plans.isEmpty()) {
@@ -166,7 +515,7 @@ public class RagReviewService {
             if (failedPlans.isEmpty()) break;
 
             retriedCheckCount += failedPlans.size();
-            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+            webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                     "首轮审查完成，开始补审 " + failedPlans.size() + " 个失败项"
                             + "（第 " + retry + " 次）", 84);
             List<CheckAttempt> retryAttempts = runCheckPass(
@@ -245,8 +594,8 @@ public class RagReviewService {
         aiResult.put("retrievalStats", retrievalStats);
 
         task.setAiResult(aiResult);
-        updateTaskStatus(task, ReviewTask.STATUS_COMPLETED, null);
-        webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_COMPLETED,
+        updateTaskStatus(task, RagReviewTask.STATUS_COMPLETED, null);
+        webSocketService.sendTaskUpdate(taskId, RagReviewTask.STATUS_COMPLETED,
                 remainingFailedCount == 0
                         ? "RAG 审查完成：" + plans.size() + " 个检查项"
                         : "RAG 审查完成：" + plans.size() + " 个检查项，其中 "
@@ -277,7 +626,7 @@ public class RagReviewService {
                             int progress = progressStart + (int) Math.round(
                                     (double) done / indexedPlans.size() * (progressEnd - progressStart));
                             try {
-                                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                                         "RAG " + phaseName + "：" + done + "/" + indexedPlans.size(),
                                         progress);
                             } catch (Exception progressError) {
@@ -350,8 +699,8 @@ public class RagReviewService {
         return message.length() > 500 ? message.substring(0, 500) : message;
     }
 
-    private List<DocumentBlock> buildBlocks(String taskId, List<WordParser.Chapter> chapters) {
-        List<DocumentBlock> blocks = new ArrayList<>();
+    private List<RagDocumentBlock> buildBlocks(String taskId, List<WordParser.Chapter> chapters) {
+        List<RagDocumentBlock> blocks = new ArrayList<>();
         int seq = 1;
         for (int chapterIdx = 0; chapterIdx < chapters.size(); chapterIdx++) {
             WordParser.Chapter chapter = chapters.get(chapterIdx);
@@ -362,7 +711,7 @@ public class RagReviewService {
                         ? piece
                         : chapter.getTitle() + "\n\n" + piece;
                 if (text.isBlank()) continue;
-                DocumentBlock block = new DocumentBlock();
+                RagDocumentBlock block = new RagDocumentBlock();
                 block.setTaskId(taskId);
                 block.setBlockId("BLOCK-" + String.format("%05d", seq++));
                 block.setBlockType("paragraph");
@@ -404,13 +753,13 @@ public class RagReviewService {
         return pieces;
     }
 
-    private void embedBlocks(List<DocumentBlock> blocks, AiModelConfig embeddingModel) throws Exception {
+    private void embedBlocks(List<RagDocumentBlock> blocks, AiModelConfig embeddingModel) throws Exception {
         int batchSize = Math.max(1, embeddingBatchSize);
         Integer detectedDimension = null;
         for (int start = 0; start < blocks.size(); start += batchSize) {
             int end = Math.min(blocks.size(), start + batchSize);
-            List<DocumentBlock> batch = blocks.subList(start, end);
-            List<String> texts = batch.stream().map(DocumentBlock::getTextContent).toList();
+            List<RagDocumentBlock> batch = blocks.subList(start, end);
+            List<String> texts = batch.stream().map(RagDocumentBlock::getTextContent).toList();
             List<List<Double>> vectors = aiModelService.embedTexts(embeddingModel, texts);
             for (int i = 0; i < batch.size(); i++) {
                 List<Double> vector = vectors.get(i);
@@ -429,7 +778,7 @@ public class RagReviewService {
                     throw new IllegalStateException("Embedding API returned inconsistent dimensions: "
                             + detectedDimension + " and " + vector.size());
                 }
-                DocumentBlock block = batch.get(i);
+                RagDocumentBlock block = batch.get(i);
                 block.setEmbeddingModel(embeddingModel.getModelName());
                 block.setEmbeddingVector(objectMapper.writeValueAsString(vector));
                 block.setEmbeddingDimension(vector.size());
@@ -438,11 +787,11 @@ public class RagReviewService {
     }
 
     private List<CheckPlan> buildCheckPlans(Long scenarioId) {
-        List<Rule> rules = ruleService.getRulesByScenarioId(scenarioId);
+        List<RagRule> rules = ragRuleService.getRulesByScenarioId(scenarioId);
         List<CheckPlan> plans = new ArrayList<>();
         int auto = 1;
-        for (Rule rule : rules) {
-            List<RuleCheck> checks = ruleCheckMapper.findActiveByRuleId(rule.getId());
+        for (RagRule rule : rules) {
+            List<RagRuleCheck> checks = ragRuleCheckMapper.findActiveByRuleId(rule.getId());
             String ruleCode = firstNonBlank(rule.getRuleCode(), "R-AUTO-" + String.format("%03d", auto++));
             if (checks.isEmpty()) {
                 plans.add(new CheckPlan(rule, null, ruleCode, ruleCode + "-C001",
@@ -450,7 +799,7 @@ public class RagReviewService {
                         rule.getContent(), "other"));
                 continue;
             }
-            for (RuleCheck check : checks) {
+            for (RagRuleCheck check : checks) {
                 plans.add(new CheckPlan(rule, check, ruleCode,
                         firstNonBlank(check.getCheckCode(), ruleCode + "-C" + String.format("%03d", plans.size() + 1)),
                         check.getQuestion(),
@@ -558,7 +907,7 @@ public class RagReviewService {
             sb.append("(none)\n");
         } else {
             for (ScoredBlock item : evidence) {
-                DocumentBlock block = item.block();
+                RagDocumentBlock block = item.block();
                 sb.append("[").append(block.getBlockId()).append("] ")
                         .append(block.getSectionPath()).append(" score=")
                         .append(String.format(Locale.ROOT, "%.4f", item.score()))
@@ -607,7 +956,7 @@ public class RagReviewService {
         return score;
     }
 
-    private Map<String, Object> toOriginalSource(DocumentBlock block) {
+    private Map<String, Object> toOriginalSource(RagDocumentBlock block) {
         Map<String, Object> source = new LinkedHashMap<>();
         source.put("sourceId", block.getBlockId());
         source.put("type", "original_block");
@@ -661,14 +1010,14 @@ public class RagReviewService {
         return Math.abs(value == Long.MIN_VALUE ? 0L : value);
     }
 
-    private void updateTaskStatus(ReviewTask task, String status, String failReason) {
+    private void updateTaskStatus(RagReviewTask task, String status, String failReason) {
         task.setStatus(status);
         task.setFailReason(failReason);
         task.setUpdatedAt(LocalDateTime.now());
-        reviewTaskMapper.updateById(task);
+        ragReviewTaskMapper.updateById(task);
     }
 
-    private record CheckPlan(Rule rule, RuleCheck check, String ruleCode, String checkCode,
+    private record CheckPlan(RagRule rule, RagRuleCheck check, String ruleCode, String checkCode,
                              String checkQuestion, String passCriteria, String category) {
         String ruleName() {
             return rule != null ? rule.getRuleName() : "";
@@ -679,7 +1028,7 @@ public class RagReviewService {
         }
     }
 
-    public record PreparedDocument(List<DocumentBlock> blocks,
+    public record PreparedDocument(List<RagDocumentBlock> blocks,
                                    AiModelConfig embeddingModel,
                                    int embeddingDimension,
                                    String vectorIndexStrategy) {
@@ -707,6 +1056,6 @@ public class RagReviewService {
         }
     }
 
-    private record ScoredBlock(DocumentBlock block, double score, String reason) {
+    private record ScoredBlock(RagDocumentBlock block, double score, String reason) {
     }
 }

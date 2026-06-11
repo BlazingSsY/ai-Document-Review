@@ -25,16 +25,10 @@ import {
   ReloadOutlined,
   DownloadOutlined,
 } from '@ant-design/icons';
+import type { ReviewTask, ReviewMode } from '../api/reviews';
 import {
-  getReviewDetail,
-  reReview,
-  retryFailedChunks,
-  exportReviewExcel,
-  exportReviewAudit,
-  exportReviewReport,
-  updateCheckDecision,
-  ReviewTask,
-} from '../api/reviews';
+  getReviewApi, getReviewDetailAnyPipeline, PIPELINE_LABEL, PIPELINE_COLOR,
+} from '../api/pipelineApi';
 import { STATUS_LABELS } from '../utils/constants';
 import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
 import useLogStore, { LogEntry } from '../store/logStore';
@@ -321,11 +315,16 @@ function ReviewWorkspacePage() {
     appendLog(taskId, { time: formatTime(new Date()), level, message: logMessage, progress });
   }, [taskId, appendLog]);
 
+  // task.reviewMode 决定后续所有详情/导出/复核接口走哪条管线。
+  // 历史数据可能没有这个字段——保底当作 CHUNK 处理。
+  const reviewMode: ReviewMode = (task?.reviewMode ?? 'CHUNK') as ReviewMode;
+  const reviewApi = getReviewApi(reviewMode);
+
   const fetchDetail = useCallback(async () => {
     if (!taskId) return;
     setLoading(true);
     try {
-      const res = await getReviewDetail(taskId);
+      const res = await getReviewDetailAnyPipeline(taskId);
       const t = res.data.data;
       setTask(t);
       const existing = useLogStore.getState().logsByTask[taskId];
@@ -354,7 +353,7 @@ function ReviewWorkspacePage() {
     if (!taskId) return;
     setReReviewing(true);
     try {
-      const res = await reReview(taskId);
+      const res = await reviewApi.reReview(taskId);
       const newId = res.data.data.id;
       message.success('重新审查任务已提交');
       clearLogs(taskId);
@@ -372,7 +371,7 @@ function ReviewWorkspacePage() {
     if (!taskId) return;
     setRetryingFailed(true);
     try {
-      const res = await retryFailedChunks(taskId);
+      const res = await reviewApi.retryFailedChunks(taskId);
       setTask(res.data.data);
       setWsProgress(10);
       addLog('info', '开始重新审查失败切片...');
@@ -388,7 +387,7 @@ function ReviewWorkspacePage() {
     if (!taskId) return;
     setExporting(true);
     try {
-      const res = await exportReviewExcel(taskId);
+      const res = await reviewApi.exportReviewExcel(taskId);
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
@@ -412,7 +411,7 @@ function ReviewWorkspacePage() {
     if (!taskId) return;
     setExportingAudit(true);
     try {
-      const res = await exportReviewAudit(taskId);
+      const res = await reviewApi.exportReviewAudit(taskId);
       const blob = new Blob([res.data], { type: 'application/json' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -434,7 +433,7 @@ function ReviewWorkspacePage() {
     if (!taskId) return;
     setExportingReport(true);
     try {
-      const res = await exportReviewReport(taskId);
+      const res = await reviewApi.exportReviewReport(taskId);
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       });
@@ -475,7 +474,7 @@ function ReviewWorkspacePage() {
     setManualSaving(true);
     try {
       const values = await manualForm.validateFields();
-      const res = await updateCheckDecision(taskId, {
+      const res = await reviewApi.updateCheckDecision(taskId, {
         checkCode,
         sourceChunk: numericField(manualTarget, ['sourceChunk', 'chunk']),
         finalStatus: values.finalStatus,
@@ -504,7 +503,7 @@ function ReviewWorkspacePage() {
     }
     setManualSaving(true);
     try {
-      const res = await updateCheckDecision(taskId, {
+      const res = await reviewApi.updateCheckDecision(taskId, {
         checkCode,
         sourceChunk: numericField(item, ['sourceChunk', 'chunk']),
         finalStatus: decision,
@@ -537,7 +536,9 @@ function ReviewWorkspacePage() {
       if (s === 'COMPLETED' || s === 'FAILED' || s === 'CANCELLED') {
         setTimeout(async () => {
           try {
-            const res = await getReviewDetail(taskId);
+            // Use the unified dispatch endpoint — this WS handler fires before we
+            // know whether the task is RAG or CHUNK on the very first load.
+            const res = await getReviewDetailAnyPipeline(taskId);
             setTask(res.data.data);
           } catch {
             // Ignore refresh failures; the polling entry point can still reload the task.
@@ -624,6 +625,7 @@ function ReviewWorkspacePage() {
             返回
           </Button>
           <Title level={5} style={{ margin: 0 }}>{task.fileName}</Title>
+          <Tag color={PIPELINE_COLOR[reviewMode]}>{PIPELINE_LABEL[reviewMode]}</Tag>
           <Tag color={status === 'completed' ? 'success' : status === 'failed' ? 'error' : status === 'cancelled' ? 'warning' : 'processing'}>
             {STATUS_LABELS[status] || task.status}
           </Tag>

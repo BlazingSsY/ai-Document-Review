@@ -35,15 +35,6 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.apache.poi.xwpf.usermodel.XWPFParagraph;
-import org.apache.poi.xwpf.usermodel.XWPFRun;
-import org.apache.poi.xwpf.usermodel.XWPFTable;
-import org.apache.poi.xwpf.usermodel.XWPFTableRow;
-
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -69,7 +60,6 @@ public class ReviewService {
     private final WebSocketService webSocketService;
     private final RuleCheckMapper ruleCheckMapper;
     private final ReviewAuditLogMapper reviewAuditLogMapper;
-    private final RagReviewService ragReviewService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -112,12 +102,6 @@ public class ReviewService {
 
     @Value("${review.parallel.chunk-concurrency}")
     private int chunkConcurrency;
-
-    @Value("${review.rag.enabled:true}")
-    private boolean ragReviewEnabled;
-
-    @Value("${review.rag.fallback-to-legacy:false}")
-    private boolean ragFallbackToLegacy;
 
     /**
      * 收敛性审查的统一参数。这些值不放配置是因为它们是「跨模型收敛」契约本身：
@@ -576,24 +560,6 @@ public class ReviewService {
             // Update status to PROCESSING
             updateTaskStatus(task, ReviewTask.STATUS_PROCESSING, null);
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "开始文件审查...", 5);
-
-            if (ragReviewEnabled) {
-                try {
-                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                            "文档已上传，开始向量化预处理...", 6);
-                    RagReviewService.PreparedDocument preparedDocument =
-                            ragReviewService.prepareDocumentVectors(task);
-                    ragReviewService.executeReview(task, runStamp, preparedDocument);
-                    return;
-                } catch (Exception ragEx) {
-                    if (!ragFallbackToLegacy) {
-                        throw ragEx;
-                    }
-                    log.warn("RAG review failed, falling back to legacy chunk review: {}", ragEx.getMessage());
-                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                            "RAG review failed, falling back to legacy chunk review: " + ragEx.getMessage(), 6);
-                }
-            }
 
             // 1. Parse Word document into chapters (by Heading 1)
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在解析文档结构（按一级标题拆分章节）...", 10);
@@ -2195,276 +2161,16 @@ public class ReviewService {
      * Columns: 序号, 章节, 审查意见, 判定依据, 是否接受
      */
     public byte[] exportResultToExcel(String taskId, Long userId) throws IOException {
-        ReviewTask task = reviewTaskMapper.selectById(taskId);
-        if (task == null) {
-            throw new IllegalArgumentException("Task not found: " + taskId);
-        }
-        if (!task.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("You can only export your own tasks");
-        }
-        if (task.getAiResult() == null) {
-            throw new IllegalArgumentException("No review result available for export");
-        }
-
-        Map<String, Object> aiResult = task.getAiResult();
-
-        try (Workbook workbook = new XSSFWorkbook();
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-
-            Sheet sheet = workbook.createSheet("审查意见");
-
-            // Header style
-            CellStyle headerStyle = workbook.createCellStyle();
-            Font headerFont = workbook.createFont();
-            headerFont.setBold(true);
-            headerFont.setFontHeightInPoints((short) 12);
-            headerStyle.setFont(headerFont);
-            headerStyle.setAlignment(HorizontalAlignment.CENTER);
-            headerStyle.setVerticalAlignment(VerticalAlignment.CENTER);
-            headerStyle.setFillForegroundColor(IndexedColors.LIGHT_CORNFLOWER_BLUE.getIndex());
-            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            headerStyle.setBorderBottom(BorderStyle.THIN);
-            headerStyle.setBorderTop(BorderStyle.THIN);
-            headerStyle.setBorderLeft(BorderStyle.THIN);
-            headerStyle.setBorderRight(BorderStyle.THIN);
-
-            // Data style
-            CellStyle dataStyle = workbook.createCellStyle();
-            dataStyle.setVerticalAlignment(VerticalAlignment.TOP);
-            dataStyle.setWrapText(true);
-            dataStyle.setBorderBottom(BorderStyle.THIN);
-            dataStyle.setBorderTop(BorderStyle.THIN);
-            dataStyle.setBorderLeft(BorderStyle.THIN);
-            dataStyle.setBorderRight(BorderStyle.THIN);
-
-            Object allCheckResultsObj = aiResult.get("allCheckResults");
-            if (allCheckResultsObj instanceof List<?> checkList && !checkList.isEmpty()) {
-                Row headerRow = sheet.createRow(0);
-                String[] headers = {"序号", "章节", "检查项编号", "规则编码", "判定", "检查项", "判定理由", "证据", "缺失项", "建议", "置信度", "人工复核"};
-                for (int i = 0; i < headers.length; i++) {
-                    Cell cell = headerRow.createCell(i);
-                    cell.setCellValue(headers[i]);
-                    cell.setCellStyle(headerStyle);
-                }
-                int rowNum = 1;
-                for (Object item : checkList) {
-                    if (!(item instanceof Map<?, ?>)) continue;
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> check = (Map<String, Object>) item;
-                    writeCheckResultRow(sheet.createRow(rowNum), rowNum, check, dataStyle);
-                    rowNum++;
-                }
-                int[] widths = {2000, 6000, 5000, 4000, 3000, 12000, 12000, 12000, 9000, 10000, 3000, 3000};
-                for (int i = 0; i < widths.length; i++) sheet.setColumnWidth(i, widths[i]);
-                workbook.write(out);
-                return out.toByteArray();
-            }
-
-            // Create header row with category / rule_code to match the extended issue schema.
-            // 判定依据 now combines the rule
-            // name with the evidence excerpt so reviewers can verify each finding inline.
-            Row headerRow = sheet.createRow(0);
-            String[] headers = {"序号", "章节", "问题分类", "规则编码", "审查意见", "判定依据", "是否接受"};
-            for (int i = 0; i < headers.length; i++) {
-                Cell cell = headerRow.createCell(i);
-                cell.setCellValue(headers[i]);
-                cell.setCellStyle(headerStyle);
-            }
-
-            int rowNum = 1;
-            Object chunkResultsObj = aiResult.get("chunkResults");
-            if (chunkResultsObj instanceof List) {
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> chunkResults = (List<Map<String, Object>>) chunkResultsObj;
-                for (Map<String, Object> chunk : chunkResults) {
-                    String chapterTitle = chunk.get("chapterTitle") != null
-                            ? chunk.get("chapterTitle").toString() : "";
-                    Object result = chunk.get("result");
-                    if (result instanceof Map) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> resultMap = (Map<String, Object>) result;
-                        Object issuesObj = resultMap.get("issues");
-                        if (issuesObj instanceof List) {
-                            @SuppressWarnings("unchecked")
-                            List<Map<String, Object>> issues = (List<Map<String, Object>>) issuesObj;
-                            for (Map<String, Object> issue : issues) {
-                                writeIssueRow(sheet.createRow(rowNum), rowNum, issue, chapterTitle, dataStyle);
-                                rowNum++;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Also handle flat allIssues if chunkResults didn't yield issues
-            if (rowNum == 1) {
-                Object allIssuesObj = aiResult.get("allIssues");
-                if (allIssuesObj instanceof List) {
-                    @SuppressWarnings("unchecked")
-                    List<Map<String, Object>> allIssues = (List<Map<String, Object>>) allIssuesObj;
-                    for (Map<String, Object> issue : allIssues) {
-                        writeIssueRow(sheet.createRow(rowNum), rowNum, issue, "", dataStyle);
-                        rowNum++;
-                    }
-                }
-            }
-
-            // Column widths (8 columns now)
-            sheet.setColumnWidth(0, 2000);   // 序号
-            sheet.setColumnWidth(1, 6000);   // 章节
-            sheet.setColumnWidth(2, 3600);   // 问题分类
-            sheet.setColumnWidth(3, 4000);   // 规则编码
-            sheet.setColumnWidth(4, 14000);  // 审查意见
-            sheet.setColumnWidth(5, 12000);  // 判定依据
-            sheet.setColumnWidth(6, 3000);   // 是否接受
-
-            workbook.write(out);
-            return out.toByteArray();
-        }
+        ReviewTask task = requireOwnedTask(taskId, userId);
+        return ReviewExportUtil.toExcel(task.getAiResult());
     }
+
 
     public byte[] exportReviewReportDocx(String taskId, Long userId) throws IOException {
         ReviewTask task = requireOwnedTask(taskId, userId);
-        if (task.getAiResult() == null) {
-            throw new IllegalArgumentException("No review result available for export");
-        }
-
-        try (XWPFDocument document = new XWPFDocument();
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            addDocParagraph(document, "机载文档审查报告", true, 18);
-            addDocParagraph(document, "文件名称：" + task.getFileName(), false, 11);
-            addDocParagraph(document, "任务编号：" + task.getId(), false, 11);
-            addDocParagraph(document, "审查模型：" + task.getSelectedModel(), false, 11);
-            addDocParagraph(document, "任务状态：" + task.getStatus(), false, 11);
-            addDocParagraph(document, "生成时间：" + LocalDateTime.now(), false, 11);
-
-            Map<String, Object> result = task.getAiResult();
-            addDocParagraph(document, "审查概要", true, 14);
-            addDocParagraph(document, "问题数：" + result.getOrDefault("totalIssues", 0)
-                    + "；检查项数：" + result.getOrDefault("totalCheckResults", 0)
-                    + "；失败切片：" + result.getOrDefault("failedChunkCount", 0), false, 11);
-            Object manualSummary = result.get("manualReviewSummary");
-            if (manualSummary != null) {
-                addDocParagraph(document, "人工复核：" + manualSummary, false, 11);
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> checks = result.get("allCheckResults") instanceof List<?> list
-                    ? (List<Map<String, Object>>) (List<?>) list
-                    : List.of();
-            addDocParagraph(document, "检查项判定矩阵", true, 14);
-            if (checks.isEmpty()) {
-                addDocParagraph(document, "当前任务没有检查项判定矩阵。", false, 11);
-            } else {
-                XWPFTable table = document.createTable(checks.size() + 1, 7);
-                String[] headers = {"序号", "章节", "检查项", "系统判定", "人工判定", "理由", "建议"};
-                XWPFTableRow header = table.getRow(0);
-                for (int i = 0; i < headers.length; i++) {
-                    header.getCell(i).setText(headers[i]);
-                }
-                for (int i = 0; i < checks.size(); i++) {
-                    Map<String, Object> check = checks.get(i);
-                    XWPFTableRow row = table.getRow(i + 1);
-                    row.getCell(0).setText(String.valueOf(i + 1));
-                    row.getCell(1).setText(firstNonBlank(strField(check, "sourceTitle"), strField(check, "location")));
-                    row.getCell(2).setText(firstNonBlank(strField(check, "check_question"), strField(check, "question")));
-                    row.getCell(3).setText(renderCheckStatus(strField(check, "status")));
-                    row.getCell(4).setText(renderCheckStatus(strField(check, "manualStatus")));
-                    row.getCell(5).setText(firstNonBlank(strField(check, "manualComment"), strField(check, "reason")));
-                    row.getCell(6).setText(strField(check, "suggestion"));
-                }
-            }
-
-            addDocParagraph(document, "审计日志", true, 14);
-            List<Map<String, Object>> auditLogs = listAuditLogs(taskId, userId);
-            if (auditLogs.isEmpty()) {
-                addDocParagraph(document, "暂无人工复核审计记录。", false, 11);
-            } else {
-                for (Map<String, Object> logEntry : auditLogs) {
-                    addDocParagraph(document,
-                            logEntry.get("createdAt") + " | " + logEntry.get("action")
-                                    + " | " + logEntry.get("targetId")
-                                    + " | " + Objects.toString(logEntry.get("comment"), ""),
-                            false,
-                            10);
-                }
-            }
-
-            document.write(out);
-            return out.toByteArray();
-        }
-    }
-
-    private static void addDocParagraph(XWPFDocument document, String text, boolean bold, int fontSize) {
-        XWPFParagraph paragraph = document.createParagraph();
-        XWPFRun run = paragraph.createRun();
-        run.setBold(bold);
-        run.setFontSize(fontSize);
-        run.setText(text == null ? "" : text);
-    }
-
-    /**
-     * Write one issue into a sheet row. Columns:
-     *   0 序号 | 1 章节 | 2 问题分类 | 3 规则编码 | 4 审查意见 | 5 判定依据 | 6 是否接受
-     *
-     * Falls back gracefully when older AI responses don't include category/rule fields.
-     */
-    private static void writeIssueRow(Row row, int rowNum, Map<String, Object> issue,
-                                       String fallbackChapterTitle, CellStyle dataStyle) {
-        String location = strField(issue, "location");
-        String description = firstNonBlank(strField(issue, "description"), strField(issue, "explanation"));
-        String suggestion = strField(issue, "suggestion");
-        String rule = strField(issue, "rule");
-        String ruleCode = firstNonBlank(strField(issue, "rule_code"), strField(issue, "ruleCode"));
-        String category = strField(issue, "category");
-        String evidence = strField(issue, "evidence");
-
-        String opinion = description;
-        if (!suggestion.isEmpty()) opinion += (opinion.isEmpty() ? "" : "\n") + "建议：" + suggestion;
-
-        String basis = rule;
-        if (!evidence.isEmpty()) basis += (basis.isEmpty() ? "" : "\n") + "判定依据：" + evidence;
-
-        cell(row, 0, String.valueOf(rowNum), dataStyle);
-        cell(row, 1, location.isEmpty() ? fallbackChapterTitle : location, dataStyle);
-        cell(row, 2, category, dataStyle);
-        cell(row, 3, ruleCode, dataStyle);
-        cell(row, 4, opinion, dataStyle);
-        cell(row, 5, basis, dataStyle);
-        cell(row, 6, "", dataStyle);
-    }
-
-    private static void writeCheckResultRow(Row row, int rowNum, Map<String, Object> check, CellStyle dataStyle) {
-        String sourceTitle = firstNonBlank(strField(check, "sourceTitle"), strField(check, "location"));
-        String checkCode = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
-        String ruleCode = firstNonBlank(strField(check, "rule_code"), strField(check, "ruleCode"));
-        String status = renderCheckStatus(strField(check, "status"));
-        String question = firstNonBlank(strField(check, "check_question"), strField(check, "question"));
-        String reason = strField(check, "reason");
-        String evidence = strField(check, "evidence");
-        String missing = renderListField(check.get("missing_items"));
-        String suggestion = strField(check, "suggestion");
-        String confidence = strField(check, "confidence");
-        String manual = renderManualReview(check);
-
-        cell(row, 0, String.valueOf(rowNum), dataStyle);
-        cell(row, 1, sourceTitle, dataStyle);
-        cell(row, 2, checkCode, dataStyle);
-        cell(row, 3, ruleCode, dataStyle);
-        cell(row, 4, status, dataStyle);
-        cell(row, 5, question, dataStyle);
-        cell(row, 6, reason, dataStyle);
-        cell(row, 7, evidence, dataStyle);
-        cell(row, 8, missing, dataStyle);
-        cell(row, 9, suggestion, dataStyle);
-        cell(row, 10, confidence, dataStyle);
-        cell(row, 11, manual, dataStyle);
-    }
-
-    private static void cell(Row row, int idx, String value, CellStyle style) {
-        Cell c = row.createCell(idx);
-        c.setCellValue(value);
-        c.setCellStyle(style);
+        return ReviewExportUtil.toReportDocx(task.getFileName(), task.getId(),
+                task.getSelectedModel(), task.getStatus(), task.getAiResult(),
+                listAuditLogs(taskId, userId));
     }
 
     private static String strField(Map<String, Object> map, String key) {
@@ -2474,40 +2180,6 @@ public class ReviewService {
 
     private static String firstNonBlank(String a, String b) {
         return a == null || a.isBlank() ? (b == null ? "" : b) : a;
-    }
-
-    private static String renderListField(Object value) {
-        if (value instanceof List<?> list) {
-            return list.stream().filter(Objects::nonNull).map(Object::toString)
-                    .reduce((a, b) -> a + "；" + b).orElse("");
-        }
-        return value == null ? "" : value.toString();
-    }
-
-    private static String renderManualReview(Map<String, Object> check) {
-        String manualStatus = renderCheckStatus(strField(check, "manualStatus"));
-        String accepted = "";
-        if (check.containsKey("manualAccepted")) {
-            accepted = Boolean.TRUE.equals(check.get("manualAccepted")) ? "接受系统意见" : "不接受系统意见";
-        }
-        String comment = strField(check, "manualComment");
-        List<String> parts = new ArrayList<>();
-        if (!manualStatus.isBlank()) parts.add("最终判定：" + manualStatus);
-        if (!accepted.isBlank()) parts.add(accepted);
-        if (!comment.isBlank()) parts.add("备注：" + comment);
-        return String.join("\n", parts);
-    }
-
-    private static String renderCheckStatus(String raw) {
-        if (raw == null || raw.isBlank()) return "";
-        return switch (raw.trim()) {
-            case "Pass" -> "通过";
-            case "Partial" -> "部分通过";
-            case "Fail" -> "不通过";
-            case "N/A" -> "不适用";
-            case "Review" -> "待复核";
-            default -> raw.trim();
-        };
     }
 
     private ReviewTask requireOwnedTask(String taskId, Long userId) {
@@ -2669,6 +2341,20 @@ public class ReviewService {
         dto.setCreatedAt(task.getCreatedAt());
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
+        dto.setReviewMode("CHUNK");
         return dto;
+    }
+
+    /**
+     * Lightweight listing for the unified workbench. Returns recent tasks for the
+     * user, with the {@code reviewMode} field populated, sorted desc.
+     */
+    public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit) {
+        LambdaQueryWrapper<ReviewTask> query = new LambdaQueryWrapper<>();
+        query.eq(ReviewTask::getUserId, userId);
+        query.orderByDesc(ReviewTask::getCreatedAt);
+        Page<ReviewTask> pageParam = new Page<>(1, Math.max(1, limit));
+        return reviewTaskMapper.selectPage(pageParam, query).getRecords()
+                .stream().map(this::toDTO).toList();
     }
 }

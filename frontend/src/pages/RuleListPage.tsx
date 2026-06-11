@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Space, Typography, Tag,
   message, Popconfirm, Breadcrumb, Empty, Descriptions, Select, Tooltip, Spin,
@@ -8,10 +8,10 @@ import {
   ArrowLeftOutlined, FileTextOutlined, EditOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { Rule, RuleLibrary } from '../api/rules';
 import {
-  getRuleList, getRuleDetail, uploadRule, importChecklist, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
-  getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
-} from '../api/rules';
+  getRuleApi, PIPELINE_LABEL, PIPELINE_COLOR, type ReviewMode,
+} from '../api/pipelineApi';
 import RuleUploader from '../components/RuleUploader';
 import { PAGE_SIZE } from '../utils/constants';
 import useAuthStore from '../store/authStore';
@@ -53,9 +53,22 @@ const RULE_COL_WIDTHS = {
   action: 130,
 } as const;
 
-function RuleListPage() {
+interface RuleListPageProps {
+  /** 当前页所属管线。决定调用 chunk 或 RAG 的规则 / 规则库 API。 */
+  reviewMode: ReviewMode;
+}
+
+function RuleListPage({ reviewMode }: RuleListPageProps) {
   const user = useAuthStore((s) => s.user);
   const canManage = user?.role === 'supervisor' || user?.role === 'admin';
+
+  const ruleApi = useMemo(() => getRuleApi(reviewMode), [reviewMode]);
+  const {
+    getRuleList, getRuleDetail, uploadRule, importChecklist, updateRuleMetadata, deleteRule,
+    getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
+  } = ruleApi;
+  const pipelineLabel = PIPELINE_LABEL[reviewMode];
+  const pipelineColor = PIPELINE_COLOR[reviewMode];
 
   // Library state
   const [libraries, setLibraries] = useState<RuleLibrary[]>([]);
@@ -121,6 +134,21 @@ function RuleListPage() {
   useEffect(() => {
     if (currentLibrary) fetchRules();
   }, [rulePage, currentLibrary]);
+
+  // 切换管线后清空状态、回到规则库列表，避免显示上一个管线遗留的数据。
+  useEffect(() => {
+    setCurrentLibrary(null);
+    setLibraries([]);
+    setRules([]);
+    setSelectedLibIds([]);
+    setSelectedRuleIds([]);
+    if (libPage !== 1) {
+      setLibPage(1);
+    } else {
+      fetchLibraries();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewMode]);
 
   // Library operations
   const handleCreateLibrary = async (values: { name: string; description: string }) => {
@@ -451,7 +479,10 @@ function RuleListPage() {
     return (
       <div>
         <div className="page-header">
-          <Title level={4} style={{ margin: 0 }}>审查规则管理</Title>
+          <Space size={12} align="center">
+            <Title level={4} style={{ margin: 0 }}>审查规则管理</Title>
+            <Tag color={pipelineColor}>{pipelineLabel}</Tag>
+          </Space>
           <Space>
             {canManage && selectedLibIds.length > 0 && (
               <Popconfirm

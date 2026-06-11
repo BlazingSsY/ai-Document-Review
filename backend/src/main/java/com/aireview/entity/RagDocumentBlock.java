@@ -10,8 +10,8 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("document_blocks")
-public class DocumentBlock {
+@TableName("rag_document_blocks")
+public class RagDocumentBlock {
 
     @TableId(type = IdType.AUTO)
     private Long id;

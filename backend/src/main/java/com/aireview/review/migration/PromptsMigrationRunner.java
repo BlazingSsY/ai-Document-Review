@@ -184,8 +184,10 @@ public class PromptsMigrationRunner implements ApplicationRunner {
     // ---------------- DB helpers ----------------
 
     private Long findRuleIdByCode(String ruleCode) {
+        // After the RAG split, prompts.json migration targets rag_rules (RAG-side rules
+        // are the only ones that carry rule_checks).
         List<Long> ids = jdbc.queryForList(
-                "SELECT id FROM rules WHERE rule_code = ? AND is_valid = TRUE ORDER BY id LIMIT 1",
+                "SELECT id FROM rag_rules WHERE rule_code = ? AND is_valid = TRUE ORDER BY id LIMIT 1",
                 Long.class, ruleCode);
         return ids.isEmpty() ? null : ids.get(0);
     }
@@ -197,7 +199,7 @@ public class PromptsMigrationRunner implements ApplicationRunner {
      */
     private String upsertCheck(long ruleId, String checkCode, String question,
                                 String passCriteria, String category) {
-        String sql = "INSERT INTO rule_checks "
+        String sql = "INSERT INTO rag_rule_checks "
                 + "(rule_id, check_code, check_type, question, pass_criteria, "
                 + " category, evidence_required, display_order, is_active, created_at, updated_at) "
                 + "VALUES (:rule_id, :check_code, 'presence', :question, :pass_criteria, "

@@ -12,6 +12,8 @@ import {
   TeamOutlined,
   AppstoreOutlined,
   ProfileOutlined,
+  DeploymentUnitOutlined,
+  BookOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import useAuthStore from '../store/authStore';
@@ -78,12 +80,21 @@ function AppLayout() {
   const menuItems: MenuProps['items'] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
     {
-      key: 'rules-and-scenarios',
-      icon: <FileTextOutlined />,
-      label: '规则与场景',
+      key: 'rag-section',
+      icon: <DeploymentUnitOutlined />,
+      label: '智能召回审查',
       children: [
-        { key: '/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
-        { key: '/rules', icon: <ProfileOutlined />, label: '审查规则' },
+        { key: '/rag/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
+        { key: '/rag/rules', icon: <ProfileOutlined />, label: '审查规则' },
+      ],
+    },
+    {
+      key: 'chunk-section',
+      icon: <BookOutlined />,
+      label: '全文逐章审查',
+      children: [
+        { key: '/chunk/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
+        { key: '/chunk/rules', icon: <ProfileOutlined />, label: '审查规则' },
       ],
     },
     { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
@@ -106,10 +117,16 @@ function AppLayout() {
     },
   ];
 
-  const selectedKey = '/' + location.pathname.split('/')[1];
-  const openKeys = (selectedKey === '/rules' || selectedKey === '/scenarios')
-    ? ['rules-and-scenarios']
-    : [];
+  // The sidebar is two-level (group → leaf). The menu's `selectedKey` must be the
+  // leaf path. We default both pipeline groups open so users always see all four
+  // entries; they can manually collapse a group if they want.
+  const path = location.pathname;
+  const selectedKey = path.startsWith('/rag/scenarios') ? '/rag/scenarios'
+    : path.startsWith('/rag/rules') ? '/rag/rules'
+    : path.startsWith('/chunk/scenarios') ? '/chunk/scenarios'
+    : path.startsWith('/chunk/rules') ? '/chunk/rules'
+    : '/' + path.split('/')[1];
+  const openKeys = ['rag-section', 'chunk-section'];
   const roleTag = ROLE_TAG[role] || ROLE_TAG.user;
 
   return (

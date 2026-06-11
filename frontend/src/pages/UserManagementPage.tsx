@@ -1,13 +1,19 @@
 import { useState, useEffect } from 'react';
 import {
-  Card, Table, Tag, Select, Button, Modal, Checkbox, Form, Input,
-  Typography, Space, Popconfirm, message,
+  Card, Table, Tag, Select, Button, Modal, Checkbox, Form, Input, Radio,
+  Typography, Space, Popconfirm, Alert, message,
 } from 'antd';
 import { PlusOutlined, UserOutlined, LockOutlined, MailOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { UserInfo } from '../api/auth';
-import { getUserList, createUser, updateUserRole, deleteUser, assignLibraries, getUserAssignedLibraries } from '../api/users';
-import { getAllRuleLibraries, RuleLibrary } from '../api/rules';
+import {
+  getUserList, createUser, updateUserRole, deleteUser, assignLibraries, getUserAssignedLibraries,
+  type AssignmentMode,
+} from '../api/users';
+import type { RuleLibrary } from '../api/rules';
+import { getAllRuleLibraries as getChunkLibraries } from '../api/rules';
+import { getAllRuleLibraries as getRagLibraries } from '../api/ragRules';
+import { PIPELINE_LABEL } from '../api/pipelineApi';
 
 const { Title, Text } = Typography;
 
@@ -22,13 +28,16 @@ function UserManagementPage() {
   const [creating, setCreating] = useState(false);
   const [createForm] = Form.useForm();
 
-  // Library assignment modal
+  // Library assignment modal — 用户管理为 chunk / RAG 两侧分别配置规则库可见性。
+  // 同一弹窗内用 Radio 切换 mode，避免一个用户开两个对话框。
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
   const [assignUserName, setAssignUserName] = useState('');
+  const [assignMode, setAssignMode] = useState<AssignmentMode>('RAG');
   const [allLibraries, setAllLibraries] = useState<RuleLibrary[]>([]);
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<number[]>([]);
   const [assigning, setAssigning] = useState(false);
+  const [loadingLibs, setLoadingLibs] = useState(false);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -62,18 +71,34 @@ function UserManagementPage() {
     } catch { /* handled */ }
   };
 
-  const openAssignModal = async (user: UserInfo) => {
-    setAssignUserId(user.id);
-    setAssignUserName(user.name || user.email);
+  // 重新加载选中管线的全部规则库 + 该用户在该管线下的已分配规则库 ID。
+  // 切换 Radio 时也复用这个函数。
+  const loadAssignmentsFor = async (userId: number, mode: AssignmentMode) => {
+    setLoadingLibs(true);
     try {
+      const fetchLibs = mode === 'RAG' ? getRagLibraries : getChunkLibraries;
       const [libsRes, assignedRes] = await Promise.all([
-        getAllRuleLibraries(),
-        getUserAssignedLibraries(user.id),
+        fetchLibs(),
+        getUserAssignedLibraries(userId, mode),
       ]);
       setAllLibraries(libsRes.data.data);
       setSelectedLibraryIds(assignedRes.data.data || []);
-      setAssignModalOpen(true);
     } catch { /* handled */ }
+    finally { setLoadingLibs(false); }
+  };
+
+  const openAssignModal = async (user: UserInfo) => {
+    setAssignUserId(user.id);
+    setAssignUserName(user.name || user.email);
+    setAssignMode('RAG');
+    await loadAssignmentsFor(user.id, 'RAG');
+    setAssignModalOpen(true);
+  };
+
+  const handleSwitchAssignMode = async (mode: AssignmentMode) => {
+    if (assignUserId === null) return;
+    setAssignMode(mode);
+    await loadAssignmentsFor(assignUserId, mode);
   };
 
   const handleDeleteUser = async (userId: number) => {
@@ -88,9 +113,9 @@ function UserManagementPage() {
     if (assignUserId === null) return;
     setAssigning(true);
     try {
-      await assignLibraries(assignUserId, selectedLibraryIds);
-      message.success('规则库分配成功');
-      setAssignModalOpen(false);
+      await assignLibraries(assignUserId, selectedLibraryIds, assignMode);
+      message.success(`已保存 ${PIPELINE_LABEL[assignMode]} 规则库分配`);
+      // 不关闭对话框——supervisor 通常连续在两条管线之间切换配置。
     } catch { /* handled */ }
     finally { setAssigning(false); }
   };
@@ -191,31 +216,46 @@ function UserManagementPage() {
         </Form>
       </Modal>
 
-      {/* Library Assignment Modal */}
+      {/* Library Assignment Modal — Radio 切换管线，复选框选库；保存按钮只写
+          当前管线。supervisor 可来回切换两个 tab 配置同一个用户的两套权限。 */}
       <Modal title={`分配规则库 - ${assignUserName}`} open={assignModalOpen}
         onCancel={() => setAssignModalOpen(false)} onOk={handleAssign}
-        confirmLoading={assigning} okText="保存" cancelText="取消" width={500}>
-        <div style={{ marginBottom: 12 }}>
-          <Text type="secondary">勾选要分配给该用户的规则库：</Text>
-        </div>
-        <Checkbox.Group value={selectedLibraryIds}
-          onChange={(vals) => setSelectedLibraryIds(vals as number[])} style={{ width: '100%' }}>
-          <div style={{ maxHeight: 400, overflow: 'auto' }}>
-            {allLibraries.map((lib) => (
-              <div key={lib.id} style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
-                <Checkbox value={lib.id}>
-                  <Space direction="vertical" size={0}>
-                    <Text strong>{lib.name}</Text>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {lib.description || '无描述'} ({lib.ruleCount} 条规则)
-                    </Text>
-                  </Space>
-                </Checkbox>
-              </div>
-            ))}
-            {allLibraries.length === 0 && <Text type="secondary">暂无规则库，请先创建规则库</Text>}
-          </div>
-        </Checkbox.Group>
+        confirmLoading={assigning} okText={`保存到「${PIPELINE_LABEL[assignMode]}」`} cancelText="关闭" width={520}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Radio.Group value={assignMode} onChange={(e) => handleSwitchAssignMode(e.target.value)}>
+            <Radio.Button value="RAG">智能召回审查</Radio.Button>
+            <Radio.Button value="CHUNK">全文逐章审查</Radio.Button>
+          </Radio.Group>
+          <Alert
+            type="info"
+            showIcon
+            message={`当前正在编辑「${PIPELINE_LABEL[assignMode]}」管线下，该用户可见的规则库`}
+            description="两条管线的规则库各自独立。普通用户只能看到被勾选的库及其规则；管理员/主管无视分配看到全部。"
+          />
+          <Checkbox.Group value={selectedLibraryIds}
+            onChange={(vals) => setSelectedLibraryIds(vals as number[])} style={{ width: '100%' }}
+            disabled={loadingLibs}>
+            <div style={{ maxHeight: 360, overflow: 'auto' }}>
+              {allLibraries.map((lib) => (
+                <div key={lib.id} style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
+                  <Checkbox value={lib.id}>
+                    <Space direction="vertical" size={0}>
+                      <Text strong>{lib.name}</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {lib.description || '无描述'} ({lib.ruleCount} 条规则)
+                      </Text>
+                    </Space>
+                  </Checkbox>
+                </div>
+              ))}
+              {allLibraries.length === 0 && (
+                <Text type="secondary">
+                  {loadingLibs ? '加载中…' : `${PIPELINE_LABEL[assignMode]} 暂无规则库`}
+                </Text>
+              )}
+            </div>
+          </Checkbox.Group>
+        </Space>
       </Modal>
     </div>
   );

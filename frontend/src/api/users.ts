@@ -17,14 +17,29 @@ export function updateUserRole(userId: number, role: string) {
   return request.put<ApiResponse<null>>(`/admin/users/${userId}/role`, { role });
 }
 
-export function assignLibraries(userId: number, libraryIds: number[]) {
-  return request.post<ApiResponse<null>>(`/admin/users/${userId}/libraries`, { libraryIds });
+export type AssignmentMode = 'CHUNK' | 'RAG';
+
+export function assignLibraries(
+  userId: number,
+  libraryIds: number[],
+  mode: AssignmentMode = 'CHUNK',
+) {
+  return request.post<ApiResponse<null>>(
+    `/admin/users/${userId}/libraries`,
+    { libraryIds },
+    { params: { mode } },
+  );
 }
 
 export function deleteUser(userId: number) {
   return request.delete<ApiResponse<null>>(`/admin/users/${userId}`);
 }
 
-export function getUserAssignedLibraries(userId: number) {
-  return request.get<ApiResponse<number[]>>(`/admin/users/${userId}/libraries`);
+export function getUserAssignedLibraries(
+  userId: number,
+  mode: AssignmentMode = 'CHUNK',
+) {
+  return request.get<ApiResponse<number[]>>(`/admin/users/${userId}/libraries`, {
+    params: { mode },
+  });
 }

@@ -24,8 +24,15 @@ function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="rules" element={<RuleListPage />} />
-        <Route path="scenarios" element={<ScenarioListPage />} />
+        {/* 全文逐章审查（chunk pipeline） */}
+        <Route path="chunk/scenarios" element={<ScenarioListPage reviewMode="CHUNK" />} />
+        <Route path="chunk/rules" element={<RuleListPage reviewMode="CHUNK" />} />
+        {/* 智能召回审查（RAG pipeline） */}
+        <Route path="rag/scenarios" element={<ScenarioListPage reviewMode="RAG" />} />
+        <Route path="rag/rules" element={<RuleListPage reviewMode="RAG" />} />
+        {/* 旧 URL 兼容：默认转到全文逐章侧。 */}
+        <Route path="scenarios" element={<Navigate to="/chunk/scenarios" replace />} />
+        <Route path="rules" element={<Navigate to="/chunk/rules" replace />} />
         <Route path="review" element={<Navigate to="/dashboard" replace />} />
         <Route path="review/:taskId" element={<ReviewWorkspacePage />} />
         <Route path="models" element={<ModelConfigPage />} />

@@ -1,6 +1,8 @@
 import request, { ApiResponse } from './request';
 import { PaginatedResult } from './rules';
 
+export type ReviewMode = 'CHUNK' | 'RAG';
+
 export interface ReviewTask {
   id: string;
   userId: number;
@@ -12,6 +14,8 @@ export interface ReviewTask {
   createdAt: string;
   updatedAt: string;
   failReason?: string;
+  /** 任务所属管线。后端在 DTO 序列化时填入；前端按此值分流后续 API 调用。 */
+  reviewMode?: ReviewMode;
 }
 
 export interface ReviewListParams {

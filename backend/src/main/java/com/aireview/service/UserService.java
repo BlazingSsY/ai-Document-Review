@@ -4,7 +4,9 @@ import com.aireview.dto.ChangePasswordRequest;
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.UserDTO;
 import com.aireview.entity.User;
+import com.aireview.entity.RagUserRuleAssignment;
 import com.aireview.entity.UserRuleAssignment;
+import com.aireview.repository.RagUserRuleAssignmentMapper;
 import com.aireview.repository.UserMapper;
 import com.aireview.repository.UserRuleAssignmentMapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -24,6 +26,7 @@ public class UserService {
 
     private final UserMapper userMapper;
     private final UserRuleAssignmentMapper userRuleAssignmentMapper;
+    private final RagUserRuleAssignmentMapper ragUserRuleAssignmentMapper;
     private final PasswordEncoder passwordEncoder;
 
     public UserDTO getUserById(Long id) {
@@ -111,26 +114,51 @@ public class UserService {
             throw new IllegalArgumentException("不能删除项目主管");
         }
         userRuleAssignmentMapper.deleteByUserId(targetUserId);
+        ragUserRuleAssignmentMapper.deleteByUserId(targetUserId);
         userMapper.deleteById(targetUserId);
         log.info("User {} deleted by operator {}", targetUserId, operatorId);
     }
 
     @Transactional
     public void assignLibrariesToUser(Long userId, List<Long> libraryIds) {
-        User user = userMapper.selectById(userId);
-        if (user == null) {
-            throw new IllegalArgumentException("用户不存在");
-        }
-
-        userRuleAssignmentMapper.deleteByUserId(userId);
-        for (Long libId : libraryIds) {
-            userRuleAssignmentMapper.insert(new UserRuleAssignment(userId, libId));
-        }
-        log.info("Assigned {} rule libraries to user {}", libraryIds.size(), userId);
+        assignLibrariesByMode(userId, libraryIds, "CHUNK");
     }
 
     public List<Long> getAssignedLibraryIds(Long userId) {
         return userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
+    }
+
+    /**
+     * Library assignment is per-pipeline (粗粒度物理隔离的衍生 — 两条管线各有自己的
+     * user_library_assignment 表）。supervisor 在用户管理页可为同一用户分别配置
+     * chunk 与 RAG 两侧能见的规则库。
+     */
+    @Transactional
+    public void assignLibrariesByMode(Long userId, List<Long> libraryIds, String mode) {
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new IllegalArgumentException("用户不存在");
+        }
+        boolean rag = "RAG".equalsIgnoreCase(mode);
+        if (rag) {
+            ragUserRuleAssignmentMapper.deleteByUserId(userId);
+            for (Long libId : libraryIds) {
+                ragUserRuleAssignmentMapper.insert(new RagUserRuleAssignment(userId, libId));
+            }
+        } else {
+            userRuleAssignmentMapper.deleteByUserId(userId);
+            for (Long libId : libraryIds) {
+                userRuleAssignmentMapper.insert(new UserRuleAssignment(userId, libId));
+            }
+        }
+        log.info("Assigned {} {} rule libraries to user {}",
+                libraryIds.size(), rag ? "RAG" : "CHUNK", userId);
+    }
+
+    public List<Long> getAssignedLibraryIdsByMode(Long userId, String mode) {
+        return "RAG".equalsIgnoreCase(mode)
+                ? ragUserRuleAssignmentMapper.findLibraryIdsByUserId(userId)
+                : userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
     }
 
     private UserDTO toDTO(User user) {

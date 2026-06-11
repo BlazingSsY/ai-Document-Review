@@ -297,6 +297,469 @@ CREATE INDEX IF NOT EXISTS idx_ai_model_config_enabled ON ai_model_config(is_ena
 CREATE INDEX IF NOT EXISTS idx_ai_model_config_type_enabled ON ai_model_config(model_type, is_enabled);
 CREATE INDEX IF NOT EXISTS idx_user_library_assignment_user ON user_library_assignment(user_id);
 
+-- =========================================================================
+-- RAG 侧物理隔离表（"智能召回审查"管线）
+--
+-- 设计：与上方 chunk 侧（rule_libraries / rules / scenarios / review_tasks /
+-- review_audit_logs / document_blocks / rule_checks / rule_check_examples /
+-- review_pipelines / review_findings / ai_call_logs）字段一致，但通过 rag_
+-- 前缀的独立表名做物理隔离。两侧共享 users 与 ai_model_config。
+--
+-- 该结构对应"方案 B + 粗粒度物理隔离"决策：用户在前端通过侧边栏二选一进入
+-- 「智能召回审查 / 全文逐章审查」，两条管线的规则库 / 规则 / 场景 / 任务
+-- 彼此互不可见、互不影响。共享的只有账号体系与模型配置。
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS rag_rule_libraries (
+    id              BIGSERIAL       PRIMARY KEY,
+    name            VARCHAR(255)    NOT NULL,
+    description     TEXT,
+    creator_id      BIGINT          NOT NULL REFERENCES users(id),
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rag_rules (
+    id              BIGSERIAL       PRIMARY KEY,
+    rule_name       VARCHAR(255)    NOT NULL,
+    file_type       VARCHAR(20)     NOT NULL,
+    content         TEXT            NOT NULL,
+    creator_id      BIGINT          NOT NULL REFERENCES users(id),
+    library_id      BIGINT          REFERENCES rag_rule_libraries(id) ON DELETE CASCADE,
+    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    is_valid        BOOLEAN         NOT NULL DEFAULT TRUE,
+    rule_code       VARCHAR(100),
+    rule_type       VARCHAR(40),
+    document_type   VARCHAR(100),
+    sections        JSONB,
+    keywords        JSONB,
+    description     TEXT,
+    source_file     VARCHAR(255)
+);
+
+CREATE TABLE IF NOT EXISTS rag_rule_checks (
+    id                  BIGSERIAL       PRIMARY KEY,
+    rule_id             BIGINT          NOT NULL REFERENCES rag_rules(id) ON DELETE CASCADE,
+    check_code          VARCHAR(160)    NOT NULL,
+    check_type          VARCHAR(32)     NOT NULL DEFAULT 'presence',
+    question            TEXT            NOT NULL,
+    pass_criteria       TEXT            NOT NULL,
+    category            VARCHAR(64),
+    evidence_required   BOOLEAN         NOT NULL DEFAULT TRUE,
+    display_order       INTEGER         NOT NULL DEFAULT 0,
+    is_active           BOOLEAN         NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    UNIQUE (rule_id, check_code)
+);
+CREATE INDEX IF NOT EXISTS idx_rag_rule_checks_rule ON rag_rule_checks(rule_id);
+
+CREATE TABLE IF NOT EXISTS rag_rule_check_examples (
+    id              BIGSERIAL       PRIMARY KEY,
+    check_id        BIGINT          NOT NULL REFERENCES rag_rule_checks(id) ON DELETE CASCADE,
+    polarity        VARCHAR(8)      NOT NULL,
+    example_text    TEXT            NOT NULL,
+    explanation     TEXT,
+    display_order   INTEGER         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rag_rule_check_examples_check ON rag_rule_check_examples(check_id);
+
+CREATE TABLE IF NOT EXISTS rag_scenarios (
+    id              BIGSERIAL       PRIMARY KEY,
+    name            VARCHAR(255)    NOT NULL,
+    description     TEXT,
+    creator_id      BIGINT          NOT NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS rag_scenario_rule_mapping (
+    scenario_id     BIGINT          NOT NULL REFERENCES rag_scenarios(id) ON DELETE CASCADE,
+    rule_id         BIGINT          NOT NULL REFERENCES rag_rules(id) ON DELETE CASCADE,
+    PRIMARY KEY (scenario_id, rule_id)
+);
+
+CREATE TABLE IF NOT EXISTS rag_scenario_library_mapping (
+    scenario_id     BIGINT          NOT NULL REFERENCES rag_scenarios(id) ON DELETE CASCADE,
+    library_id      BIGINT          NOT NULL REFERENCES rag_rule_libraries(id) ON DELETE CASCADE,
+    PRIMARY KEY (scenario_id, library_id)
+);
+
+CREATE TABLE IF NOT EXISTS rag_user_library_assignment (
+    user_id         BIGINT          NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    library_id      BIGINT          NOT NULL REFERENCES rag_rule_libraries(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, library_id)
+);
+
+CREATE TABLE IF NOT EXISTS rag_review_tasks (
+    id              VARCHAR(36)     PRIMARY KEY,
+    user_id         BIGINT          NOT NULL REFERENCES users(id),
+    file_name       VARCHAR(500)    NOT NULL,
+    file_path       VARCHAR(1000)   NOT NULL,
+    scenario_id     BIGINT          REFERENCES rag_scenarios(id),
+    selected_model  VARCHAR(100)    NOT NULL,
+    status          VARCHAR(50)     NOT NULL DEFAULT 'PENDING',
+    ai_result       JSONB,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    fail_reason     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS rag_review_audit_logs (
+    id              BIGSERIAL       PRIMARY KEY,
+    task_id         VARCHAR(36)     NOT NULL REFERENCES rag_review_tasks(id) ON DELETE CASCADE,
+    user_id         BIGINT          NOT NULL REFERENCES users(id),
+    action          VARCHAR(80)     NOT NULL,
+    target_type     VARCHAR(80)     NOT NULL,
+    target_id       VARCHAR(255)    NOT NULL,
+    before_value    JSONB,
+    after_value     JSONB,
+    comment         TEXT,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rag_document_blocks (
+    id                  BIGSERIAL       PRIMARY KEY,
+    task_id             VARCHAR(36)     NOT NULL REFERENCES rag_review_tasks(id) ON DELETE CASCADE,
+    block_id            VARCHAR(80)     NOT NULL,
+    block_type          VARCHAR(40)     NOT NULL DEFAULT 'paragraph',
+    chapter_index       INTEGER         NOT NULL DEFAULT 0,
+    block_index         INTEGER         NOT NULL DEFAULT 0,
+    section_path        TEXT,
+    text_content        TEXT            NOT NULL,
+    text_hash           VARCHAR(80)     NOT NULL,
+    embedding_model     VARCHAR(100),
+    embedding           VECTOR,
+    embedding_dimension INTEGER,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    UNIQUE (task_id, block_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rag_document_blocks_task ON rag_document_blocks(task_id);
+CREATE INDEX IF NOT EXISTS idx_rag_document_blocks_task_chapter
+    ON rag_document_blocks(task_id, chapter_index, block_index);
+CREATE INDEX IF NOT EXISTS idx_rag_document_blocks_vector_filter
+    ON rag_document_blocks(task_id, embedding_model, embedding_dimension)
+    WHERE embedding IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS rag_review_pipelines (
+    id                      BIGSERIAL       PRIMARY KEY,
+    task_id                 VARCHAR(36)     NOT NULL UNIQUE REFERENCES rag_review_tasks(id) ON DELETE CASCADE,
+    total_chunks            INTEGER         NOT NULL DEFAULT 0,
+    total_rule_invocations  INTEGER         NOT NULL DEFAULT 0,
+    executed_invocations    INTEGER         NOT NULL DEFAULT 0,
+    inconclusive_invocations INTEGER        NOT NULL DEFAULT 0,
+    stage1_findings         INTEGER         NOT NULL DEFAULT 0,
+    stage2_confirmed        INTEGER         NOT NULL DEFAULT 0,
+    stage2_rejected         INTEGER         NOT NULL DEFAULT 0,
+    status                  VARCHAR(16)     NOT NULL DEFAULT 'PLANNED',
+    started_at              TIMESTAMP,
+    finished_at             TIMESTAMP,
+    created_at              TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rag_review_pipelines_task ON rag_review_pipelines(task_id);
+
+CREATE TABLE IF NOT EXISTS rag_review_findings (
+    id                  BIGSERIAL       PRIMARY KEY,
+    pipeline_id         BIGINT          NOT NULL REFERENCES rag_review_pipelines(id) ON DELETE CASCADE,
+    chunk_index         INTEGER         NOT NULL,
+    chunk_label         TEXT,
+    rule_id             BIGINT          NOT NULL,
+    rule_code           VARCHAR(160)    NOT NULL,
+    check_id            BIGINT          NOT NULL,
+    check_code          VARCHAR(160)    NOT NULL,
+    category            VARCHAR(64),
+    description         TEXT            NOT NULL,
+    suggestion          TEXT,
+    evidence_span       TEXT            NOT NULL,
+    normalized_span     TEXT            NOT NULL,
+    occurrences         JSONB,
+    stage1_confidence   DOUBLE PRECISION,
+    stage2_status       VARCHAR(16)     NOT NULL DEFAULT 'N/A',
+    stage2_reason       TEXT,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    UNIQUE (pipeline_id, check_code, normalized_span)
+);
+CREATE INDEX IF NOT EXISTS idx_rag_review_findings_pipeline ON rag_review_findings(pipeline_id);
+
+CREATE TABLE IF NOT EXISTS rag_ai_call_logs (
+    id              BIGSERIAL       PRIMARY KEY,
+    pipeline_id     BIGINT          REFERENCES rag_review_pipelines(id) ON DELETE CASCADE,
+    stage           VARCHAR(16)     NOT NULL,
+    chunk_index     INTEGER,
+    rule_id         BIGINT,
+    check_id        BIGINT,
+    model_key       VARCHAR(128)    NOT NULL,
+    attempt         INTEGER         NOT NULL DEFAULT 1,
+    request_body    JSONB           NOT NULL,
+    response_body   JSONB,
+    parsed_output   JSONB,
+    schema_valid    BOOLEAN,
+    http_status     INTEGER,
+    duration_ms     INTEGER,
+    error_message   TEXT,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rag_ai_call_logs_pipeline ON rag_ai_call_logs(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_rag_ai_call_logs_stage ON rag_ai_call_logs(stage);
+
+CREATE INDEX IF NOT EXISTS idx_rag_rules_creator ON rag_rules(creator_id);
+CREATE INDEX IF NOT EXISTS idx_rag_rules_library ON rag_rules(library_id);
+CREATE INDEX IF NOT EXISTS idx_rag_scenarios_creator ON rag_scenarios(creator_id);
+CREATE INDEX IF NOT EXISTS idx_rag_review_tasks_user ON rag_review_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_rag_review_tasks_status ON rag_review_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_rag_review_audit_logs_task ON rag_review_audit_logs(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_rag_user_library_assignment_user ON rag_user_library_assignment(user_id);
+
+-- =========================================================================
+-- RAG SPLIT MIGRATION
+--
+-- 一次性把"原本走 RAG 管线的历史数据"从共享旧表搬到 rag_* 表，同时保留
+-- chunk 管线的数据原地不动。判定规则（按用户决策 #3）：
+--   - 任何被 rule_checks 引用的规则 → 视为 RAG 数据
+--   - 该规则所在的整个规则库（含其它无 checks 的规则）连同其用户分配 →
+--     一并迁到 rag_* 侧，保持库的语义完整
+--   - 任何映射到 RAG 库的场景及其全部映射库 → 迁到 rag_* 侧
+--   - review_tasks 中 ai_result->>'reviewMode' = 'rag' 的任务及其衍生数据
+--     (audit_logs / document_blocks / pipelines / findings / ai_call_logs)
+--     → 迁到 rag_* 侧；其余历史任务默认归 CHUNK（决策 #8）
+--
+-- 幂等性：用 `rag_rule_libraries 是否已有数据`作为哨兵；已迁过就直接 RETURN。
+-- =========================================================================
+
+DO $rag_migration$
+DECLARE
+    v_rag_library_ids BIGINT[] := ARRAY[]::BIGINT[];
+    v_rag_scenario_ids BIGINT[] := ARRAY[]::BIGINT[];
+    v_rag_task_ids TEXT[] := ARRAY[]::TEXT[];
+BEGIN
+    -- 哨兵：rag_rule_libraries 非空说明已经迁过（或用户已主动建过 RAG 库），跳过。
+    IF EXISTS (SELECT 1 FROM rag_rule_libraries LIMIT 1) THEN
+        RAISE NOTICE 'RAG split migration: rag_rule_libraries already populated, skipping';
+        RETURN;
+    END IF;
+    -- 没有 rule_checks 也就没有 RAG 历史数据，无需迁移。
+    IF NOT EXISTS (SELECT 1 FROM rule_checks LIMIT 1)
+       AND NOT EXISTS (SELECT 1 FROM review_tasks WHERE ai_result->>'reviewMode' = 'rag') THEN
+        RAISE NOTICE 'RAG split migration: no rule_checks and no rag tasks, nothing to migrate';
+        RETURN;
+    END IF;
+
+    RAISE NOTICE 'RAG split migration: starting';
+
+    -- 1) 库级 RAG 候选：任何包含 rule_checks 的规则所在的库
+    SELECT COALESCE(ARRAY_AGG(DISTINCT r.library_id) FILTER (WHERE r.library_id IS NOT NULL),
+                     ARRAY[]::BIGINT[])
+    INTO v_rag_library_ids
+    FROM rules r
+    WHERE EXISTS (SELECT 1 FROM rule_checks rc WHERE rc.rule_id = r.id);
+
+    -- 2) 场景级 RAG 候选：映射到任意 RAG 库的场景
+    SELECT COALESCE(ARRAY_AGG(DISTINCT scenario_id), ARRAY[]::BIGINT[])
+    INTO v_rag_scenario_ids
+    FROM scenario_library_mapping
+    WHERE library_id = ANY(v_rag_library_ids);
+
+    -- 3) 把这些场景关联到的其它库也并入 RAG（哪怕没 checks 也要迁，保住场景完整性）
+    v_rag_library_ids := ARRAY(
+        SELECT DISTINCT lib_id FROM (
+            SELECT unnest(v_rag_library_ids) AS lib_id
+            UNION
+            SELECT library_id AS lib_id FROM scenario_library_mapping
+            WHERE scenario_id = ANY(v_rag_scenario_ids)
+        ) merged
+    );
+
+    -- 4) RAG 历史任务：ai_result.reviewMode = 'rag'
+    SELECT COALESCE(ARRAY_AGG(id), ARRAY[]::TEXT[])
+    INTO v_rag_task_ids
+    FROM review_tasks
+    WHERE ai_result->>'reviewMode' = 'rag';
+
+    -- 4.1) 兜底：RAG 历史任务引用的 scenario_id 一并并入 RAG 场景集合
+    --      （防御性：避免规则的 checks 后来被删导致库级判定漏掉这些场景）
+    v_rag_scenario_ids := ARRAY(
+        SELECT DISTINCT sid FROM (
+            SELECT unnest(v_rag_scenario_ids) AS sid
+            UNION
+            SELECT scenario_id FROM review_tasks
+            WHERE id = ANY(v_rag_task_ids) AND scenario_id IS NOT NULL
+        ) merged
+    );
+
+    -- 4.2) 兜底：扩展进来的场景关联的库一并并入 RAG 库集合
+    v_rag_library_ids := ARRAY(
+        SELECT DISTINCT lib_id FROM (
+            SELECT unnest(v_rag_library_ids) AS lib_id
+            UNION
+            SELECT library_id FROM scenario_library_mapping
+            WHERE scenario_id = ANY(v_rag_scenario_ids)
+        ) merged
+    );
+
+    RAISE NOTICE 'RAG split migration: % libraries, % scenarios, % tasks to migrate',
+        COALESCE(array_length(v_rag_library_ids, 1), 0),
+        COALESCE(array_length(v_rag_scenario_ids, 1), 0),
+        COALESCE(array_length(v_rag_task_ids, 1), 0);
+
+    -- 5) 复制 libraries / rules / rule_checks / rule_check_examples（保留 id 以维持外键）
+    INSERT INTO rag_rule_libraries (id, name, description, creator_id, created_at, updated_at)
+    SELECT id, name, description, creator_id, created_at, updated_at
+    FROM rule_libraries
+    WHERE id = ANY(v_rag_library_ids);
+
+    INSERT INTO rag_rules (id, rule_name, file_type, content, creator_id, library_id,
+                           updated_at, is_valid, rule_code, rule_type, document_type,
+                           sections, keywords, description, source_file)
+    SELECT id, rule_name, file_type, content, creator_id, library_id,
+           updated_at, is_valid, rule_code, rule_type, document_type,
+           sections, keywords, description, source_file
+    FROM rules
+    WHERE library_id = ANY(v_rag_library_ids)
+       -- 兼容 orphan：rule 没归库但带 rule_checks 也属 RAG 候选
+       OR (library_id IS NULL
+           AND EXISTS (SELECT 1 FROM rule_checks rc WHERE rc.rule_id = rules.id));
+
+    INSERT INTO rag_rule_checks (id, rule_id, check_code, check_type, question, pass_criteria,
+                                  category, evidence_required, display_order, is_active,
+                                  created_at, updated_at)
+    SELECT rc.id, rc.rule_id, rc.check_code, rc.check_type, rc.question, rc.pass_criteria,
+           rc.category, rc.evidence_required, rc.display_order, rc.is_active,
+           rc.created_at, rc.updated_at
+    FROM rule_checks rc
+    WHERE EXISTS (SELECT 1 FROM rag_rules rr WHERE rr.id = rc.rule_id);
+
+    INSERT INTO rag_rule_check_examples (id, check_id, polarity, example_text, explanation,
+                                          display_order, created_at)
+    SELECT rce.id, rce.check_id, rce.polarity, rce.example_text, rce.explanation,
+           rce.display_order, rce.created_at
+    FROM rule_check_examples rce
+    WHERE EXISTS (SELECT 1 FROM rag_rule_checks rrc WHERE rrc.id = rce.check_id);
+
+    -- 6) 复制 scenarios + 两类 mapping + user_library_assignment
+    INSERT INTO rag_scenarios (id, name, description, creator_id)
+    SELECT id, name, description, creator_id
+    FROM scenarios
+    WHERE id = ANY(v_rag_scenario_ids);
+
+    INSERT INTO rag_scenario_library_mapping (scenario_id, library_id)
+    SELECT scenario_id, library_id
+    FROM scenario_library_mapping
+    WHERE scenario_id = ANY(v_rag_scenario_ids);
+
+    INSERT INTO rag_scenario_rule_mapping (scenario_id, rule_id)
+    SELECT scenario_id, rule_id
+    FROM scenario_rule_mapping
+    WHERE scenario_id = ANY(v_rag_scenario_ids);
+
+    INSERT INTO rag_user_library_assignment (user_id, library_id)
+    SELECT DISTINCT user_id, library_id
+    FROM user_library_assignment
+    WHERE library_id = ANY(v_rag_library_ids);
+
+    -- 7) 复制 review_tasks 及其衍生数据
+    INSERT INTO rag_review_tasks (id, user_id, file_name, file_path, scenario_id,
+                                   selected_model, status, ai_result, created_at,
+                                   updated_at, fail_reason)
+    SELECT id, user_id, file_name, file_path, scenario_id,
+           selected_model, status, ai_result, created_at,
+           updated_at, fail_reason
+    FROM review_tasks
+    WHERE id = ANY(v_rag_task_ids);
+
+    INSERT INTO rag_review_audit_logs (id, task_id, user_id, action, target_type, target_id,
+                                        before_value, after_value, comment, created_at)
+    SELECT id, task_id, user_id, action, target_type, target_id,
+           before_value, after_value, comment, created_at
+    FROM review_audit_logs
+    WHERE task_id = ANY(v_rag_task_ids);
+
+    INSERT INTO rag_document_blocks (id, task_id, block_id, block_type, chapter_index,
+                                      block_index, section_path, text_content, text_hash,
+                                      embedding_model, embedding, embedding_dimension, created_at)
+    SELECT id, task_id, block_id, block_type, chapter_index,
+           block_index, section_path, text_content, text_hash,
+           embedding_model, embedding, embedding_dimension, created_at
+    FROM document_blocks
+    WHERE task_id = ANY(v_rag_task_ids);
+
+    INSERT INTO rag_review_pipelines (id, task_id, total_chunks, total_rule_invocations,
+                                       executed_invocations, inconclusive_invocations,
+                                       stage1_findings, stage2_confirmed, stage2_rejected,
+                                       status, started_at, finished_at, created_at)
+    SELECT id, task_id, total_chunks, total_rule_invocations,
+           executed_invocations, inconclusive_invocations,
+           stage1_findings, stage2_confirmed, stage2_rejected,
+           status, started_at, finished_at, created_at
+    FROM review_pipelines
+    WHERE task_id = ANY(v_rag_task_ids);
+
+    INSERT INTO rag_review_findings (id, pipeline_id, chunk_index, chunk_label, rule_id, rule_code,
+                                      check_id, check_code, category, description, suggestion,
+                                      evidence_span, normalized_span, occurrences, stage1_confidence,
+                                      stage2_status, stage2_reason, created_at)
+    SELECT rf.id, rf.pipeline_id, rf.chunk_index, rf.chunk_label, rf.rule_id, rf.rule_code,
+           rf.check_id, rf.check_code, rf.category, rf.description, rf.suggestion,
+           rf.evidence_span, rf.normalized_span, rf.occurrences, rf.stage1_confidence,
+           rf.stage2_status, rf.stage2_reason, rf.created_at
+    FROM review_findings rf
+    WHERE EXISTS (SELECT 1 FROM rag_review_pipelines rrp WHERE rrp.id = rf.pipeline_id);
+
+    INSERT INTO rag_ai_call_logs (id, pipeline_id, stage, chunk_index, rule_id, check_id,
+                                   model_key, attempt, request_body, response_body, parsed_output,
+                                   schema_valid, http_status, duration_ms, error_message, created_at)
+    SELECT acl.id, acl.pipeline_id, acl.stage, acl.chunk_index, acl.rule_id, acl.check_id,
+           acl.model_key, acl.attempt, acl.request_body, acl.response_body, acl.parsed_output,
+           acl.schema_valid, acl.http_status, acl.duration_ms, acl.error_message, acl.created_at
+    FROM ai_call_logs acl
+    WHERE EXISTS (SELECT 1 FROM rag_review_pipelines rrp WHERE rrp.id = acl.pipeline_id);
+
+    -- 8) 推进 rag_* 序列到 max(id)+1，避免之后插入新行时主键冲突
+    PERFORM setval('rag_rule_libraries_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_rule_libraries), false);
+    PERFORM setval('rag_rules_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_rules), false);
+    PERFORM setval('rag_rule_checks_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_rule_checks), false);
+    PERFORM setval('rag_rule_check_examples_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_rule_check_examples), false);
+    PERFORM setval('rag_scenarios_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_scenarios), false);
+    PERFORM setval('rag_review_audit_logs_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_review_audit_logs), false);
+    PERFORM setval('rag_document_blocks_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_document_blocks), false);
+    PERFORM setval('rag_review_pipelines_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_review_pipelines), false);
+    PERFORM setval('rag_review_findings_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_review_findings), false);
+    PERFORM setval('rag_ai_call_logs_id_seq',
+        (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_ai_call_logs), false);
+
+    -- 9) 从原表删除已搬走的数据。利用 ON DELETE CASCADE：
+    --    DELETE FROM scenarios 自动级联 scenario_*_mapping
+    --    DELETE FROM rules     自动级联 rule_checks → rule_check_examples
+    --    DELETE FROM rule_libraries 自动级联 rules → rule_checks → examples
+    --    DELETE FROM review_tasks 自动级联 audit_logs / document_blocks / pipelines → findings / ai_call_logs
+    DELETE FROM scenarios WHERE id = ANY(v_rag_scenario_ids);
+    DELETE FROM user_library_assignment WHERE library_id = ANY(v_rag_library_ids);
+    DELETE FROM rule_libraries WHERE id = ANY(v_rag_library_ids);
+    -- orphan 规则（已在 step 5 一并迁到 rag_rules）也要清出 chunk 侧
+    DELETE FROM rules
+    WHERE library_id IS NULL
+      AND EXISTS (SELECT 1 FROM rag_rules rr WHERE rr.id = rules.id);
+    DELETE FROM review_tasks WHERE id = ANY(v_rag_task_ids);
+
+    -- 安全清场：chunk 侧设计上不再持有任何 rule_checks / RAG 衍生数据。
+    -- 若 FK 级联未生效（极少数情况），用显式 DELETE 兜底，保证收敛状态干净。
+    DELETE FROM rule_checks;
+    DELETE FROM rule_check_examples;
+    DELETE FROM review_pipelines;
+    DELETE FROM review_findings;
+    DELETE FROM ai_call_logs;
+    DELETE FROM document_blocks;
+
+    RAISE NOTICE 'RAG split migration: completed';
+END $rag_migration$;
+
 -- Seed supervisor account (password: admin_root)
 INSERT INTO users (email, password_hash, name, role)
 VALUES ('admin_root', '$2a$10$ETZlQAgiNM5jbwyBXaG5tOcbZjq8g7Fl7DceMfUmajyOI0/4ASDB.', '项目主管', 'supervisor')

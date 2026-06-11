@@ -27,12 +27,18 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 把 QTP 评估检查单 (Excel) 转成规范化的多原子检查 JSON，并写入 RAG 侧规则表。
+ *
+ * 之所以归 RAG：检查单的产物是 {@code rule_checks}（原子检查项），这是 RAG 管线的核心
+ * 输入。chunk 管线不需要原子 check，所以 chunk 侧没有检查单导入功能。
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ChecklistRuleImportService {
 
-    private final RuleService ruleService;
+    private final RagRuleService ragRuleService;
     private final DataFormatter formatter = new DataFormatter();
 
     public ChecklistImportResultDTO importQtpChecklist(MultipartFile file, Long creatorId, Long libraryId) throws Exception {
@@ -55,7 +61,7 @@ public class ChecklistRuleImportService {
         String canonicalJson = JSON.toJSONString(pack,
                 JSONWriter.Feature.PrettyFormat, JSONWriter.Feature.WriteMapNullValue);
         String generatedName = stripExtension(originalFilename) + ".rules.json";
-        List<RuleDTO> imported = ruleService.importRuleContent(
+        List<RuleDTO> imported = ragRuleService.importRuleContent(
                 generatedName, canonicalJson, creatorId, libraryId, true);
 
         ChecklistImportResultDTO dto = new ChecklistImportResultDTO();

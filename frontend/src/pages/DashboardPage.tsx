@@ -10,10 +10,12 @@ import {
   Space,
   Statistic,
   Select,
+  Tabs,
   Typography,
   Modal,
   Form,
   Progress,
+  Alert,
   message,
   Popconfirm,
 } from 'antd';
@@ -26,16 +28,36 @@ import {
   StopOutlined,
   RedoOutlined,
   DeleteOutlined,
+  DeploymentUnitOutlined,
+  BookOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getReviewList, getReviewStats, submitReview, cancelReview, reReview, deleteReview, ReviewTask } from '../api/reviews';
-import { getScenarioList, Scenario } from '../api/scenarios';
+import type { ReviewTask, ReviewMode } from '../api/reviews';
+import type { Scenario } from '../api/scenarios';
 import { getEnabledModels, AIModel } from '../api/models';
+import {
+  getReviewApi, getScenarioApi, getUnifiedReviewList, getUnifiedReviewStats,
+  PIPELINE_LABEL, PIPELINE_COLOR, type UnifiedStats,
+} from '../api/pipelineApi';
 import { STATUS_LABELS, STATUS_COLORS, PAGE_SIZE } from '../utils/constants';
 import FileUploader from '../components/FileUploader';
 import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
 
 const { Title, Text } = Typography;
+
+type ModeFilter = 'ALL' | ReviewMode;
+
+const EMPTY_STATS: UnifiedStats = {
+  total: 0,
+  completed: 0,
+  processing: 0,
+  failed: 0,
+  todayCount: 0,
+  byMode: {
+    CHUNK: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
+    RAG: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
+  },
+};
 
 function DashboardPage() {
   const navigate = useNavigate();
@@ -44,16 +66,13 @@ function DashboardPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
-  const [stats, setStats] = useState({
-    total: 0,
-    completed: 0,
-    processing: 0,
-    failed: 0,
-    todayCount: 0,
-  });
+  const [modeFilter, setModeFilter] = useState<ModeFilter>('ALL');
+  const [stats, setStats] = useState<UnifiedStats>(EMPTY_STATS);
 
   // Review creation modal state
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  // 决策 #8：无默认管线，强制用户在 Tab 切换器上手动选择。
+  const [draftMode, setDraftMode] = useState<ReviewMode | undefined>();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -61,6 +80,7 @@ function DashboardPage() {
   const [scenarioId, setScenarioId] = useState<number | undefined>();
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
+  const [embeddingModelCount, setEmbeddingModelCount] = useState<number | null>(null);
 
   // Track if there are truly active processing tasks (for spinner)
   const [hasActiveProcessing, setHasActiveProcessing] = useState(false);
@@ -73,7 +93,12 @@ function DashboardPage() {
   const fetchTasks = async () => {
     setLoading(true);
     try {
-      const res = await getReviewList({ page, pageSize: PAGE_SIZE, status: statusFilter });
+      const res = await getUnifiedReviewList({
+        page,
+        pageSize: PAGE_SIZE,
+        mode: modeFilter === 'ALL' ? 'ALL' : modeFilter,
+        status: statusFilter,
+      });
       const data = res.data.data;
       setTasks(data.records || []);
       setTotal(data.total);
@@ -86,7 +111,7 @@ function DashboardPage() {
 
   const fetchStats = async () => {
     try {
-      const res = await getReviewStats();
+      const res = await getUnifiedReviewStats();
       const s = res.data.data;
       setStats(s);
       setHasActiveProcessing(s.processing > 0);
@@ -128,31 +153,56 @@ function DashboardPage() {
 
   useEffect(() => {
     fetchTasks();
-  }, [page, statusFilter]);
+  }, [page, statusFilter, modeFilter]);
 
-  // Load scenarios + models when modal opens
+  // When the user switches the Tab in the create-review modal, reload the scenario
+  // list from that pipeline (CHUNK or RAG) and the chat-model list (shared, but we
+  // re-fetch alongside so the dropdown stays in sync). For RAG we also check that
+  // at least one embedding model is enabled — RAG can't run without one.
   useEffect(() => {
-    if (reviewModalOpen) {
-      const fetchData = async () => {
-        try {
-          const [scenRes, modelRes] = await Promise.all([
-            getScenarioList({ page: 1, pageSize: 1000 }),
-            getEnabledModels(),
-          ]);
-          setScenarios(scenRes.data.data.records);
-          setModels(modelRes.data.data);
-        } catch {
-          // handled
-        }
-      };
-      fetchData();
+    if (!reviewModalOpen || !draftMode) {
+      setScenarios([]);
+      setModels([]);
+      setScenarioId(undefined);
+      setSelectedModel(undefined);
+      setEmbeddingModelCount(null);
+      return;
     }
-  }, [reviewModalOpen]);
+    const fetchData = async () => {
+      try {
+        const scenarioApi = getScenarioApi(draftMode);
+        const fetches: Promise<unknown>[] = [
+          scenarioApi.getScenarioList({ page: 1, pageSize: 1000 }),
+          getEnabledModels('chat'),
+        ];
+        if (draftMode === 'RAG') {
+          fetches.push(getEnabledModels('embedding'));
+        }
+        const results = await Promise.all(fetches);
+        const scenRes = results[0] as Awaited<ReturnType<typeof scenarioApi.getScenarioList>>;
+        const modelRes = results[1] as Awaited<ReturnType<typeof getEnabledModels>>;
+        setScenarios(scenRes.data.data.records);
+        setModels(modelRes.data.data);
+        if (draftMode === 'RAG') {
+          const embedRes = results[2] as Awaited<ReturnType<typeof getEnabledModels>>;
+          setEmbeddingModelCount(embedRes.data.data.length);
+        }
+      } catch {
+        // handled
+      }
+    };
+    fetchData();
+  }, [reviewModalOpen, draftMode]);
 
   const handleSubmit = async () => {
+    if (!draftMode) { message.warning('请选择审查方式'); return; }
     if (!selectedFile) { message.warning('请先上传文件'); return; }
     if (!scenarioId) { message.warning('请选择审查场景'); return; }
     if (!selectedModel) { message.warning('请选择 AI 模型'); return; }
+    if (draftMode === 'RAG' && embeddingModelCount === 0) {
+      message.error('RAG 审查需要至少启用一个 embedding 模型，请先到「模型管理」配置');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -160,12 +210,10 @@ function DashboardPage() {
       formData.append('file', selectedFile);
       formData.append('scenarioId', String(scenarioId));
       formData.append('selectedModel', selectedModel);
-      await submitReview(formData);
-      message.success('审查任务已提交');
+      const reviewApi = getReviewApi(draftMode);
+      await reviewApi.submitReview(formData);
+      message.success(`审查任务已提交（${PIPELINE_LABEL[draftMode]}）`);
     } catch {
-      // The interceptor already surfaced the error. Even on failure (e.g. client-side
-      // timeout) the task may have been created server-side, so refresh the list and
-      // close the modal — leaving it stuck open is worse than closing it eagerly.
       setSubmitting(false);
       setReviewModalOpen(false);
       resetReviewModal();
@@ -174,57 +222,51 @@ function DashboardPage() {
       return;
     }
 
-    // Close modal & reset state IMMEDIATELY on success — must happen before any
-    // further async work so that nothing can throw and leave the modal open.
     setSubmitting(false);
     setReviewModalOpen(false);
     resetReviewModal();
-
-    // The global WS handler above already streams per-task progress into
-    // taskProgress, which the status column renders inline. No per-modal
-    // subscription is needed — the modal closes on submit anyway.
     fetchTasks();
     fetchStats();
   };
 
-  const handleCancel = async (tid: string) => {
+  /** Pick the right pipeline client based on a task's reviewMode (defaulting to CHUNK
+   *  for legacy tasks that pre-date the field — those all belong to chunk side). */
+  const apiForTask = (task: ReviewTask) => getReviewApi(task.reviewMode ?? 'CHUNK');
+
+  const handleCancel = async (task: ReviewTask) => {
     try {
-      await cancelReview(tid);
+      await apiForTask(task).cancelReview(task.id);
       message.success('任务已取消');
       fetchTasks();
       fetchStats();
-    } catch {
-      // handled
-    }
+    } catch { /* handled */ }
   };
 
-  const handleReReview = async (tid: string) => {
+  const handleReReview = async (task: ReviewTask) => {
     try {
-      await reReview(tid);
+      await apiForTask(task).reReview(task.id);
       message.success('重新审查任务已提交');
       await fetchTasks();
       fetchStats();
-    } catch {
-      // handled by interceptor
-    }
+    } catch { /* handled */ }
   };
 
-  const handleDelete = async (tid: string) => {
+  const handleDelete = async (task: ReviewTask) => {
     try {
-      await deleteReview(tid);
+      await apiForTask(task).deleteReview(task.id);
       message.success('任务已删除');
       fetchTasks();
       fetchStats();
-    } catch {
-      // handled
-    }
+    } catch { /* handled */ }
   };
 
   const resetReviewModal = () => {
+    setDraftMode(undefined);
     setCurrentStep(0);
     setSelectedFile(null);
     setScenarioId(undefined);
     setSelectedModel(undefined);
+    setEmbeddingModelCount(null);
   };
 
   const columns: ColumnsType<ReviewTask> = [
@@ -234,6 +276,18 @@ function DashboardPage() {
       key: 'fileName',
       ellipsis: true,
       width: 200,
+    },
+    {
+      title: '审查方式',
+      dataIndex: 'reviewMode',
+      key: 'reviewMode',
+      width: 120,
+      render: (mode: ReviewMode | undefined) => {
+        // 没有 reviewMode 的历史任务统一显示为 CHUNK（迁移脚本会按 ai_result.reviewMode
+        // 推断填入；推断不出来的就是 chunk）。
+        const m = mode ?? 'CHUNK';
+        return <Tag color={PIPELINE_COLOR[m]}>{PIPELINE_LABEL[m]}</Tag>;
+      },
     },
     {
       title: 'AI 模型',
@@ -300,7 +354,7 @@ function DashboardPage() {
             {(s === 'COMPLETED' || s === 'FAILED' || s === 'CANCELLED') && (
               <Popconfirm
                 title="确定要重新审查此任务吗？"
-                onConfirm={() => { handleReReview(record.id); }}
+                onConfirm={() => { handleReReview(record); }}
                 okText="确定"
                 cancelText="取消"
               >
@@ -312,7 +366,7 @@ function DashboardPage() {
             {(s === 'PENDING' || s === 'PROCESSING') && (
               <Popconfirm
                 title="确定要取消此审查任务吗？"
-                onConfirm={() => { handleCancel(record.id); }}
+                onConfirm={() => { handleCancel(record); }}
                 okText="确定"
                 cancelText="取消"
               >
@@ -324,7 +378,7 @@ function DashboardPage() {
             {s !== 'PROCESSING' && (
               <Popconfirm
                 title="确定要删除此任务吗？删除后不可恢复。"
-                onConfirm={() => { handleDelete(record.id); }}
+                onConfirm={() => { handleDelete(record); }}
                 okText="确定"
                 cancelText="取消"
               >
@@ -396,6 +450,16 @@ function DashboardPage() {
           <Title level={5} style={{ margin: 0 }}>审查任务列表</Title>
           <Space>
             <Select
+              style={{ width: 160 }}
+              value={modeFilter}
+              onChange={(v) => { setModeFilter(v); setPage(1); }}
+              options={[
+                { label: '全部审查方式', value: 'ALL' },
+                { label: '智能召回审查', value: 'RAG' },
+                { label: '全文逐章审查', value: 'CHUNK' },
+              ]}
+            />
+            <Select
               placeholder="状态筛选"
               allowClear
               style={{ width: 140 }}
@@ -429,20 +493,32 @@ function DashboardPage() {
       </Card>
 
       <Row gutter={16} style={{ marginTop: 16 }}>
-        <Col xs={24}>
+        <Col xs={12}>
           <Card
             hoverable
-            onClick={() => navigate('/rules')}
+            onClick={() => navigate('/rag/rules')}
             style={{ textAlign: 'center', cursor: 'pointer' }}
           >
-            <FileTextOutlined style={{ fontSize: 32, color: '#1677ff', marginBottom: 8 }} />
-            <div style={{ fontWeight: 500 }}>管理规则与场景</div>
-            <div style={{ color: '#8c8c8c', fontSize: 13 }}>上传规则文件、创建和配置审查场景</div>
+            <DeploymentUnitOutlined style={{ fontSize: 32, color: '#722ed1', marginBottom: 8 }} />
+            <div style={{ fontWeight: 500 }}>智能召回审查 · 规则与场景</div>
+            <div style={{ color: '#8c8c8c', fontSize: 13 }}>原子检查项 + 向量召回管线</div>
+          </Card>
+        </Col>
+        <Col xs={12}>
+          <Card
+            hoverable
+            onClick={() => navigate('/chunk/rules')}
+            style={{ textAlign: 'center', cursor: 'pointer' }}
+          >
+            <BookOutlined style={{ fontSize: 32, color: '#1677ff', marginBottom: 8 }} />
+            <div style={{ fontWeight: 500 }}>全文逐章审查 · 规则与场景</div>
+            <div style={{ color: '#8c8c8c', fontSize: 13 }}>按章节切片 + 批处理审查管线</div>
           </Card>
         </Col>
       </Row>
 
-      {/* New Review Modal */}
+      {/* New Review Modal — top Tabs select pipeline; content below mirrors the
+          previous 2-step flow (file → scenario+model) but is gated on a Tab choice. */}
       <Modal
         title="新建文件审查"
         open={reviewModalOpen}
@@ -452,10 +528,48 @@ function DashboardPage() {
         }}
         footer={null}
         destroyOnClose
-        width={640}
+        width={680}
       >
+        <Tabs
+          activeKey={draftMode ?? ''}
+          onChange={(key) => {
+            setDraftMode(key as ReviewMode);
+            // 切换 Tab 时把已经填的场景/模型清空，避免选了另一个管线的项后串库。
+            setScenarioId(undefined);
+            setSelectedModel(undefined);
+            setCurrentStep(0);
+          }}
+          items={[
+            {
+              key: 'RAG',
+              label: <span><DeploymentUnitOutlined /> 智能召回审查</span>,
+            },
+            {
+              key: 'CHUNK',
+              label: <span><BookOutlined /> 全文逐章审查</span>,
+            },
+          ]}
+        />
+        {!draftMode && (
+          <Alert
+            type="info"
+            showIcon
+            message="请先在上方选择审查方式"
+            description="智能召回审查（向量检索 + 原子检查）和 全文逐章审查（按章节切片 + 批处理）使用不同的规则库与场景，互不可见。"
+          />
+        )}
 
-        {currentStep === 0 && (
+        {draftMode && draftMode === 'RAG' && embeddingModelCount === 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="尚未启用 embedding 模型"
+            description="智能召回审查需要至少一个启用的 embedding 模型；请到「模型管理」配置。reranker 模型可选，若未配置则按召回分数顺序使用。"
+          />
+        )}
+
+        {draftMode && currentStep === 0 && (
           <div>
             <FileUploader onFileSelect={(file) => setSelectedFile(file)} />
             {selectedFile && (
@@ -478,12 +592,15 @@ function DashboardPage() {
           </div>
         )}
 
-        {currentStep === 1 && (
+        {draftMode && currentStep === 1 && (
           <div>
             <Form layout="vertical">
-              <Form.Item label="审查场景" required>
+              <Form.Item
+                label={`审查场景（${PIPELINE_LABEL[draftMode]}）`}
+                required
+              >
                 <Select
-                  placeholder="请选择审查场景"
+                  placeholder={`请选择${PIPELINE_LABEL[draftMode]}场景`}
                   value={scenarioId}
                   onChange={setScenarioId}
                   options={scenarios.map((s) => ({
@@ -496,9 +613,9 @@ function DashboardPage() {
                   }
                 />
               </Form.Item>
-              <Form.Item label="AI 模型" required>
+              <Form.Item label="AI 对话模型" required>
                 <Select
-                  placeholder="请选择 AI 模型"
+                  placeholder="请选择 chat 模型"
                   value={selectedModel}
                   onChange={setSelectedModel}
                   options={models.map((m) => ({

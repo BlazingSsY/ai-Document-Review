@@ -55,13 +55,14 @@ public class UserManagementController {
 
     @PostMapping("/{id}/libraries")
     public ApiResponse<Void> assignLibraries(@PathVariable Long id,
+                                              @RequestParam(defaultValue = "CHUNK") String mode,
                                               @RequestBody Map<String, List<Long>> body) {
         try {
             List<Long> libraryIds = body.get("libraryIds");
             if (libraryIds == null) {
                 return ApiResponse.badRequest("规则库ID列表不能为空");
             }
-            userService.assignLibrariesToUser(id, libraryIds);
+            userService.assignLibrariesByMode(id, libraryIds, mode);
             return ApiResponse.success("规则库分配成功", null);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
@@ -106,9 +107,10 @@ public class UserManagementController {
     }
 
     @GetMapping("/{id}/libraries")
-    public ApiResponse<List<Long>> getUserLibraries(@PathVariable Long id) {
+    public ApiResponse<List<Long>> getUserLibraries(@PathVariable Long id,
+                                                    @RequestParam(defaultValue = "CHUNK") String mode) {
         try {
-            List<Long> libraryIds = userService.getAssignedLibraryIds(id);
+            List<Long> libraryIds = userService.getAssignedLibraryIdsByMode(id, mode);
             return ApiResponse.success(libraryIds);
         } catch (Exception e) {
             log.error("Failed to get user libraries", e);
