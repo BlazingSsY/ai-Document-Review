@@ -17,6 +17,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +32,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Service
@@ -43,6 +48,10 @@ public class RagReviewService {
     private final AiModelService aiModelService;
     private final WebSocketService webSocketService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired
+    @Qualifier("ragCheckExecutor")
+    private Executor ragCheckExecutor;
 
     @Value("${review.rag.block-max-chars:1800}")
     private int blockMaxChars;
@@ -65,10 +74,20 @@ public class RagReviewService {
     @Value("${review.rag.vector-index.binary-candidate-multiplier:4}")
     private int binaryCandidateMultiplier;
 
-    public void executeReview(ReviewTask task, String runStamp) throws Exception {
+    @Value("${review.rag.failed-check-retry-attempts:1}")
+    private int failedCheckRetryAttempts;
+
+    @Value("${review.rag.check-concurrency:4}")
+    private int checkConcurrency;
+
+    /**
+     * Parses and vectorizes the uploaded document before any checklist item is sent
+     * to the chat model. This makes document preparation an explicit pipeline stage.
+     */
+    public PreparedDocument prepareDocumentVectors(ReviewTask task) throws Exception {
         String taskId = task.getId();
         webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                "RAG: parsing source document...", 8);
+                "RAG: 正在解析上传文档...", 8);
 
         List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
         if (rawChapters.isEmpty() || rawChapters.stream().allMatch(ch -> ch.getContent().isBlank())) {
@@ -79,20 +98,21 @@ public class RagReviewService {
                 ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
                 : rawChapters;
 
-        AiModelConfig chatModel = aiModelService.getEnabledModel(task.getSelectedModel());
         AiModelConfig embeddingModel = aiModelService.getFirstEnabledModelByType(AiModelService.MODEL_TYPE_EMBEDDING);
         if (embeddingModel == null) {
             throw new IllegalStateException("RAG review requires an enabled embedding model");
         }
-        AiModelConfig rerankerModel = aiModelService.getFirstEnabledModelByType(AiModelService.MODEL_TYPE_RERANKER);
 
         webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                "RAG: building original document blocks...", 15);
+                "RAG: 正在构建原文分块...", 15);
         List<DocumentBlock> blocks = buildBlocks(taskId, chapters);
+        if (blocks.isEmpty()) {
+            throw new IllegalStateException("No source blocks were produced from the uploaded document");
+        }
         documentVectorRepository.deleteByTaskId(taskId);
 
         webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                "RAG: embedding " + blocks.size() + " source block(s)...", 25);
+                "RAG: 正在向量化 " + blocks.size() + " 个原文分块...", 25);
         embedBlocks(blocks, embeddingModel);
         documentVectorRepository.saveAll(blocks);
         int embeddingDimension = blocks.get(0).getEmbeddingDimension();
@@ -100,37 +120,85 @@ public class RagReviewService {
                 ? documentVectorRepository.ensureHnswIndex(embeddingModel.getModelName(), embeddingDimension)
                 : "exact";
         webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                "RAG: pgvector " + vectorIndexStrategy + " retrieval ready (dimension "
-                        + embeddingDimension + ")", 34);
+                "RAG: 文档向量化完成，pgvector " + vectorIndexStrategy
+                        + " 索引已就绪（维度 " + embeddingDimension + "）", 34);
+
+        return new PreparedDocument(List.copyOf(blocks), embeddingModel,
+                embeddingDimension, vectorIndexStrategy);
+    }
+
+    public void executeReview(ReviewTask task, String runStamp) throws Exception {
+        executeReview(task, runStamp, prepareDocumentVectors(task));
+    }
+
+    public void executeReview(ReviewTask task, String runStamp,
+                              PreparedDocument preparedDocument) throws Exception {
+        String taskId = task.getId();
+        AiModelConfig chatModel = aiModelService.getEnabledModel(task.getSelectedModel());
+        AiModelConfig embeddingModel = preparedDocument.embeddingModel();
+        AiModelConfig rerankerModel =
+                aiModelService.getFirstEnabledModelByType(AiModelService.MODEL_TYPE_RERANKER);
+        List<DocumentBlock> blocks = preparedDocument.blocks();
 
         webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                "RAG: loading checklist rules...", 38);
+                "RAG: 正在加载检查规则...", 38);
         List<CheckPlan> plans = buildCheckPlans(task.getScenarioId());
         if (plans.isEmpty()) {
             throw new RuntimeException("No active rule checks found for scenario: " + task.getScenarioId());
         }
 
+        List<IndexedPlan> indexedPlans = new ArrayList<>();
+        for (int i = 0; i < plans.size(); i++) {
+            indexedPlans.add(new IndexedPlan(i, plans.get(i)));
+        }
+
+        List<CheckAttempt> finalAttempts = new ArrayList<>(runCheckPass(
+                taskId, indexedPlans, plans.size(), chatModel, embeddingModel, rerankerModel,
+                0, "首轮审查", 40, 82));
+        int initialFailedCount = (int) finalAttempts.stream().filter(CheckAttempt::failed).count();
+        int retriedCheckCount = 0;
+
+        for (int retry = 1; retry <= Math.max(0, failedCheckRetryAttempts); retry++) {
+            List<IndexedPlan> failedPlans = finalAttempts.stream()
+                    .filter(CheckAttempt::failed)
+                    .map(attempt -> new IndexedPlan(attempt.index(), plans.get(attempt.index())))
+                    .toList();
+            if (failedPlans.isEmpty()) break;
+
+            retriedCheckCount += failedPlans.size();
+            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                    "首轮审查完成，开始补审 " + failedPlans.size() + " 个失败项"
+                            + "（第 " + retry + " 次）", 84);
+            List<CheckAttempt> retryAttempts = runCheckPass(
+                    taskId, failedPlans, plans.size(), chatModel, embeddingModel, rerankerModel,
+                    retry, "失败项补审", 84, 92);
+            for (CheckAttempt attempt : retryAttempts) {
+                finalAttempts.set(attempt.index(), attempt);
+            }
+        }
+
         List<Map<String, Object>> allCheckResults = new ArrayList<>();
         List<Map<String, Object>> chunkResults = new ArrayList<>();
         Map<String, Integer> statusCounts = new TreeMap<>();
-        int completed = 0;
+        int remainingFailedCount = 0;
         int rerankedCount = 0;
 
-        for (CheckPlan plan : plans) {
-            completed++;
-            String query = buildRetrievalQuery(plan);
-            List<ScoredBlock> recalled = recall(taskId, query, embeddingModel, recallTopK);
-            List<ScoredBlock> evidence = rerank(query, recalled, rerankerModel, rerankTopN);
-            if (rerankerModel != null && !evidence.isEmpty()) {
-                rerankedCount++;
+        for (int i = 0; i < plans.size(); i++) {
+            CheckPlan plan = plans.get(i);
+            CheckAttempt attempt = finalAttempts.get(i);
+            if (attempt.reranked()) rerankedCount++;
+            Map<String, Object> check;
+            if (attempt.failed()) {
+                remainingFailedCount++;
+                check = buildFailedCheck(plan, attempt);
+            } else {
+                check = attempt.result();
             }
-
-            Map<String, Object> check = reviewCheckWithEvidence(chatModel, plan, evidence, taskId, completed);
             allCheckResults.add(check);
             statusCounts.merge(String.valueOf(check.get("status")), 1, Integer::sum);
 
             Map<String, Object> chunkResult = new LinkedHashMap<>();
-            chunkResult.put("chunk", completed);
+            chunkResult.put("chunk", i + 1);
             chunkResult.put("chapterTitle", plan.checkQuestion());
             chunkResult.put("totalChunks", plans.size());
             chunkResult.put("sourceRefs", check.get("sourceRefs"));
@@ -142,10 +210,6 @@ public class RagReviewService {
             result.put("check_results", List.of(check));
             chunkResult.put("result", result);
             chunkResults.add(chunkResult);
-
-            int progress = 40 + (int) Math.round((double) completed / plans.size() * 50);
-            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                    "RAG: reviewed " + completed + "/" + plans.size() + " check item(s)", progress);
         }
 
         Map<String, Object> aiResult = new LinkedHashMap<>();
@@ -165,20 +229,125 @@ public class RagReviewService {
         aiResult.put("sourceTextMode", "original_word_document_blocks");
         Map<String, Object> retrievalStats = new LinkedHashMap<>();
         retrievalStats.put("engine", "pgvector");
-        retrievalStats.put("indexStrategy", vectorIndexStrategy);
-        retrievalStats.put("embeddingDimension", embeddingDimension);
+        retrievalStats.put("indexStrategy", preparedDocument.vectorIndexStrategy());
+        retrievalStats.put("embeddingDimension", preparedDocument.embeddingDimension());
         retrievalStats.put("blockCount", blocks.size());
         retrievalStats.put("checkCount", plans.size());
+        retrievalStats.put("checkConcurrency", checkConcurrency);
         retrievalStats.put("recallTopK", recallTopK);
         retrievalStats.put("rerankTopN", rerankTopN);
         retrievalStats.put("hnswEfSearch", hnswEfSearch);
         retrievalStats.put("rerankedChecks", rerankedCount);
+        retrievalStats.put("initialFailedChecks", initialFailedCount);
+        retrievalStats.put("retriedChecks", retriedCheckCount);
+        retrievalStats.put("recoveredChecks", initialFailedCount - remainingFailedCount);
+        retrievalStats.put("remainingFailedChecks", remainingFailedCount);
         aiResult.put("retrievalStats", retrievalStats);
 
         task.setAiResult(aiResult);
         updateTaskStatus(task, ReviewTask.STATUS_COMPLETED, null);
         webSocketService.sendTaskUpdate(taskId, ReviewTask.STATUS_COMPLETED,
-                "RAG review completed: " + plans.size() + " check item(s)");
+                remainingFailedCount == 0
+                        ? "RAG 审查完成：" + plans.size() + " 个检查项"
+                        : "RAG 审查完成：" + plans.size() + " 个检查项，其中 "
+                                + remainingFailedCount + " 个补审后仍需人工复核");
+    }
+
+    private List<CheckAttempt> runCheckPass(
+            String taskId,
+            List<IndexedPlan> indexedPlans,
+            int totalPlanCount,
+            AiModelConfig chatModel,
+            AiModelConfig embeddingModel,
+            AiModelConfig rerankerModel,
+            int retryNumber,
+            String phaseName,
+            int progressStart,
+            int progressEnd) {
+        if (indexedPlans.isEmpty()) return List.of();
+
+        AtomicInteger completed = new AtomicInteger();
+        List<CompletableFuture<CheckAttempt>> futures = indexedPlans.stream()
+                .map(indexed -> CompletableFuture.supplyAsync(
+                                () -> executeCheck(taskId, indexed, totalPlanCount, chatModel,
+                                        embeddingModel, rerankerModel, retryNumber),
+                                ragCheckExecutor)
+                        .whenComplete((ignored, error) -> {
+                            int done = completed.incrementAndGet();
+                            int progress = progressStart + (int) Math.round(
+                                    (double) done / indexedPlans.size() * (progressEnd - progressStart));
+                            try {
+                                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                        "RAG " + phaseName + "：" + done + "/" + indexedPlans.size(),
+                                        progress);
+                            } catch (Exception progressError) {
+                                log.debug("Failed to publish RAG check progress for task {}: {}",
+                                        taskId, progressError.getMessage());
+                            }
+                        }))
+                .toList();
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+        return futures.stream().map(CompletableFuture::join).toList();
+    }
+
+    private CheckAttempt executeCheck(
+            String taskId,
+            IndexedPlan indexed,
+            int totalPlanCount,
+            AiModelConfig chatModel,
+            AiModelConfig embeddingModel,
+            AiModelConfig rerankerModel,
+            int retryNumber) {
+        List<ScoredBlock> evidence = List.of();
+        boolean reranked = false;
+        try {
+            String query = buildRetrievalQuery(indexed.plan());
+            List<ScoredBlock> recalled = recall(taskId, query, embeddingModel, recallTopK);
+            evidence = rerank(query, recalled, rerankerModel, rerankTopN);
+            reranked = rerankerModel != null && !evidence.isEmpty();
+            int seedSequence = indexed.index() + 1 + retryNumber * totalPlanCount;
+            Map<String, Object> result = reviewCheckWithEvidence(
+                    chatModel, indexed.plan(), evidence, taskId, seedSequence);
+            return CheckAttempt.success(indexed.index(), result, reranked);
+        } catch (Exception e) {
+            log.warn("RAG check failed: task={}, check={}, retry={}, error={}",
+                    taskId, indexed.plan().checkCode(), retryNumber, rootErrorMessage(e));
+            return CheckAttempt.failure(indexed.index(), evidence, reranked, e);
+        }
+    }
+
+    private Map<String, Object> buildFailedCheck(CheckPlan plan, CheckAttempt attempt) {
+        Map<String, Object> check = new LinkedHashMap<>();
+        check.put("check_code", plan.checkCode());
+        check.put("rule_code", plan.ruleCode());
+        check.put("check_question", plan.checkQuestion());
+        check.put("status", "Review");
+        check.put("reason", "单项审查失败，自动补审后仍未成功：" + rootErrorMessage(attempt.error()));
+        check.put("evidence", "");
+        check.put("missing_items", List.of("模型审查结果"));
+        check.put("suggestion", "请检查模型服务状态后对该项执行人工复核或重新审查。");
+        check.put("confidence", "needs_review");
+        check.put("location", attempt.evidence().isEmpty()
+                ? "" : attempt.evidence().get(0).block().getSectionPath());
+        check.put("sourceTitle", attempt.evidence().isEmpty()
+                ? "" : attempt.evidence().get(0).block().getSectionPath());
+        check.put("sourceRefs", attempt.evidence().stream().map(this::toSourceRef).toList());
+        check.put("retrievalScores",
+                attempt.evidence().stream().map(this::toRetrievalScore).toList());
+        check.put("reviewError", rootErrorMessage(attempt.error()));
+        check.put("retryExhausted", true);
+        return check;
+    }
+
+    private String rootErrorMessage(Throwable error) {
+        if (error == null) return "unknown error";
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        if (message == null || message.isBlank()) message = current.getClass().getSimpleName();
+        return message.length() > 500 ? message.substring(0, 500) : message;
     }
 
     private List<DocumentBlock> buildBlocks(String taskId, List<WordParser.Chapter> chapters) {
@@ -507,6 +676,34 @@ public class RagReviewService {
 
         String ruleContent() {
             return rule != null ? rule.getContent() : "";
+        }
+    }
+
+    public record PreparedDocument(List<DocumentBlock> blocks,
+                                   AiModelConfig embeddingModel,
+                                   int embeddingDimension,
+                                   String vectorIndexStrategy) {
+    }
+
+    private record IndexedPlan(int index, CheckPlan plan) {
+    }
+
+    private record CheckAttempt(int index,
+                                Map<String, Object> result,
+                                List<ScoredBlock> evidence,
+                                boolean reranked,
+                                Exception error) {
+        static CheckAttempt success(int index, Map<String, Object> result, boolean reranked) {
+            return new CheckAttempt(index, result, List.of(), reranked, null);
+        }
+
+        static CheckAttempt failure(int index, List<ScoredBlock> evidence,
+                                    boolean reranked, Exception error) {
+            return new CheckAttempt(index, null, List.copyOf(evidence), reranked, error);
+        }
+
+        boolean failed() {
+            return error != null;
         }
     }
 

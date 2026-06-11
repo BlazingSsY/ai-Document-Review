@@ -166,10 +166,28 @@ public class RuleService {
         if (libraryId != null) {
             query.eq(Rule::getLibraryId, libraryId);
         }
+        query.select(
+                Rule::getId,
+                Rule::getRuleName,
+                Rule::getFileType,
+                Rule::getCreatorId,
+                Rule::getLibraryId,
+                Rule::getUpdatedAt,
+                Rule::getIsValid,
+                Rule::getRuleCode,
+                Rule::getRuleType,
+                Rule::getDocumentType,
+                Rule::getSections,
+                Rule::getKeywords,
+                Rule::getDescription,
+                Rule::getSourceFile);
         query.orderByDesc(Rule::getUpdatedAt);
 
         Page<Rule> result = ruleMapper.selectPage(pageParam, query);
-        List<RuleDTO> records = result.getRecords().stream().map(this::toDTO).toList();
+        // The list endpoint deliberately returns summaries only. Returning rule
+        // bodies and every atomic check here caused large payloads, N+1 queries,
+        // and long main-thread renders in the rule-library page.
+        List<RuleDTO> records = result.getRecords().stream().map(this::toSummaryDTO).toList();
 
         return PageResponse.of(records, result.getTotal(), page, size);
     }
@@ -240,7 +258,7 @@ public class RuleService {
         return s == null || s.isBlank() ? null : s.trim();
     }
 
-    private RuleDTO toDTO(Rule rule) {
+    private RuleDTO toSummaryDTO(Rule rule) {
         RuleDTO dto = new RuleDTO();
         dto.setId(rule.getId());
         dto.setRuleName(rule.getRuleName());
@@ -249,6 +267,38 @@ public class RuleService {
         dto.setLibraryId(rule.getLibraryId());
         dto.setUpdatedAt(rule.getUpdatedAt());
         dto.setIsValid(rule.getIsValid());
+        dto.setDescription(rule.getDescription());
+        dto.setSourceFile(rule.getSourceFile());
+        dto.setRuleCode(rule.getRuleCode());
+        dto.setRuleType(rule.getRuleType());
+        dto.setDocumentType(rule.getDocumentType());
+        dto.setSections(rule.getSections());
+        dto.setKeywords(rule.getKeywords());
+
+        // Keep legacy metadata visible without sending the raw content to the UI.
+        String content = rule.getContent();
+        if (content != null && !content.isBlank()) {
+            boolean anyMetaInDb = dto.getRuleCode() != null || dto.getRuleType() != null
+                    || (dto.getSections() != null && !dto.getSections().isEmpty())
+                    || (dto.getKeywords() != null && !dto.getKeywords().isEmpty());
+            if (!anyMetaInDb) {
+                RuleMetadata meta = RuleMetadata.parse(content, rule.getFileType());
+                if (dto.getRuleCode() == null) dto.setRuleCode(meta.getRuleCode());
+                if (dto.getRuleType() == null) dto.setRuleType(meta.getRuleType());
+                if (dto.getDocumentType() == null) dto.setDocumentType(meta.getDocumentType());
+                if (dto.getSections() == null && meta.getSections() != null && !meta.getSections().isEmpty()) {
+                    dto.setSections(meta.getSections());
+                }
+                if (dto.getKeywords() == null && meta.getKeywords() != null && !meta.getKeywords().isEmpty()) {
+                    dto.setKeywords(meta.getKeywords());
+                }
+            }
+        }
+        return dto;
+    }
+
+    private RuleDTO toDTO(Rule rule) {
+        RuleDTO dto = toSummaryDTO(rule);
 
         // Use DB content if present; otherwise fall back to reading the file from disk.
         // This handles rules that were uploaded before the raw-content storage fix.
@@ -267,16 +317,6 @@ public class RuleService {
             }
         }
         dto.setContent(content);
-        dto.setDescription(rule.getDescription());
-        dto.setSourceFile(rule.getSourceFile());
-
-        // Prefer DB columns (these reflect any user edits via the rule edit modal).
-        dto.setRuleCode(rule.getRuleCode());
-        dto.setRuleType(rule.getRuleType());
-        dto.setDocumentType(rule.getDocumentType());
-        dto.setSections(rule.getSections());
-        dto.setKeywords(rule.getKeywords());
-
         // Backfill from content frontmatter if DB columns are still empty (handles rules
         // uploaded before the columns existed). These backfills are NOT persisted here —
         // they only enrich the DTO so the listing UI can show something useful.

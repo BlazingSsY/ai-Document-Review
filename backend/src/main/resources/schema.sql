@@ -120,44 +120,6 @@ CREATE TABLE IF NOT EXISTS document_blocks (
 -- Rolling migration from the first RAG implementation, which stored JSON vectors
 -- in embedding_vector TEXT and calculated cosine similarity in Java.
 ALTER TABLE document_blocks ADD COLUMN IF NOT EXISTS embedding VECTOR;
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'document_blocks'
-          AND column_name = 'embedding_vector'
-    ) THEN
-        EXECUTE $migration$
-            UPDATE document_blocks
-            SET embedding = embedding_vector::vector
-            WHERE embedding IS NULL
-              AND embedding_vector IS NOT NULL
-              AND embedding_vector <> ''
-        $migration$;
-    END IF;
-END $$;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'chk_document_blocks_embedding_dimension'
-          AND conrelid = 'document_blocks'::regclass
-    ) THEN
-        ALTER TABLE document_blocks
-            ADD CONSTRAINT chk_document_blocks_embedding_dimension
-            CHECK (
-                embedding IS NULL
-                OR (
-                    embedding_dimension BETWEEN 1 AND 16000
-                    AND vector_dims(embedding) = embedding_dimension
-                )
-            );
-    END IF;
-END $$;
 
 CREATE INDEX IF NOT EXISTS idx_document_blocks_task ON document_blocks(task_id);
 CREATE INDEX IF NOT EXISTS idx_document_blocks_task_chapter ON document_blocks(task_id, chapter_index, block_index);

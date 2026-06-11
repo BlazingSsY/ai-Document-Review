@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -29,6 +30,9 @@ public class AsyncConfig {
 
     @Value("${review.parallel.chunk-concurrency}")
     private int chunkConcurrency;
+
+    @Value("${review.rag.check-concurrency:4}")
+    private int ragCheckConcurrency;
 
     @Bean(name = "reviewTaskExecutor")
     public Executor reviewTaskExecutor() {
@@ -72,6 +76,26 @@ public class AsyncConfig {
         executor.initialize();
         log.info("Chunk review thread pool initialized: core=max={}, queue=0 "
                 + "(chunkConcurrency={} × maxTasks={})", core, chunkConcurrency, maxPoolSize);
+        return executor;
+    }
+
+    /**
+     * Dedicated executor for independent RAG checklist items. Keeping this pool
+     * separate prevents slow chat-model calls from occupying upload/task threads.
+     */
+    @Bean(name = "ragCheckExecutor")
+    public TaskExecutor ragCheckExecutor() {
+        int concurrency = Math.max(1, ragCheckConcurrency);
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(concurrency);
+        executor.setMaxPoolSize(concurrency);
+        executor.setQueueCapacity(1000);
+        executor.setThreadNamePrefix("rag-check-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setAwaitTerminationSeconds(5);
+        executor.initialize();
+        log.info("RAG check thread pool initialized: core=max={}, queue=1000", concurrency);
         return executor;
     }
 }

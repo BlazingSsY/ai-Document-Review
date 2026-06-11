@@ -579,7 +579,11 @@ public class ReviewService {
 
             if (ragReviewEnabled) {
                 try {
-                    ragReviewService.executeReview(task, runStamp);
+                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                            "文档已上传，开始向量化预处理...", 6);
+                    RagReviewService.PreparedDocument preparedDocument =
+                            ragReviewService.prepareDocumentVectors(task);
+                    ragReviewService.executeReview(task, runStamp, preparedDocument);
                     return;
                 } catch (Exception ragEx) {
                     if (!ragFallbackToLegacy) {

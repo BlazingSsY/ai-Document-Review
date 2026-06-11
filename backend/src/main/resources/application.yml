@@ -80,6 +80,8 @@ review:
   rag:
     enabled: true
     fallback-to-legacy: false
+    check-concurrency: 4
+    failed-check-retry-attempts: 1
     block-max-chars: 1800
     embedding-batch-size: 24
     recall-top-k: 20

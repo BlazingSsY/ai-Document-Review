@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Space, Typography, Tag,
-  message, Popconfirm, Breadcrumb, Empty, Descriptions, Select, Tooltip,
+  message, Popconfirm, Breadcrumb, Empty, Descriptions, Select, Tooltip, Spin,
 } from 'antd';
 import {
   PlusOutlined, EyeOutlined, DeleteOutlined, FolderOutlined,
@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  getRuleList, uploadRule, importChecklist, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
+  getRuleList, getRuleDetail, uploadRule, importChecklist, updateRuleMetadata, deleteRule, Rule, RuleLibrary,
   getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
 } from '../api/rules';
 import RuleUploader from '../components/RuleUploader';
@@ -79,6 +79,8 @@ function RuleListPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewRule, setPreviewRule] = useState<Rule | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const previewRequestId = useRef(0);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadForm] = Form.useForm();
@@ -227,9 +229,28 @@ function RuleListPage() {
     finally { setSavingEdit(false); }
   };
 
-  const handlePreview = (rule: Rule) => {
+  const closePreview = () => {
+    previewRequestId.current += 1;
+    setPreviewModalOpen(false);
+    setPreviewRule(null);
+    setPreviewLoading(false);
+  };
+
+  const handlePreview = async (rule: Rule) => {
+    const requestId = ++previewRequestId.current;
     setPreviewRule(rule);
     setPreviewModalOpen(true);
+    setPreviewLoading(true);
+    try {
+      const res = await getRuleDetail(rule.id);
+      if (previewRequestId.current === requestId) {
+        setPreviewRule(res.data.data);
+      }
+    } catch {
+      if (previewRequestId.current === requestId) closePreview();
+    } finally {
+      if (previewRequestId.current === requestId) setPreviewLoading(false);
+    }
   };
 
   const handleDeleteRule = async (id: number) => {
@@ -264,14 +285,26 @@ function RuleListPage() {
   };
 
   const enterLibrary = (lib: RuleLibrary) => {
+    closePreview();
+    setUploadModalOpen(false);
+    setEditModalOpen(false);
+    setEditingRule(null);
+    setSelectedRuleIds([]);
     setCurrentLibrary(lib);
     setRulePage(1);
     setRules([]);
   };
 
   const backToLibraries = () => {
+    closePreview();
+    setUploadModalOpen(false);
+    setUploadFile(null);
+    setEditModalOpen(false);
+    setEditingRule(null);
+    setSelectedRuleIds([]);
     setCurrentLibrary(null);
     setRulePage(1);
+    setRules([]);
   };
 
   // Library list columns
@@ -575,9 +608,10 @@ function RuleListPage() {
 
       {/* Preview Modal */}
       <Modal title={`规则预览 - ${previewRule?.ruleName || ''}`} open={previewModalOpen}
-        onCancel={() => setPreviewModalOpen(false)}
-        footer={<Button onClick={() => setPreviewModalOpen(false)}>关闭</Button>} width={780}>
-        {previewRule && (
+        onCancel={closePreview}
+        footer={<Button onClick={closePreview}>关闭</Button>} width={780} destroyOnClose>
+        <Spin spinning={previewLoading}>
+        {previewRule && !previewLoading && (
           <div>
             {hasRuleMetadata(previewRule) && (
               <>
@@ -614,6 +648,7 @@ function RuleListPage() {
             </Card>
           </div>
         )}
+        </Spin>
       </Modal>
 
       {/* Edit Metadata Modal */}

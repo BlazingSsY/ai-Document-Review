@@ -4,7 +4,7 @@ export interface Rule {
   id: number;
   ruleName: string;
   fileType: string;
-  content: string;
+  content?: string;
   creatorId: number;
   libraryId?: number;
   updatedAt: string;
