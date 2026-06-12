@@ -166,7 +166,7 @@ public class RagReviewService {
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("You can only view your own tasks");
         }
-        return toDTO(task);
+        return toDTO(task, true);
     }
 
     public PageResponse<ReviewTaskDTO> listTasks(Long userId, int page, int size, String status) {
@@ -260,7 +260,7 @@ public class RagReviewService {
         ragReviewTaskMapper.insert(task);
         log.info("RAG re-review task created: {} from original: {}", task.getId(), taskId);
         self.executeReviewAsync(task.getId());
-        return toDTO(task);
+        return toDTO(task, true);
     }
 
     /**
@@ -315,6 +315,7 @@ public class RagReviewService {
 
         ReviewExportUtil.syncChunkCheckResult(aiResult, target);
         aiResult.put("manualReviewSummary", ReviewExportUtil.buildManualReviewSummary(allCheckResults));
+        applyProblemSummary(aiResult, allCheckResults);
         task.setAiResult(aiResult);
         task.setUpdatedAt(LocalDateTime.now());
         ragReviewTaskMapper.updateById(task);
@@ -331,7 +332,7 @@ public class RagReviewService {
         audit.setCreatedAt(LocalDateTime.now());
         ragReviewAuditLogMapper.insert(audit);
 
-        return toDTO(task);
+        return toDTO(task, true);
     }
 
     public List<Map<String, Object>> listAuditLogs(String taskId, Long userId) {
@@ -361,13 +362,13 @@ public class RagReviewService {
 
     public byte[] exportResultToExcel(String taskId, Long userId) throws IOException {
         RagReviewTask task = requireOwnedTask(taskId, userId);
-        return ReviewExportUtil.toExcel(task.getAiResult());
+        return ReviewExportUtil.toExcel(enrichAiResult(task, false));
     }
 
     public byte[] exportReviewReportDocx(String taskId, Long userId) throws IOException {
         RagReviewTask task = requireOwnedTask(taskId, userId);
         return ReviewExportUtil.toReportDocx(task.getFileName(), task.getId(),
-                task.getSelectedModel(), task.getStatus(), task.getAiResult(),
+                task.getSelectedModel(), task.getStatus(), enrichAiResult(task, false),
                 listAuditLogs(taskId, userId));
     }
 
@@ -383,6 +384,10 @@ public class RagReviewService {
     }
 
     private ReviewTaskDTO toDTO(RagReviewTask task) {
+        return toDTO(task, false);
+    }
+
+    private ReviewTaskDTO toDTO(RagReviewTask task, boolean includeOriginalDocument) {
         ReviewTaskDTO dto = new ReviewTaskDTO();
         dto.setId(task.getId());
         dto.setUserId(task.getUserId());
@@ -390,12 +395,104 @@ public class RagReviewService {
         dto.setScenarioId(task.getScenarioId());
         dto.setSelectedModel(task.getSelectedModel());
         dto.setStatus(task.getStatus());
-        dto.setAiResult(task.getAiResult());
+        dto.setAiResult(enrichAiResult(task, includeOriginalDocument));
         dto.setCreatedAt(task.getCreatedAt());
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
         dto.setReviewMode("RAG");
         return dto;
+    }
+
+    private Map<String, Object> enrichAiResult(RagReviewTask task, boolean includeOriginalDocument) {
+        if (task.getAiResult() == null) return null;
+
+        Map<String, Object> enriched = new LinkedHashMap<>(task.getAiResult());
+        List<Map<String, Object>> checks = copyCheckResults(enriched.get("allCheckResults"));
+        if (!checks.isEmpty()) {
+            if (includeOriginalDocument) {
+                enrichRuleNames(task.getScenarioId(), checks);
+            }
+            enriched.put("allCheckResults", checks);
+            applyProblemSummary(enriched, checks);
+        }
+
+        if (includeOriginalDocument) {
+            List<Map<String, Object>> originalDocument = buildOriginalDocumentSources(task);
+            if (!originalDocument.isEmpty()) {
+                enriched.put("originalSources", originalDocument);
+                enriched.put("sourceTextMode", "original_word_structured_html_chapters");
+            }
+        }
+        return enriched;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> copyCheckResults(Object rawChecks) {
+        if (!(rawChecks instanceof List<?> list)) return new ArrayList<>();
+        List<Map<String, Object>> checks = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                checks.add(new LinkedHashMap<>((Map<String, Object>) map));
+            }
+        }
+        return checks;
+    }
+
+    private void enrichRuleNames(Long scenarioId, List<Map<String, Object>> checks) {
+        if (scenarioId == null || checks.isEmpty()) return;
+        Map<String, String> ruleNamesByCode = new HashMap<>();
+        for (RagRule rule : ragRuleService.getRulesByScenarioId(scenarioId)) {
+            if (rule.getRuleCode() != null && !rule.getRuleCode().isBlank()) {
+                ruleNamesByCode.put(rule.getRuleCode(), rule.getRuleName());
+            }
+        }
+        for (Map<String, Object> check : checks) {
+            String currentName = firstNonBlank(
+                    Objects.toString(check.get("ruleName"), ""),
+                    Objects.toString(check.get("rule_name"), ""));
+            if (!currentName.isBlank()) continue;
+            String ruleCode = Objects.toString(check.get("rule_code"), "");
+            String ruleName = ruleNamesByCode.get(ruleCode);
+            if (ruleName != null && !ruleName.isBlank()) {
+                check.put("ruleName", ruleName);
+            }
+        }
+    }
+
+    private List<Map<String, Object>> buildOriginalDocumentSources(RagReviewTask task) {
+        List<Map<String, Object>> sources = new ArrayList<>();
+        if (task.getFilePath() == null || task.getFilePath().isBlank()) return sources;
+        try {
+            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
+            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
+            List<WordParser.Chapter> chapters = firstRealIdx > 0
+                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
+                    : rawChapters;
+            for (int i = 0; i < chapters.size(); i++) {
+                sources.add(toOriginalSource(chapters.get(i), i + 1));
+            }
+        } catch (Exception e) {
+            log.warn("Failed to rebuild original document view for RAG task {}: {}",
+                    task.getId(), e.getMessage());
+        }
+        return sources;
+    }
+
+    private void applyProblemSummary(Map<String, Object> aiResult,
+                                     List<Map<String, Object>> checks) {
+        List<Map<String, Object>> problems = checks.stream()
+                .filter(this::isProblemCheck)
+                .toList();
+        aiResult.put("totalIssues", problems.size());
+        aiResult.put("allIssues", new ArrayList<>(problems));
+    }
+
+    private boolean isProblemCheck(Map<String, Object> check) {
+        String status = firstNonBlank(
+                Objects.toString(check.get("manualStatus"), ""),
+                Objects.toString(check.get("status"), "Review"));
+        String normalized = normalizeCheckStatus(status);
+        return !"Pass".equals(normalized) && !"N/A".equals(normalized);
     }
 
     // ============================ Pipeline ============================
@@ -445,7 +542,7 @@ public class RagReviewService {
                 "RAG: 文档向量化完成，pgvector " + vectorIndexStrategy
                         + " 索引已就绪（维度 " + embeddingDimension + "）", 34);
 
-        return new PreparedDocument(List.copyOf(blocks), embeddingModel,
+        return new PreparedDocument(List.copyOf(blocks), List.copyOf(chapters), embeddingModel,
                 embeddingDimension, vectorIndexStrategy);
     }
 
@@ -488,6 +585,7 @@ public class RagReviewService {
         AiModelConfig rerankerModel =
                 aiModelService.getFirstEnabledModelByType(AiModelService.MODEL_TYPE_RERANKER);
         List<RagDocumentBlock> blocks = preparedDocument.blocks();
+        List<WordParser.Chapter> chapters = preparedDocument.chapters();
 
         webSocketService.sendTaskProgress(taskId, RagReviewTask.STATUS_PROCESSING,
                 "RAG: 正在加载检查规则...", 38);
@@ -569,13 +667,14 @@ public class RagReviewService {
         aiResult.put("rerankerModel", rerankerModel != null ? rerankerModel.getModelName() : null);
         aiResult.put("totalChunks", blocks.size());
         aiResult.put("chunkResults", chunkResults);
-        aiResult.put("totalIssues", 0);
-        aiResult.put("allIssues", new ArrayList<>());
         aiResult.put("totalCheckResults", allCheckResults.size());
         aiResult.put("allCheckResults", allCheckResults);
         aiResult.put("checkStatusCounts", statusCounts);
-        aiResult.put("originalSources", blocks.stream().map(this::toOriginalSource).toList());
-        aiResult.put("sourceTextMode", "original_word_document_blocks");
+        applyProblemSummary(aiResult, allCheckResults);
+        aiResult.put("originalSources", java.util.stream.IntStream.range(0, chapters.size())
+                .mapToObj(i -> toOriginalSource(chapters.get(i), i + 1))
+                .toList());
+        aiResult.put("sourceTextMode", "original_word_structured_html_chapters");
         Map<String, Object> retrievalStats = new LinkedHashMap<>();
         retrievalStats.put("engine", "pgvector");
         retrievalStats.put("indexStrategy", preparedDocument.vectorIndexStrategy());
@@ -669,6 +768,8 @@ public class RagReviewService {
         Map<String, Object> check = new LinkedHashMap<>();
         check.put("check_code", plan.checkCode());
         check.put("rule_code", plan.ruleCode());
+        check.put("ruleName", plan.ruleName());
+        check.put("category", plan.category());
         check.put("check_question", plan.checkQuestion());
         check.put("status", "Review");
         check.put("reason", "单项审查失败，自动补审后仍未成功：" + rootErrorMessage(attempt.error()));
@@ -676,8 +777,6 @@ public class RagReviewService {
         check.put("missing_items", List.of("模型审查结果"));
         check.put("suggestion", "请检查模型服务状态后对该项执行人工复核或重新审查。");
         check.put("confidence", "needs_review");
-        check.put("location", attempt.evidence().isEmpty()
-                ? "" : attempt.evidence().get(0).block().getSectionPath());
         check.put("sourceTitle", attempt.evidence().isEmpty()
                 ? "" : attempt.evidence().get(0).block().getSectionPath());
         check.put("sourceRefs", attempt.evidence().stream().map(this::toSourceRef).toList());
@@ -701,23 +800,26 @@ public class RagReviewService {
 
     private List<RagDocumentBlock> buildBlocks(String taskId, List<WordParser.Chapter> chapters) {
         List<RagDocumentBlock> blocks = new ArrayList<>();
-        int seq = 1;
         for (int chapterIdx = 0; chapterIdx < chapters.size(); chapterIdx++) {
             WordParser.Chapter chapter = chapters.get(chapterIdx);
-            List<String> pieces = splitChapter(chapter.getContent());
+            List<NodeRange> pieces = splitChapterNodes(chapter);
             int blockIdx = 1;
-            for (String piece : pieces) {
+            for (NodeRange piece : pieces) {
                 String text = (chapter.getTitle() == null || chapter.getTitle().isBlank())
-                        ? piece
-                        : chapter.getTitle() + "\n\n" + piece;
+                        ? piece.text()
+                        : chapter.getTitle() + "\n\n" + piece.text();
                 if (text.isBlank()) continue;
                 RagDocumentBlock block = new RagDocumentBlock();
                 block.setTaskId(taskId);
-                block.setBlockId("BLOCK-" + String.format("%05d", seq++));
-                block.setBlockType("paragraph");
+                String chapterKey = firstNonBlank(chapter.getId(), "DOC-C" + String.format("%03d", chapterIdx + 1))
+                        .replace("DOC-", "");
+                block.setBlockId("BLOCK-" + chapterKey + "-" + String.format("%04d", blockIdx));
+                block.setBlockType("node_range");
                 block.setChapterIndex(chapterIdx + 1);
                 block.setBlockIndex(blockIdx++);
-                block.setSectionPath(chapter.getTitle());
+                block.setSectionPath(firstNonBlank(piece.sectionPath(), chapter.getTitle()));
+                block.setStartNodeId(piece.startNodeId());
+                block.setEndNodeId(piece.endNodeId());
                 block.setTextContent(text);
                 block.setTextHash(sha1(text));
                 blocks.add(block);
@@ -726,29 +828,80 @@ public class RagReviewService {
         return blocks;
     }
 
-    private List<String> splitChapter(String content) {
-        String normalized = content == null ? "" : content.replace("\r\n", "\n");
-        List<String> pieces = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        for (String raw : normalized.split("\\n\\s*\\n|\\n(?=<table)|\\n(?=\\|)")) {
-            String part = raw.trim();
-            if (part.isEmpty()) continue;
-            if (current.length() > 0 && current.length() + part.length() + 2 > blockMaxChars) {
-                pieces.add(current.toString().trim());
-                current.setLength(0);
-            }
-            if (part.length() > blockMaxChars) {
-                for (int start = 0; start < part.length(); start += blockMaxChars) {
-                    int end = Math.min(part.length(), start + blockMaxChars);
-                    pieces.add(part.substring(start, end).trim());
-                }
-            } else {
-                if (current.length() > 0) current.append("\n\n");
-                current.append(part);
-            }
+    private List<NodeRange> splitChapterNodes(WordParser.Chapter chapter) {
+        List<WordParser.DocumentNode> sourceNodes = chapter.getNodes().stream()
+                .filter(node -> !"chapter_title".equals(node.getType()))
+                .filter(node -> node.getReviewText() != null && !node.getReviewText().isBlank())
+                .toList();
+        if (sourceNodes.isEmpty()) {
+            String content = chapter.getContent() == null ? "" : chapter.getContent().trim();
+            if (content.isBlank()) return List.of();
+            return splitOversizedNode(content, null, null, chapter.getTitle());
         }
-        if (current.length() > 0) {
-            pieces.add(current.toString().trim());
+
+        List<NodeRange> pieces = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        WordParser.DocumentNode startNode = null;
+        WordParser.DocumentNode endNode = null;
+        for (WordParser.DocumentNode node : sourceNodes) {
+            String part = node.getReviewText().trim();
+            if (part.length() > blockMaxChars) {
+                if (current.length() > 0 && startNode != null && endNode != null) {
+                    pieces.add(new NodeRange(
+                            current.toString().trim(),
+                            startNode.getId(),
+                            endNode.getId(),
+                            firstNonBlank(startNode.getSectionPath(), chapter.getTitle())));
+                }
+                current.setLength(0);
+                startNode = null;
+                endNode = null;
+                pieces.addAll(splitOversizedNode(
+                        part,
+                        node.getId(),
+                        node.getId(),
+                        firstNonBlank(node.getSectionPath(), chapter.getTitle())));
+                continue;
+            }
+            if (current.length() > 0 && current.length() + part.length() + 2 > blockMaxChars) {
+                pieces.add(new NodeRange(
+                        current.toString().trim(),
+                        startNode.getId(),
+                        endNode.getId(),
+                        firstNonBlank(startNode.getSectionPath(), chapter.getTitle())));
+                current.setLength(0);
+                startNode = null;
+                endNode = null;
+            }
+            if (startNode == null) {
+                startNode = node;
+            }
+            endNode = node;
+            if (current.length() > 0) {
+                current.append("\n\n");
+            }
+            current.append(part);
+        }
+        if (current.length() > 0 && startNode != null && endNode != null) {
+            pieces.add(new NodeRange(
+                    current.toString().trim(),
+                    startNode.getId(),
+                    endNode.getId(),
+                    firstNonBlank(startNode.getSectionPath(), chapter.getTitle())));
+        }
+        return pieces;
+    }
+
+    private List<NodeRange> splitOversizedNode(String text, String startNodeId,
+                                                String endNodeId, String sectionPath) {
+        List<NodeRange> pieces = new ArrayList<>();
+        int maxChars = Math.max(1, blockMaxChars);
+        for (int start = 0; start < text.length(); start += maxChars) {
+            int end = Math.min(text.length(), start + maxChars);
+            String part = text.substring(start, end).trim();
+            if (!part.isBlank()) {
+                pieces.add(new NodeRange(part, startNodeId, endNodeId, sectionPath));
+            }
         }
         return pieces;
     }
@@ -881,6 +1034,8 @@ public class RagReviewService {
         Map<String, Object> check = extractFirstCheck(parsed);
         check.putIfAbsent("check_code", plan.checkCode());
         check.putIfAbsent("rule_code", plan.ruleCode());
+        check.put("ruleName", plan.ruleName());
+        check.putIfAbsent("category", plan.category());
         check.putIfAbsent("check_question", plan.checkQuestion());
         check.put("status", normalizeCheckStatus(check.get("status")));
         check.putIfAbsent("reason", "");
@@ -888,7 +1043,6 @@ public class RagReviewService {
         check.putIfAbsent("missing_items", new ArrayList<>());
         check.putIfAbsent("suggestion", "");
         check.putIfAbsent("confidence", evidence.isEmpty() ? "needs_review" : "medium");
-        check.putIfAbsent("location", evidence.isEmpty() ? "" : evidence.get(0).block().getSectionPath());
         check.put("sourceTitle", evidence.isEmpty() ? "" : evidence.get(0).block().getSectionPath());
         check.put("sourceRefs", evidence.stream().map(this::toSourceRef).toList());
         check.put("retrievalScores", evidence.stream().map(this::toRetrievalScore).toList());
@@ -943,6 +1097,9 @@ public class RagReviewService {
         ref.put("sourceId", item.block().getBlockId());
         ref.put("title", item.block().getSectionPath());
         ref.put("sectionPath", item.block().getSectionPath());
+        ref.put("chapterIndex", item.block().getChapterIndex());
+        ref.put("startNodeId", item.block().getStartNodeId());
+        ref.put("endNodeId", item.block().getEndNodeId());
         ref.put("reason", item.reason());
         ref.put("score", item.score());
         return ref;
@@ -956,15 +1113,37 @@ public class RagReviewService {
         return score;
     }
 
-    private Map<String, Object> toOriginalSource(RagDocumentBlock block) {
+    private Map<String, Object> toOriginalSource(WordParser.Chapter chapter, int chapterIndex) {
+        String content = chapter.getNodes().stream()
+                .filter(node -> !"chapter_title".equals(node.getType()))
+                .map(WordParser.DocumentNode::getText)
+                .filter(Objects::nonNull)
+                .filter(text -> !text.isBlank())
+                .reduce((left, right) -> left + "\n\n" + right)
+                .orElseGet(() -> chapter.getContent() == null ? "" : chapter.getContent());
         Map<String, Object> source = new LinkedHashMap<>();
-        source.put("sourceId", block.getBlockId());
-        source.put("type", "original_block");
-        source.put("title", block.getSectionPath());
-        source.put("sectionPath", block.getSectionPath());
-        source.put("text", block.getTextContent());
-        source.put("textLength", block.getTextContent() == null ? 0 : block.getTextContent().length());
-        source.put("estimatedTokens", ChunkUtils.estimateTokens(block.getTextContent()));
+        source.put("sourceId", firstNonBlank(
+                chapter.getId(),
+                "DOC-C" + String.format("%03d", chapterIndex)));
+        source.put("type", "original_chapter");
+        source.put("chapterIndex", chapterIndex);
+        source.put("title", chapter.getTitle());
+        source.put("sectionPath", chapter.getTitle());
+        source.put("text", content);
+        source.put("html", chapter.getHtml());
+        source.put("nodes", chapter.getNodes().stream().map(node -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", node.getId());
+            item.put("type", node.getType());
+            item.put("nodeIndex", node.getNodeIndex());
+            item.put("headingLevel", node.getHeadingLevel());
+            item.put("sectionPath", node.getSectionPath());
+            item.put("text", node.getText());
+            return item;
+        }).toList());
+        source.put("contentFormat", "structured_html");
+        source.put("textLength", content.length());
+        source.put("estimatedTokens", ChunkUtils.estimateTokens(chapter.getFullText()));
         return source;
     }
 
@@ -1029,9 +1208,14 @@ public class RagReviewService {
     }
 
     public record PreparedDocument(List<RagDocumentBlock> blocks,
+                                   List<WordParser.Chapter> chapters,
                                    AiModelConfig embeddingModel,
                                    int embeddingDimension,
                                    String vectorIndexStrategy) {
+    }
+
+    private record NodeRange(String text, String startNodeId,
+                             String endNodeId, String sectionPath) {
     }
 
     private record IndexedPlan(int index, CheckPlan plan) {

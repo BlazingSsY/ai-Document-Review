@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS document_blocks (
     chapter_index       INTEGER         NOT NULL DEFAULT 0,
     block_index         INTEGER         NOT NULL DEFAULT 0,
     section_path        TEXT,
+    start_node_id       VARCHAR(80),
+    end_node_id         VARCHAR(80),
     text_content        TEXT            NOT NULL,
     text_hash           VARCHAR(80)     NOT NULL,
     embedding_model     VARCHAR(100),
@@ -120,6 +122,8 @@ CREATE TABLE IF NOT EXISTS document_blocks (
 -- Rolling migration from the first RAG implementation, which stored JSON vectors
 -- in embedding_vector TEXT and calculated cosine similarity in Java.
 ALTER TABLE document_blocks ADD COLUMN IF NOT EXISTS embedding VECTOR;
+ALTER TABLE document_blocks ADD COLUMN IF NOT EXISTS start_node_id VARCHAR(80);
+ALTER TABLE document_blocks ADD COLUMN IF NOT EXISTS end_node_id VARCHAR(80);
 
 CREATE INDEX IF NOT EXISTS idx_document_blocks_task ON document_blocks(task_id);
 CREATE INDEX IF NOT EXISTS idx_document_blocks_task_chapter ON document_blocks(task_id, chapter_index, block_index);
@@ -425,6 +429,8 @@ CREATE TABLE IF NOT EXISTS rag_document_blocks (
     chapter_index       INTEGER         NOT NULL DEFAULT 0,
     block_index         INTEGER         NOT NULL DEFAULT 0,
     section_path        TEXT,
+    start_node_id       VARCHAR(80),
+    end_node_id         VARCHAR(80),
     text_content        TEXT            NOT NULL,
     text_hash           VARCHAR(80)     NOT NULL,
     embedding_model     VARCHAR(100),
@@ -433,6 +439,8 @@ CREATE TABLE IF NOT EXISTS rag_document_blocks (
     created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
     UNIQUE (task_id, block_id)
 );
+ALTER TABLE rag_document_blocks ADD COLUMN IF NOT EXISTS start_node_id VARCHAR(80);
+ALTER TABLE rag_document_blocks ADD COLUMN IF NOT EXISTS end_node_id VARCHAR(80);
 CREATE INDEX IF NOT EXISTS idx_rag_document_blocks_task ON rag_document_blocks(task_id);
 CREATE INDEX IF NOT EXISTS idx_rag_document_blocks_task_chapter
     ON rag_document_blocks(task_id, chapter_index, block_index);
@@ -673,10 +681,11 @@ BEGIN
     WHERE task_id = ANY(v_rag_task_ids);
 
     INSERT INTO rag_document_blocks (id, task_id, block_id, block_type, chapter_index,
-                                      block_index, section_path, text_content, text_hash,
+                                      block_index, section_path, start_node_id, end_node_id,
+                                      text_content, text_hash,
                                       embedding_model, embedding, embedding_dimension, created_at)
     SELECT id, task_id, block_id, block_type, chapter_index,
-           block_index, section_path, text_content, text_hash,
+           block_index, section_path, start_node_id, end_node_id, text_content, text_hash,
            embedding_model, embedding, embedding_dimension, created_at
     FROM document_blocks
     WHERE task_id = ANY(v_rag_task_ids);
@@ -735,18 +744,25 @@ BEGIN
         (SELECT COALESCE(MAX(id), 0) + 1 FROM rag_ai_call_logs), false);
 
     -- 9) 从原表删除已搬走的数据。利用 ON DELETE CASCADE：
+    --    DELETE FROM review_tasks 自动级联 audit_logs / document_blocks / pipelines → findings / ai_call_logs
     --    DELETE FROM scenarios 自动级联 scenario_*_mapping
     --    DELETE FROM rules     自动级联 rule_checks → rule_check_examples
     --    DELETE FROM rule_libraries 自动级联 rules → rule_checks → examples
-    --    DELETE FROM review_tasks 自动级联 audit_logs / document_blocks / pipelines → findings / ai_call_logs
-    DELETE FROM scenarios WHERE id = ANY(v_rag_scenario_ids);
+    -- 必须先删已迁移的 RAG 任务，否则 scenario_id 外键会阻止删除场景。
+    DELETE FROM review_tasks WHERE id = ANY(v_rag_task_ids);
+    -- 历史 chunk 任务可能与 RAG 共用场景。此类场景保留为历史任务元数据，
+    -- 只删除已经没有任何任务引用的 RAG 场景。
+    DELETE FROM scenarios s
+    WHERE s.id = ANY(v_rag_scenario_ids)
+      AND NOT EXISTS (
+          SELECT 1 FROM review_tasks rt WHERE rt.scenario_id = s.id
+      );
     DELETE FROM user_library_assignment WHERE library_id = ANY(v_rag_library_ids);
     DELETE FROM rule_libraries WHERE id = ANY(v_rag_library_ids);
     -- orphan 规则（已在 step 5 一并迁到 rag_rules）也要清出 chunk 侧
     DELETE FROM rules
     WHERE library_id IS NULL
       AND EXISTS (SELECT 1 FROM rag_rules rr WHERE rr.id = rules.id);
-    DELETE FROM review_tasks WHERE id = ANY(v_rag_task_ids);
 
     -- 安全清场：chunk 侧设计上不再持有任何 rule_checks / RAG 衍生数据。
     -- 若 FK 级联未生效（极少数情况），用显式 DELETE 兜底，保证收敛状态干净。

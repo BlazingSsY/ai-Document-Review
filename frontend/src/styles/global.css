@@ -168,23 +168,13 @@ body {
   font-weight: 600;
 }
 
-/* Keep all functional pop-up dialogs visually centered in the viewport.
-   Ant Design defaults to a fixed top offset, which made dialogs appear low in
-   this layout after nested page headers and dense content were added. */
-.ant-modal-root .ant-modal-wrap {
-  position: fixed;
-  inset: 0;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  overflow: auto;
-  padding: 24px;
-}
-
+/* Modal centering is configured through ConfigProvider. Do not force
+   .ant-modal-wrap to display:flex: Ant Design hides closed dialogs with an
+   inline display:none, and overriding it leaves an invisible full-screen layer
+   that intercepts every click. */
 .ant-modal-root .ant-modal {
-  top: auto !important;
-  margin: auto !important;
   padding-bottom: 0 !important;
+  max-width: calc(100vw - 32px);
   max-height: calc(100vh - 48px);
 }
 

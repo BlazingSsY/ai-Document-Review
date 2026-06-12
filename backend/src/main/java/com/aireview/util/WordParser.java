@@ -31,25 +31,81 @@ public class WordParser {
     }
 
     /**
-     * A document chapter identified by its heading-1 title and body text.
+     * A stable structural node in the parsed Word document.
      */
-    public static class Chapter {
-        private final String title;
-        private final String content;
+    public static class DocumentNode {
+        private final String id;
+        private final String type;
+        private final int nodeIndex;
+        private final int headingLevel;
+        private final String sectionPath;
+        private final String text;
+        private final String reviewText;
+        private final String html;
 
-        public Chapter(String title, String content) {
-            this.title = title;
-            this.content = content;
+        private DocumentNode(String id, String type, int nodeIndex, int headingLevel,
+                             String sectionPath, String text, String reviewText, String html) {
+            this.id = id;
+            this.type = type;
+            this.nodeIndex = nodeIndex;
+            this.headingLevel = headingLevel;
+            this.sectionPath = sectionPath;
+            this.text = text;
+            this.reviewText = reviewText;
+            this.html = html;
         }
 
+        public String getId() { return id; }
+        public String getType() { return type; }
+        public int getNodeIndex() { return nodeIndex; }
+        public int getHeadingLevel() { return headingLevel; }
+        public String getSectionPath() { return sectionPath; }
+        public String getText() { return text; }
+        public String getReviewText() { return reviewText; }
+        public String getHtml() { return html; }
+    }
+
+    /**
+     * A document chapter with plain review text and browser-ready structured HTML.
+     */
+    public static class Chapter {
+        private final String id;
+        private final String title;
+        private final String content;
+        private final String html;
+        private final List<DocumentNode> nodes;
+
+        public Chapter(String title, String content) {
+            this("", title, content, buildLegacyHtml(content), List.of());
+        }
+
+        private Chapter(String id, String title, String content,
+                        String html, List<DocumentNode> nodes) {
+            this.id = id;
+            this.title = title;
+            this.content = content;
+            this.html = html;
+            this.nodes = List.copyOf(nodes);
+        }
+
+        public String getId() { return id; }
         public String getTitle() { return title; }
         public String getContent() { return content; }
+        public String getHtml() { return html; }
+        public List<DocumentNode> getNodes() { return nodes; }
 
         /** Full text including the title line. */
         public String getFullText() {
             if (title == null || title.isBlank()) return content;
             return title + "\n\n" + content;
         }
+    }
+
+    private record NodeDraft(String type, int headingLevel, String sectionPath,
+                             String text, String reviewText, String innerHtml) {
+    }
+
+    private record TableRendering(String text, String html) {
     }
 
     /**
@@ -155,16 +211,21 @@ public class WordParser {
 
             if (firstHeadingLevel == -1) {
                 log.warn("No headings found in document, treating entire document as a single chapter.");
-                StringBuilder sb = new StringBuilder();
+                List<NodeDraft> nodes = new ArrayList<>();
                 for (IBodyElement element : bodyElements) {
                     if (element instanceof XWPFParagraph p) {
                         String t = withNumbering(p, numberingFormatter);
-                        if (t != null && !t.isBlank()) sb.append(t).append("\n");
+                        if (t != null && !t.isBlank()) {
+                            nodes.add(paragraphNode("", t));
+                        } else if (hasDrawingOrPicture(p)) {
+                            nodes.add(figureNode("", "[图表]"));
+                        }
                     } else if (element instanceof XWPFTable tbl) {
-                        sb.append("\n").append(convertTableToHtml(tbl, numberingFormatter)).append("\n\n");
+                        TableRendering table = renderTable(tbl, numberingFormatter);
+                        nodes.add(tableNode("", table));
                     }
                 }
-                chapters.add(new Chapter("", sb.toString().trim()));
+                chapters.add(createChapter(1, "", nodes, 1));
                 return chapters;
             }
 
@@ -173,7 +234,8 @@ public class WordParser {
 
             // Second pass: split document by the determined heading level.
             String currentTitle = null;
-            StringBuilder currentBody = new StringBuilder();
+            List<NodeDraft> currentNodes = new ArrayList<>();
+            NavigableMap<Integer, String> sectionHeadings = new TreeMap<>();
             int figureIndex = 0; // counter for unnamed figure placeholders
 
             for (IBodyElement element : bodyElements) {
@@ -187,48 +249,57 @@ public class WordParser {
 
                     // Chapter boundary: save current chapter and start new one
                     if (headingLevel == splitLevel) {
-                        if (currentTitle != null || currentBody.length() > 0) {
-                            chapters.add(new Chapter(
+                        if (currentTitle != null || !currentNodes.isEmpty()) {
+                            chapters.add(createChapter(
+                                    chapters.size() + 1,
                                     currentTitle != null ? currentTitle : "",
-                                    currentBody.toString().trim()));
+                                    currentNodes,
+                                    splitLevel));
                         }
                         currentTitle = paraText != null ? paraText.trim() : "";
-                        currentBody = new StringBuilder();
+                        currentNodes = new ArrayList<>();
+                        sectionHeadings.clear();
                         continue;
                     }
+
+                    String sectionPath = buildSectionPath(currentTitle, sectionHeadings);
 
                     // OLE/image-only paragraph: add placeholder instead of silently skipping.
                     // This preserves the knowledge that visual content (Visio diagrams, EMF
                     // charts, etc.) exists at this point in the document.
                     if ((rawText == null || rawText.isBlank()) && hasDrawingOrPicture(paragraph)) {
                         figureIndex++;
-                        currentBody.append("[图表 ").append(figureIndex).append("]\n");
+                        currentNodes.add(figureNode(sectionPath, "[图表 " + figureIndex + "]"));
                         continue;
                     }
 
                     // Non-split heading: format as Markdown heading using the CORRECT level
                     if (headingLevel > 0 && headingLevel <= 6 && paraText != null && !paraText.isBlank()) {
-                        currentBody.append("\n");
-                        currentBody.append("#".repeat(headingLevel)).append(" ").append(paraText.trim());
-                        currentBody.append("\n\n");
+                        sectionHeadings.tailMap(headingLevel, true).clear();
+                        sectionHeadings.put(headingLevel, paraText.trim());
+                        sectionPath = buildSectionPath(currentTitle, sectionHeadings);
+                        currentNodes.add(headingNode(sectionPath, headingLevel, paraText.trim()));
                         continue;
                     }
 
                     // Regular paragraph text
                     if (paraText != null && !paraText.isBlank()) {
-                        currentBody.append(paraText).append("\n");
+                        currentNodes.add(paragraphNode(sectionPath, paraText));
                     }
 
                 } else if (element instanceof XWPFTable table) {
-                    currentBody.append("\n").append(convertTableToHtml(table, numberingFormatter)).append("\n\n");
+                    String sectionPath = buildSectionPath(currentTitle, sectionHeadings);
+                    currentNodes.add(tableNode(sectionPath, renderTable(table, numberingFormatter)));
                 }
             }
 
             // Add the last chapter
-            if (currentTitle != null || currentBody.length() > 0) {
-                chapters.add(new Chapter(
+            if (currentTitle != null || !currentNodes.isEmpty()) {
+                chapters.add(createChapter(
+                        chapters.size() + 1,
                         currentTitle != null ? currentTitle : "",
-                        currentBody.toString().trim()));
+                        currentNodes,
+                        splitLevel));
             }
 
             log.info("Parsed .docx file into {} chapter(s) (split by H{})", chapters.size(), splitLevel);
@@ -392,8 +463,9 @@ public class WordParser {
      * @param formatter shared numbering formatter (so cell auto-numbers stay in sync
      *                  with body counters); may be {@code null} for nested calls
      */
-    private static String convertTableToHtml(XWPFTable table, NumberingFormatter formatter) {
+    private static TableRendering renderTable(XWPFTable table, NumberingFormatter formatter) {
         StringBuilder html = new StringBuilder();
+        StringBuilder text = new StringBuilder();
         html.append("<table border=\"1\">\n");
 
         List<XWPFTableRow> rows = table.getRows();
@@ -401,6 +473,7 @@ public class WordParser {
             XWPFTableRow row = rows.get(rowIdx);
             html.append("  <tr>\n");
             String cellTag = (rowIdx == 0) ? "th" : "td";
+            List<String> rowText = new ArrayList<>();
 
             List<XWPFTableCell> cells = row.getTableCells();
             int logicalCol = 0;
@@ -424,6 +497,7 @@ public class WordParser {
                 }
 
                 String cellText = extractCellText(cell, formatter);
+                rowText.add(cellText);
                 html.append("    <").append(cellTag);
                 if (rowSpan > 1) html.append(" rowspan=\"").append(rowSpan).append("\"");
                 if (gridSpan > 1) html.append(" colspan=\"").append(gridSpan).append("\"");
@@ -434,10 +508,14 @@ public class WordParser {
                 logicalCol += gridSpan;
             }
             html.append("  </tr>\n");
+            if (!rowText.isEmpty()) {
+                if (text.length() > 0) text.append('\n');
+                text.append(String.join(" | ", rowText));
+            }
         }
 
         html.append("</table>");
-        return html.toString();
+        return new TableRendering(text.toString().trim(), html.toString());
     }
 
     /** Number of grid columns spanned by this cell (default 1). */
@@ -549,6 +627,115 @@ public class WordParser {
             if (fallback != null) return fallback.trim();
         }
         return sb.toString().trim();
+    }
+
+    private static Chapter createChapter(int chapterNumber, String title,
+                                         List<NodeDraft> bodyNodes, int titleHeadingLevel) {
+        String chapterId = "DOC-C" + String.format("%03d", chapterNumber);
+        List<NodeDraft> drafts = new ArrayList<>();
+        String normalizedTitle = title == null ? "" : title.trim();
+        if (!normalizedTitle.isBlank()) {
+            int level = Math.max(1, Math.min(6, titleHeadingLevel));
+            drafts.add(new NodeDraft(
+                    "chapter_title",
+                    level,
+                    normalizedTitle,
+                    normalizedTitle,
+                    normalizedTitle,
+                    null));
+        }
+        drafts.addAll(bodyNodes);
+
+        List<DocumentNode> nodes = new ArrayList<>();
+        StringBuilder html = new StringBuilder();
+        StringBuilder content = new StringBuilder();
+        int nodeIndex = 1;
+        for (NodeDraft draft : drafts) {
+            String nodeId = chapterId + "-N" + String.format("%04d", nodeIndex);
+            String nodeHtml = renderNodeHtml(nodeId, draft);
+            nodes.add(new DocumentNode(
+                    nodeId,
+                    draft.type(),
+                    nodeIndex,
+                    draft.headingLevel(),
+                    draft.sectionPath(),
+                    draft.text(),
+                    draft.reviewText(),
+                    nodeHtml));
+            html.append(nodeHtml);
+            if (!"chapter_title".equals(draft.type())
+                    && draft.reviewText() != null
+                    && !draft.reviewText().isBlank()) {
+                if (content.length() > 0) content.append("\n\n");
+                content.append(draft.reviewText().trim());
+            }
+            nodeIndex++;
+        }
+        return new Chapter(chapterId, normalizedTitle, content.toString().trim(),
+                html.toString(), nodes);
+    }
+
+    private static NodeDraft paragraphNode(String sectionPath, String text) {
+        String normalized = text == null ? "" : text.trim();
+        return new NodeDraft("paragraph", 0, sectionPath, normalized, normalized, null);
+    }
+
+    private static NodeDraft headingNode(String sectionPath, int headingLevel, String text) {
+        String normalized = text == null ? "" : text.trim();
+        int level = Math.max(1, Math.min(6, headingLevel));
+        return new NodeDraft("heading", level, sectionPath, normalized,
+                "#".repeat(level) + " " + normalized, null);
+    }
+
+    private static NodeDraft figureNode(String sectionPath, String text) {
+        String normalized = text == null ? "[图表]" : text.trim();
+        return new NodeDraft("figure", 0, sectionPath, normalized, normalized, null);
+    }
+
+    private static NodeDraft tableNode(String sectionPath, TableRendering table) {
+        return new NodeDraft("table", 0, sectionPath, table.text(), table.html(), table.html());
+    }
+
+    private static String buildSectionPath(String chapterTitle,
+                                           NavigableMap<Integer, String> sectionHeadings) {
+        List<String> parts = new ArrayList<>();
+        if (chapterTitle != null && !chapterTitle.isBlank()) {
+            parts.add(chapterTitle.trim());
+        }
+        for (String heading : sectionHeadings.values()) {
+            if (heading != null && !heading.isBlank()
+                    && (parts.isEmpty() || !parts.get(parts.size() - 1).equals(heading.trim()))) {
+                parts.add(heading.trim());
+            }
+        }
+        return String.join(" > ", parts);
+    }
+
+    private static String renderNodeHtml(String nodeId, NodeDraft draft) {
+        String attributes = " id=\"" + nodeId + "\" data-node-id=\"" + nodeId
+                + "\" data-node-type=\"" + draft.type() + "\"";
+        if ("table".equals(draft.type())) {
+            return "<div" + attributes + " class=\"doc-node doc-table\">"
+                    + Objects.toString(draft.innerHtml(), "") + "</div>\n";
+        }
+        int level = draft.headingLevel();
+        if ("chapter_title".equals(draft.type()) || "heading".equals(draft.type())) {
+            int safeLevel = Math.max(1, Math.min(6, level));
+            return "<h" + safeLevel + attributes + " class=\"doc-node doc-heading\">"
+                    + escapeHtml(draft.text()) + "</h" + safeLevel + ">\n";
+        }
+        String cssClass = "figure".equals(draft.type())
+                ? "doc-node doc-figure"
+                : "doc-node doc-paragraph";
+        return "<p" + attributes + " class=\"" + cssClass + "\">"
+                + escapeHtml(draft.text()).replace("\n", "<br>") + "</p>\n";
+    }
+
+    private static String buildLegacyHtml(String content) {
+        if (content == null || content.isBlank()) return "";
+        return "<div class=\"doc-node doc-paragraph\">"
+                + escapeHtml(content).replace("\r\n", "\n").replace("\n", "<br>")
+                + "</div>";
     }
 
     /**
@@ -873,7 +1060,12 @@ public class WordParser {
             String result = extractor.getText().trim();
             log.info("Parsed .doc file, extracted {} characters", result.length());
             List<Chapter> chapters = new ArrayList<>();
-            chapters.add(new Chapter("", result));
+            List<NodeDraft> nodes = Arrays.stream(result.replace("\r\n", "\n").split("\\n\\s*\\n"))
+                    .map(String::trim)
+                    .filter(text -> !text.isBlank())
+                    .map(text -> paragraphNode("", text))
+                    .toList();
+            chapters.add(createChapter(1, "", nodes, 1));
             return chapters;
         }
     }

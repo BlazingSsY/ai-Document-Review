@@ -28,6 +28,9 @@ spring:
     init:
       mode: always
       schema-locations: classpath:schema.sql
+      # Let PostgreSQL JDBC parse the complete script so dollar-quoted DO blocks
+      # are not incorrectly split at their internal semicolons by Spring.
+      separator: "^^^ END OF SCRIPT ^^^"
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml

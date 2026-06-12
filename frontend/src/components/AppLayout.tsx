@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Avatar, Dropdown, Typography, Space, Tag, theme } from 'antd';
+import { Layout, Menu, Avatar, Dropdown, Typography, Space, Tag, theme, Modal } from 'antd';
 import {
   DashboardOutlined,
   FileTextOutlined,
@@ -67,6 +67,16 @@ function AppLayout() {
       taskWebSocket.unsubscribe('*', handler);
     };
   }, []);
+
+  // Routed pages render dialogs through body-level portals. Destroy imperative
+  // dialogs and release any scroll lock when navigation unmounts their owner,
+  // so a failed request or abrupt route change cannot leave a transparent
+  // full-screen overlay intercepting clicks on the next page.
+  useEffect(() => {
+    Modal.destroyAll();
+    document.body.style.removeProperty('overflow');
+    document.body.style.removeProperty('width');
+  }, [location.pathname]);
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     navigate(key);

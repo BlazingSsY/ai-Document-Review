@@ -138,6 +138,8 @@ function recordArray(value: unknown): Array<Record<string, unknown>> {
 function sourceRefKey(ref: Record<string, unknown>): string {
   const sourceId = textField(ref, ['sourceId', 'blockId']);
   if (sourceId) return `id:${sourceId}`;
+  const chapterIndex = numericField(ref, ['chapterIndex']);
+  if (chapterIndex !== undefined) return `chapter:${chapterIndex}`;
   const chunk = numericField(ref, ['chunk', 'sourceChunk']);
   if (chunk !== undefined) return `chunk:${chunk}`;
   return textField(ref, ['sectionPath', 'title', 'sourceTitle']);
@@ -146,6 +148,8 @@ function sourceRefKey(ref: Record<string, unknown>): string {
 function sourceCandidateKey(source: Record<string, unknown>): string {
   const sourceId = textField(source, ['sourceId', 'blockId']);
   if (sourceId) return `id:${sourceId}`;
+  const chapterIndex = numericField(source, ['chapterIndex']);
+  if (chapterIndex !== undefined) return `chapter:${chapterIndex}`;
   const chunk = numericField(source, ['chunk', 'sourceChunk']);
   if (chunk !== undefined) return `chunk:${chunk}`;
   return textField(source, ['sectionPath', 'chapterTitle', 'title']);
@@ -187,6 +191,14 @@ function matchOriginalSource(
     if (byId) return byId;
   }
 
+  const chapterIndex = numericField(ref, ['chapterIndex']);
+  if (chapterIndex !== undefined) {
+    const byChapter = originalSources.find(
+      (source) => numericField(source, ['chapterIndex']) === chapterIndex,
+    );
+    if (byChapter) return byChapter;
+  }
+
   const chunkNo = numericField(ref, ['chunk', 'sourceChunk']);
   if (chunkNo !== undefined) {
     const byChunk = originalSources.find((source) => numericField(source, ['chunk', 'sourceChunk']) === chunkNo);
@@ -211,7 +223,16 @@ function sourceCandidatesForItem(
   const candidates: Array<Record<string, unknown>> = [];
   for (const ref of sourceRefsForItem(item, chunk)) {
     const source = matchOriginalSource(ref, originalSources);
-    if (source) candidates.push({ ...source, ...ref });
+    if (source) {
+      candidates.push({
+        ...source,
+        evidenceSourceId: textField(ref, ['sourceId', 'blockId']),
+        startNodeId: textField(ref, ['startNodeId', 'start_node_id']),
+        endNodeId: textField(ref, ['endNodeId', 'end_node_id']),
+        reason: textField(ref, ['reason']),
+        score: scoreField(ref, ['score']),
+      });
+    }
   }
 
   if (candidates.length === 0 && originalSources.length > 0) {
@@ -272,6 +293,11 @@ function checkStatusColor(status: string): string {
   return 'default';
 }
 
+function isProblemCheck(item: Record<string, unknown>): boolean {
+  const status = textField(item, ['manualStatus', 'status']);
+  return status !== 'Pass' && status !== 'N/A';
+}
+
 function confidenceLabel(confidence: string): string {
   if (confidence === 'high') return '高置信度';
   if (confidence === 'medium') return '中置信度';
@@ -286,6 +312,122 @@ function sourceReasonLabel(reason: string): string {
   if (reason === 'matched_chunk') return '切片匹配';
   if (reason === 'referenced_chapter') return '引用章节';
   return reason || '来源匹配';
+}
+
+const ALLOWED_SOURCE_TAGS = new Set([
+  'DIV', 'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD',
+  'BR', 'STRONG', 'EM', 'UL', 'OL', 'LI',
+]);
+
+function locatorCandidates(locator: string): string[] {
+  const normalized = locator.trim();
+  if (!normalized) return [];
+  return [
+    normalized,
+    ...normalized
+      .split(/\r?\n|[。；;]/)
+      .map((part) => part.replace(/^[“"'‘’]+|[”"'‘’]+$/g, '').trim())
+      .filter((part) => part.length >= 8),
+  ].sort((left, right) => right.length - left.length);
+}
+
+function buildHighlightedSourceHtml(
+  html: string,
+  startNodeId: string,
+  endNodeId: string,
+  locator: string,
+): string {
+  if (!html || typeof DOMParser === 'undefined') return '';
+  const documentNode = new DOMParser().parseFromString(`<div id="source-root">${html}</div>`, 'text/html');
+  const root = documentNode.getElementById('source-root');
+  if (!root) return '';
+
+  for (const element of Array.from(root.querySelectorAll('*'))) {
+    if (!ALLOWED_SOURCE_TAGS.has(element.tagName)) {
+      element.replaceWith(documentNode.createTextNode(element.textContent || ''));
+      continue;
+    }
+    for (const attribute of Array.from(element.attributes)) {
+      const allowed = ['id', 'class', 'data-node-id', 'data-node-type', 'rowspan', 'colspan', 'border'];
+      if (!allowed.includes(attribute.name)) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  }
+
+  const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-node-id]'));
+  let startIndex = startNodeId
+    ? nodes.findIndex((node) => node.dataset.nodeId === startNodeId)
+    : -1;
+  let endIndex = endNodeId
+    ? nodes.findIndex((node) => node.dataset.nodeId === endNodeId)
+    : startIndex;
+
+  if (startIndex < 0) {
+    const candidates = locatorCandidates(locator);
+    startIndex = nodes.findIndex((node) => {
+      const nodeText = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      return candidates.some((candidate) => {
+        const value = candidate.replace(/\s+/g, ' ').trim();
+        return nodeText.includes(value) || (nodeText.length >= 8 && value.includes(nodeText));
+      });
+    });
+    endIndex = startIndex;
+  }
+
+  if (startIndex >= 0) {
+    if (endIndex < startIndex) endIndex = startIndex;
+    for (let index = startIndex; index <= Math.min(endIndex, nodes.length - 1); index += 1) {
+      nodes[index].classList.add('source-node-highlight');
+    }
+    nodes[startIndex].classList.add('source-node-highlight-start');
+  }
+  return root.innerHTML;
+}
+
+function StructuredSourceView({
+  html,
+  startNodeId,
+  endNodeId,
+  locator,
+}: {
+  html: string;
+  startNodeId: string;
+  endNodeId: string;
+  locator: string;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const highlightedHtml = buildHighlightedSourceHtml(html, startNodeId, endNodeId, locator);
+
+  useEffect(() => {
+    const highlighted = containerRef.current?.querySelector('.source-node-highlight-start');
+    highlighted?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlightedHtml]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="source-html-view"
+      dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+    />
+  );
+}
+
+function highlightPlainText(text: string, locator: string): React.ReactNode {
+  for (const candidate of locatorCandidates(locator)) {
+    const index = text.indexOf(candidate);
+    if (index >= 0) {
+      return (
+        <>
+          {text.slice(0, index)}
+          <mark>{candidate}</mark>
+          {text.slice(index + candidate.length)}
+        </>
+      );
+    }
+  }
+  return text;
 }
 
 function ReviewWorkspacePage() {
@@ -588,6 +730,9 @@ function ReviewWorkspacePage() {
   const checkResults = extractCheckResults(task.aiResult);
   const hasCheckMatrix = checkResults.length > 0;
   const reviewItems = hasCheckMatrix ? checkResults : issues;
+  const problemCount = hasCheckMatrix
+    ? checkResults.filter(isProblemCheck).length
+    : issues.length;
   const overallScore = task.aiResult?.overallScore as number | undefined;
   const totalChunks = task.aiResult?.totalChunks as number | undefined;
   const categoryCounts = (task.aiResult?.categoryCounts || {}) as Record<string, number>;
@@ -607,14 +752,17 @@ function ReviewWorkspacePage() {
   const activeSource = activeSourceSafeIndex >= 0 ? sourceCandidates[activeSourceSafeIndex] : sourcePayload(activeChunk);
   const activeSourceText = textField(activeSource, ['text', 'content', 'originalText', 'sourceText'])
     || (originalSources.length === 0 ? sourceText(activeChunk) : '');
+  const activeSourceHtml = textField(activeSource, ['html', 'contentHtml']);
   const activeSourceTitle = textField(activeSource, ['sectionPath', 'chapterTitle', 'title']) || sourceTitle(activeChunk);
   const activeSourceId = textField(activeSource, ['sourceId', 'blockId']);
+  const activeEvidenceSourceId = textField(activeSource, ['evidenceSourceId']);
+  const activeStartNodeId = textField(activeSource, ['startNodeId', 'start_node_id']);
+  const activeEndNodeId = textField(activeSource, ['endNodeId', 'end_node_id']);
   const activeSourceReason = textField(activeSource, ['reason']);
   const activeSourceScore = scoreField(activeSource, ['score']);
   const activeSourceLength = numericField(activeSource, ['textLength', 'contentLength']);
   const activeSourceTokens = numericField(activeSource, ['estimatedTokens']);
-  const activeLocator = textField(activeItem, ['evidence', 'originalText', 'location']);
-  const activeChunkNo = Number(activeSource?.chunk || activeChunk?.chunk || 0);
+  const activeLocator = textField(activeItem, ['evidence', 'originalText']);
   const displayedChunkCount = totalChunks ?? (chunkResults.length > 0 ? chunkResults.length : '-');
 
   return (
@@ -667,8 +815,8 @@ function ReviewWorkspacePage() {
             <strong>{overallScore !== undefined ? overallScore : '-'}</strong>
           </div>
           <div className="overview-item">
-            <span className="overview-label">{hasCheckMatrix ? '检查项' : '问题数'}</span>
-            <strong>{hasCheckMatrix ? checkResults.length : issues.length}</strong>
+            <span className="overview-label">问题数</span>
+            <strong className={problemCount > 0 ? 'danger-text' : undefined}>{problemCount}</strong>
           </div>
           <div className="overview-item">
             <span className="overview-label">文档切片</span>
@@ -701,7 +849,9 @@ function ReviewWorkspacePage() {
             <div className="panel-header">
               <div>
                 <h3>{hasCheckMatrix ? '检查项判定矩阵' : '大模型审查结果'}</h3>
-                <Text type="secondary">点击任一{hasCheckMatrix ? '检查项' : '问题'}，右侧显示对应原文片段。</Text>
+                <Text type="secondary">
+                  点击任一{hasCheckMatrix ? '检查项' : '问题'}，右侧定位并显示完整章节原文。
+                </Text>
               </div>
               <Tag>{reviewItems.length} 条</Tag>
             </div>
@@ -728,10 +878,10 @@ function ReviewWorkspacePage() {
                   const description = hasCheckMatrix
                     ? textField(item, ['check_question', 'question', 'description'])
                     : textField(item, ['description', 'explanation', 'issue', 'problem', 'summary']);
+                  const locator = textField(item, ['evidence', 'originalText']);
                   const reason = textField(item, ['reason']);
-                  const location = textField(item, ['location', 'originalText']);
                   const suggestion = textField(item, ['suggestion', 'recommendation']);
-                  const rule = textField(item, ['rule', 'ruleName']);
+                  const rule = textField(item, ['ruleName', 'rule_name', 'rule']);
                   const ruleCode = textField(item, ['rule_code', 'ruleCode']);
                   const checkCode = textField(item, ['check_code', 'checkCode']);
                   const confidence = textField(item, ['confidence']) || 'single';
@@ -777,10 +927,11 @@ function ReviewWorkspacePage() {
                             <Tag color={checkStatusColor(statusValue)}>{CHECK_STATUS_LABELS[statusValue] || statusValue || '待复核'}</Tag>
                           )}
                           {category && <Tag>{category}</Tag>}
-                          {ruleCode && <Tag color="blue">{ruleCode}</Tag>}
-                          {checkCode && <Tag color="cyan">{checkCode}</Tag>}
+                          {hasCheckMatrix && rule && <Tag color="blue">{rule}</Tag>}
+                          {!hasCheckMatrix && ruleCode && <Tag color="blue">{ruleCode}</Tag>}
+                          {!hasCheckMatrix && checkCode && <Tag color="cyan">{checkCode}</Tag>}
                           {manualStatus && <Tag color={checkStatusColor(manualStatus)}>人工：{CHECK_STATUS_LABELS[manualStatus] || manualStatus}</Tag>}
-                          {sourceChunkNo && <Tag color="purple">切片 {sourceChunkNo}</Tag>}
+                          {!hasCheckMatrix && sourceChunkNo && <Tag color="purple">切片 {sourceChunkNo}</Tag>}
                         </Space>
                         <div
                           className="confidence-actions"
@@ -810,23 +961,23 @@ function ReviewWorkspacePage() {
                           )}
                         </div>
                       </div>
-                      {description && <div className="finding-description">{description}</div>}
+                      {locator && (
+                        <div className="finding-locator">
+                          <span>判定依据 / 定位线索</span>
+                          <p>{locator}</p>
+                        </div>
+                      )}
+                      {!hasCheckMatrix && description && <div className="finding-description">{description}</div>}
                       {reason && (
                         <div className="finding-field">
                           <span>判定理由</span>
                           <p>{reason}</p>
                         </div>
                       )}
-                      {missingItems.length > 0 && (
+                      {!hasCheckMatrix && missingItems.length > 0 && (
                         <div className="finding-field missing">
                           <span>缺失项</span>
                           <p>{missingItems.map((item) => String(item)).join('；')}</p>
-                        </div>
-                      )}
-                      {location && (
-                        <div className="finding-field">
-                          <span>位置</span>
-                          <p>{location}</p>
                         </div>
                       )}
                       {suggestion && (
@@ -835,7 +986,7 @@ function ReviewWorkspacePage() {
                           <p>{suggestion}</p>
                         </div>
                       )}
-                      {rule && rule !== ruleCode && <div className="rule-name">{rule}</div>}
+                      {!hasCheckMatrix && rule && rule !== ruleCode && <div className="rule-name">{rule}</div>}
                     </div>
                   );
                 })
@@ -847,13 +998,10 @@ function ReviewWorkspacePage() {
             <div className="panel-header">
               <div>
                 <h3>对应原文</h3>
-                <Text type="secondary">{activeSourceTitle}</Text>
+                <Text type="secondary">{activeSourceTitle || '完整章节原文'}</Text>
               </div>
               <Space wrap size={4}>
                 {activeSourceId && <Tag color="blue">{activeSourceId}</Tag>}
-                {activeSourceReason && <Tag color="geekblue">{sourceReasonLabel(activeSourceReason)}</Tag>}
-                {activeSourceScore !== undefined && <Tag>相似度 {activeSourceScore.toFixed(3)}</Tag>}
-                {activeChunkNo > 0 && <Tag color="purple">切片 {activeChunkNo}</Tag>}
                 {activeSourceLength !== undefined && <Tag>{activeSourceLength} 字</Tag>}
                 {activeSourceTokens !== undefined && <Tag>{activeSourceTokens} tokens</Tag>}
                 {hasCheckMatrix && activeItem && (
@@ -867,7 +1015,7 @@ function ReviewWorkspacePage() {
             <div className="source-content">
               {sourceCandidates.length > 1 && (
                 <div className="source-switcher">
-                  <Text type="secondary">检索原文</Text>
+                  <Text type="secondary">关联章节</Text>
                   <Space wrap size={6}>
                     {sourceCandidates.map((source, idx) => (
                       <Button
@@ -882,29 +1030,29 @@ function ReviewWorkspacePage() {
                   </Space>
                 </div>
               )}
-              {activeItem && activeLocator && (
-                <div className="source-locator">
-                  <Text type="secondary">判定依据 / 定位线索</Text>
-                  <p>{activeLocator}</p>
-                </div>
-              )}
               {(activeSourceId || activeSourceReason || activeSourceScore !== undefined) && (
                 <div className="source-provenance">
-                  <Text type="secondary">原文溯源</Text>
+                  <Text type="secondary">定位溯源</Text>
                   <Space wrap size={6}>
-                    {activeSourceId && <Tag color="blue">来源 {activeSourceId}</Tag>}
+                    {activeEvidenceSourceId && <Tag color="blue">证据块 {activeEvidenceSourceId}</Tag>}
                     {activeSourceReason && <Tag color="geekblue">{sourceReasonLabel(activeSourceReason)}</Tag>}
                     {activeSourceScore !== undefined && <Tag>召回分 {activeSourceScore.toFixed(3)}</Tag>}
-                    {activeChunkNo > 0 && <Tag color="purple">切片 {activeChunkNo}</Tag>}
                   </Space>
                 </div>
               )}
-              {activeSourceText ? (
-                <pre className="source-text-view">{activeSourceText}</pre>
+              {activeSourceHtml ? (
+                <StructuredSourceView
+                  html={activeSourceHtml}
+                  startNodeId={activeStartNodeId}
+                  endNodeId={activeEndNodeId}
+                  locator={activeLocator}
+                />
+              ) : activeSourceText ? (
+                <pre className="source-text-view">{highlightPlainText(activeSourceText, activeLocator)}</pre>
               ) : isProcessing ? (
                 <div className="empty-panel">
                   <Spin />
-                  <Text type="secondary">审查完成后显示原文片段。</Text>
+                  <Text type="secondary">审查完成后显示完整章节原文。</Text>
                 </div>
               ) : (
                 <Empty description="当前结果未携带可展示原文；请使用新版本重新审查该文档。" />

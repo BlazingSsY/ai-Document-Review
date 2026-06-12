@@ -59,6 +59,20 @@ const EMPTY_STATS: UnifiedStats = {
   },
 };
 
+function countReviewProblems(task: ReviewTask): number | '-' {
+  const checks = task.aiResult?.allCheckResults;
+  if (Array.isArray(checks) && checks.length > 0) {
+    return checks.filter((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      const check = item as Record<string, unknown>;
+      const status = String(check.manualStatus || check.status || 'Review');
+      return status !== 'Pass' && status !== 'N/A';
+    }).length;
+  }
+  const issues = task.aiResult?.allIssues;
+  return Array.isArray(issues) ? issues.length : '-';
+}
+
 function DashboardPage() {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
@@ -323,10 +337,7 @@ function DashboardPage() {
       title: '发现问题',
       key: 'issueCount',
       width: 100,
-      render: (_, record) => {
-        const issues = record.aiResult?.allIssues;
-        return Array.isArray(issues) ? issues.length : '-';
-      },
+      render: (_, record) => countReviewProblems(record),
     },
     {
       title: '创建时间',

@@ -10,6 +10,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ConfigProvider
       locale={zhCN}
+      modal={{
+        centered: true,
+      }}
       theme={{
         token: {
           colorPrimary: '#1677ff',

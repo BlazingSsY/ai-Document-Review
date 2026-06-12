@@ -45,6 +45,7 @@ function ScenarioListPage({ reviewMode }: ScenarioListPageProps) {
   const [editingScenario, setEditingScenario] = useState<Scenario | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [detailScenario, setDetailScenario] = useState<Scenario | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [allLibraries, setAllLibraries] = useState<RuleLibrary[]>([]);
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -96,11 +97,26 @@ function ScenarioListPage({ reviewMode }: ScenarioListPageProps) {
   };
 
   const handleViewDetail = async (id: number) => {
+    setDetailScenario(null);
+    setDetailModalOpen(true);
+    setDetailLoading(true);
     try {
-      const res = await getScenarioDetail(id);
-      setDetailScenario(res.data.data);
-      setDetailModalOpen(true);
-    } catch { /* handled */ }
+      const [scenarioRes] = await Promise.all([
+        getScenarioDetail(id),
+        allLibraries.length === 0 ? fetchAllLibraries() : Promise.resolve(),
+      ]);
+      setDetailScenario(scenarioRes.data.data);
+    } catch {
+      closeDetailModal();
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeDetailModal = () => {
+    setDetailModalOpen(false);
+    setDetailScenario(null);
+    setDetailLoading(false);
   };
 
   const handleOpenEdit = async (id: number) => {
@@ -263,9 +279,16 @@ function ScenarioListPage({ reviewMode }: ScenarioListPageProps) {
 
       {/* Detail Modal */}
       <Modal title={`场景详情 - ${detailScenario?.name || ''}`} open={detailModalOpen}
-        onCancel={() => setDetailModalOpen(false)}
-        footer={<Button onClick={() => setDetailModalOpen(false)}>关闭</Button>} width={600}>
-        {detailScenario && (
+        onCancel={closeDetailModal}
+        footer={<Button onClick={closeDetailModal}>关闭</Button>}
+        confirmLoading={detailLoading}
+        destroyOnClose
+        width={600}>
+        {detailLoading ? (
+          <div style={{ padding: 32, textAlign: 'center' }}>
+            <Text type="secondary">正在加载场景详情...</Text>
+          </div>
+        ) : detailScenario && (
           <div>
             <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
               <Descriptions.Item label="场景名称">{detailScenario.name}</Descriptions.Item>

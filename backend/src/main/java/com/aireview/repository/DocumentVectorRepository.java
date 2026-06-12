@@ -41,14 +41,16 @@ public class DocumentVectorRepository {
         String sql = """
                 INSERT INTO rag_document_blocks (
                     task_id, block_id, block_type, chapter_index, block_index,
-                    section_path, text_content, text_hash, embedding_model,
-                    embedding, embedding_dimension, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::vector, ?, ?)
+                    section_path, start_node_id, end_node_id, text_content, text_hash,
+                    embedding_model, embedding, embedding_dimension, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::vector, ?, ?)
                 ON CONFLICT (task_id, block_id) DO UPDATE SET
                     block_type = EXCLUDED.block_type,
                     chapter_index = EXCLUDED.chapter_index,
                     block_index = EXCLUDED.block_index,
                     section_path = EXCLUDED.section_path,
+                    start_node_id = EXCLUDED.start_node_id,
+                    end_node_id = EXCLUDED.end_node_id,
                     text_content = EXCLUDED.text_content,
                     text_hash = EXCLUDED.text_hash,
                     embedding_model = EXCLUDED.embedding_model,
@@ -67,12 +69,14 @@ public class DocumentVectorRepository {
                 ps.setInt(4, block.getChapterIndex());
                 ps.setInt(5, block.getBlockIndex());
                 ps.setString(6, block.getSectionPath());
-                ps.setString(7, block.getTextContent());
-                ps.setString(8, block.getTextHash());
-                ps.setString(9, block.getEmbeddingModel());
-                ps.setString(10, block.getEmbeddingVector());
-                ps.setInt(11, block.getEmbeddingDimension());
-                ps.setTimestamp(12, Timestamp.valueOf(
+                ps.setString(7, block.getStartNodeId());
+                ps.setString(8, block.getEndNodeId());
+                ps.setString(9, block.getTextContent());
+                ps.setString(10, block.getTextHash());
+                ps.setString(11, block.getEmbeddingModel());
+                ps.setString(12, block.getEmbeddingVector());
+                ps.setInt(13, block.getEmbeddingDimension());
+                ps.setTimestamp(14, Timestamp.valueOf(
                         block.getCreatedAt() != null ? block.getCreatedAt() : LocalDateTime.now()));
             }
 
@@ -160,7 +164,7 @@ public class DocumentVectorRepository {
         String modelLiteral = model.replace("'", "''");
         String sql = """
                 SELECT id, task_id, block_id, block_type, chapter_index, block_index,
-                       section_path, text_content, text_hash, embedding_model,
+                       section_path, start_node_id, end_node_id, text_content, text_hash, embedding_model,
                        embedding_dimension, created_at,
                        1 - (%s <=> %s) AS similarity
                 FROM rag_document_blocks
@@ -193,7 +197,7 @@ public class DocumentVectorRepository {
         String sql = """
                 WITH candidates AS MATERIALIZED (
                     SELECT id, task_id, block_id, block_type, chapter_index, block_index,
-                           section_path, text_content, text_hash, embedding_model,
+                           section_path, start_node_id, end_node_id, text_content, text_hash, embedding_model,
                            embedding_dimension, created_at, embedding
                     FROM rag_document_blocks
                     WHERE task_id = ?
@@ -204,7 +208,7 @@ public class DocumentVectorRepository {
                     LIMIT ?
                 )
                 SELECT id, task_id, block_id, block_type, chapter_index, block_index,
-                       section_path, text_content, text_hash, embedding_model,
+                       section_path, start_node_id, end_node_id, text_content, text_hash, embedding_model,
                        embedding_dimension, created_at,
                        1 - (embedding <=> ?::vector) AS similarity
                 FROM candidates
@@ -231,6 +235,8 @@ public class DocumentVectorRepository {
         block.setChapterIndex(rs.getInt("chapter_index"));
         block.setBlockIndex(rs.getInt("block_index"));
         block.setSectionPath(rs.getString("section_path"));
+        block.setStartNodeId(rs.getString("start_node_id"));
+        block.setEndNodeId(rs.getString("end_node_id"));
         block.setTextContent(rs.getString("text_content"));
         block.setTextHash(rs.getString("text_hash"));
         block.setEmbeddingModel(rs.getString("embedding_model"));

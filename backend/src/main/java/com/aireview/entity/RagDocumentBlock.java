@@ -28,6 +28,10 @@ public class RagDocumentBlock {
 
     private String sectionPath;
 
+    private String startNodeId;
+
+    private String endNodeId;
+
     private String textContent;
 
     private String textHash;
