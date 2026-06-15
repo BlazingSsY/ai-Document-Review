@@ -170,55 +170,28 @@ docker compose up -d --build
                                 |
                     RuleDispatcher 为每个切片选出适用规则
                                 |
-                    ChunkBatchPlanner 按"规则签名 + 预算"打包成批
+                    逐章节并行审查（每章节 = 一次 AI 调用）
+                    单元内容 = 命中规则 + 本章节切片 + 引用到的其他章节切片
                                 |
-                    校准波（前 1/3 批）→ 观察输出占用率 → 动态调整 chunk 上限
-                                |
-                    并发批审查（每批多切片同发，结构化输出 chunks[]）
-                                |
-                    采样合并（非思维双采样 → fingerprint 交集为高置信）
-                                |
-                    批失败/输出缺 chunk_id → 自动拆回单切片重发 + WebSocket 提示
+                    单章节失败只标记为可重试切片，不影响其他章节
                                 |
                     aggregateResults 跨切片 fingerprint 去重 + 枚举归一化
                                 |
                     汇总结果 -> 审查完成
 ```
 
-### 审查管线：批处理与采样收敛
+### 审查管线：逐章节单次调用
 
-为压缩 AI 调用次数同时保证跨模型可对比，审查管线引入以下机制：
+审查以**章节切片**为最小单元，每个章节切片对应**一次独立 AI 调用**，调用量与章节数严格 1:1：
 
-1. **批处理（ChunkBatchPlanner）**：把命中相同规则集（rule_code 签名相同）的切片打包到同一次 AI 调用，user message 用 `===CHUNK <id>===` 分隔，模型按 `chunks[]` schema 返回。**40 章文档可从 80 次调用降到 ~10 次**。
-2. **采样收敛（mergeSamples）**：非思维模型对同一切片以不同 seed 跑 2 次，按 `fingerprint(location+rule_code)` 比对——交集 → `confidence=high`，对称差 → `needs_review`；思维模型单采样。
-3. **动态调整**：先跑前 1/3 批作为校准波，观察"实际输出 token / 输出预算"比值——`<50%` 下一波 chunk 上限 +2；`>80%` -1。
-4. **批失败兜底**：批输出缺 `chunk_id` 或解析失败时，自动把缺失的 chunk 拆回单切片路径重发，并通过 WebSocket 实时通知；最终结果带 `batchFallbacks` 字段记录降级历史。
+1. **每章节单元**：system prompt = `RuleDispatcher` 为该章节命中的规则（四段式结构化提示词）；user message = 本章节切片正文 + 该章节通过 `ChapterReferenceResolver` 识别到的、被引用的其他章节切片（“见第X章 / 参见 4.5 条 / 参考<标题>”等）。被引用章节内容仅作上下文，不在其上套用本次规则。
+2. **并发调度**：父线程 `Semaphore(review.parallel.chunk-concurrency)` 控制单任务的章节并发，提交到独立的 `chunkReviewExecutor` 线程池执行；各章节互不影响。
+3. **单章节失败隔离**：某章节 AI 调用失败（如 429）只把该切片标记为 `failed/retryable`，写入 `failedChunks`，不触发"拆批重发"之类的放大重试；任务照常完成，用户可在结果页"重审失败切片"单独补审。
+4. **收敛参数**：`temperature=0`、`top_p=1`、`max_tokens=8192`、`seed=sha1(taskId+chunkIdx+0)` 取前 8 字节，保证同任务可复现、跨模型可对比。
 5. **结构化输出**：OpenAI 兼容协议走 `response_format=json_schema`，Anthropic 走 `tool_use+tool_choice`，强制模型在解码阶段就生成合法 JSON。
-6. **prompt 缓存**：Anthropic 在 system 块加 `cache_control={type:ephemeral}`；OpenAI 兼容协议自动缓存 ≥1024 token 前缀。同签名批次共享 system prompt，缓存命中率高。
+6. **文档级综合审查**：所有章节审完后，若场景含 `rule_type=document_specific` 规则，再用"章节目录 + 各章节摘要"跑一次文档级综合调用。
 
-### 模型档位配置（当前方案 A）
-
-`ModelTier`（`backend/src/main/java/com/aireview/review/ModelTier.java`）按 `provider + modelKey` 正则硬编码档位判定，决定每次批处理的 `user_budget` 和 `max_chunks_per_batch`：
-
-| 档位 | 识别规则 | user_budget | 单批 chunk 上限 |
-|---|---|---|---|
-| **PREMIUM**（旗舰） | gpt-4o / claude-sonnet-4 / claude-opus-4 / qwen-max / kimi-k2（非思维版） | 24K | 8 |
-| **MID**（中档） | deepseek-v3 / qwen-plus / glm-4（非思维版）/ gpt-4-turbo / gpt-4o-mini | 18K | 6 |
-| **LIGHT**（轻量/兜底） | qwen-turbo / glm-3.5 / 其它未识别的自定义模型 | 10K | 4 |
-| **THINKING**（思维） | 任何 `ThinkingModeDetector` 命中的模型（GLM-4.5+ / Kimi-K2.5+ / deepseek-r1 等） | 10K | 3 |
-
-> 选择标准受 **max_output_tokens（多数模型 8K）** 约束：单批 `chunk 数 × 单 chunk 输出 (~1K) ≤ 输出预算`。chunk 数是硬限制，user_budget 只是装得下这么多 chunk 的输入空间。
-
-**未来升级方案 B（按需启用）**：
-
-如果用户需要针对自己接入的模型微调批处理参数，可以升级到方案 B：
-
-1. 在 `ai_model_config` 表新增 `effective_user_budget INT` 与 `max_chunks_per_batch INT` 字段（可为 NULL）；
-2. 前端模型管理页对应增加输入框；
-3. `ModelTier.detect()` 改为先读 DB 字段，未配置时再回退到当前正则判定；
-4. 同步在 `AiModelConfigDTO` 暴露这两个字段供前端读写。
-
-方案 A 的代码已经写得便于演进——`ModelTier.detect(AiModelConfig)` 是唯一入口，方案 B 只需要在它内部加一段 DB 字段优先逻辑，业务代码不动。
+> **历史说明**：旧版曾用 `ChunkBatchPlanner`（按规则签名 + token 预算把多切片打包成批）+ 非思维模型双采样 + 校准波动态调整 + 批失败拆回单切片重发的"批处理 + 采样收敛"方案。该方案在模型提供方限流（HTTP 429）时，会因"双采样翻倍调用 + 批失败瞬间拆成大量单切片重发"形成"越限流越猛打"的失败风暴，导致大量切片审查失败。现已改为上述逐章节单次调用方案；`ChunkBatchPlanner`、`ModelTier`、`RuleParser.buildBatchStructuredSystemPrompt`、`ReviewResultSchema.batchSchema()` 等批处理类已不再被审查管线调用（暂保留代码，无业务影响）。
 
 ### 角色权限
 
@@ -290,14 +263,14 @@ docker compose up -d --build    # 重新构建
 | jwt.refresh-token-expiration | 604800000 | Refresh Token 有效期（7天） |
 | review.chunk.max-tokens | 25600 | 每个文档切片最大 Token 数（章节超长时按段落再分） |
 | review.chunk.overlap-tokens | 0 | 切片之间的重叠 token 数 |
-| review.parallel.chunk-concurrency | 6 | 单任务并行处理的 batch 数 |
-| review.retry.max-attempts | 4 | AI 调用失败重试次数（4xx 立即失败，5xx/429 指数退避） |
-| review.retry.interval-ms | 1000 | 重试初始间隔（指数退避：1s → 2s → 4s） |
+| review.parallel.chunk-concurrency | 6 | 单任务并行审查的章节切片数 |
+| review.retry.max-attempts | 4 | AI 调用失败重试次数（4xx 立即失败；5xx 指数退避；429 额外尊重 `Retry-After` 头并采用更陡退避，封顶 60s） |
+| review.retry.interval-ms | 1000 | 重试初始间隔（5xx 退避 1s→2s→4s；429 退避 2s→4s→8s 并不低于 `Retry-After`） |
 | review.prompts.path | ./prompts/prompts/prompts.json | v2 提示词迁移源文件 |
 | async.core-pool-size | 4 | 异步线程池核心线程数（任务级） |
 | async.max-pool-size | 8 | 异步线程池最大线程数（任务级） |
 
-> **收敛常量**（不开放配置，写死在 `ReviewService` 顶部）：`temperature=0`、`top_p=1`、`max_tokens=8192`、规则段 token 预算 `RULE_BUDGET_TOKENS=6000`、非思维模型采样数 `NON_THINKING_SAMPLES=2`。这些值是"跨模型可对比"的契约本身，调动一次会让历史 `ai_result` 与新结果失去可比性，因此不放配置文件。
+> **收敛常量**（不开放配置，写死在 `ReviewService` 顶部）：`temperature=0`、`top_p=1`、`max_tokens=8192`、规则段 token 预算 `RULE_BUDGET_TOKENS=6000`。每章节单次调用（不再双采样）。这些值是"跨模型可对比"的契约本身，调动一次会让历史 `ai_result` 与新结果失去可比性，因此不放配置文件。
 
 ### 审查结果字段说明
 
@@ -312,10 +285,9 @@ docker compose up -d --build    # 重新构建
 | `confidenceCounts` | 按 `confidence`（high/needs_review/single/single_passthrough）的分桶计数 |
 | `passedRuleCoverage` | 各 `rule_code` 在 `passed_items` 中的命中次数（覆盖率指标） |
 | `failedChunks` / `failedChunkCount` | 因 AI 调用失败而保留的切片，可在 UI 中点击重审 |
-| `modelName` / `modelKey` / `modelTier` | 任务使用的模型与档位（PREMIUM/MID/LIGHT/THINKING），用于跨模型对比时归类 |
+| `modelName` / `modelKey` | 任务使用的模型，用于跨模型对比时归类 |
 | `crossModelEligible` | `false` 表示思维模型，不应参与跨模型对比 |
-| `samplingStrategy` | `double`（非思维）/ `single`（思维） |
-| `batchTotalCount` / `batchFallbackCount` / `batchFallbacks` | 批处理统计：总批次数、降级批次数、降级详情（含 batchId、chunks、reason、extraCalls） |
+| `samplingStrategy` | 固定为 `single`（逐章节方案每章节单次调用） |
 
 `allIssues[i]` 字段：
 
@@ -324,6 +296,5 @@ docker compose up -d --build    # 重新构建
 | `location` / `description` / `suggestion` / `rule` / `rule_code` / `evidence` | 与 prompt schema 完全一致；`rule_code` 在 manifest 之外的非法编号会被丢弃 |
 | `severity` / `category` | 强制映射到枚举；无法判断 → `medium` / `其他` |
 | `fingerprint` | `sha1(归一化location + "|" + rule_code)`，跨切片去重的主键 |
-| `confidence` | `high`（多次采样都命中或跨切片重复）/ `needs_review`（仅部分采样命中）/ `single`（思维模型单采样）|
-| `agreement` | 当 `confidence=needs_review` 时给出"命中/采样"比例，例如 `1/2` |
+| `confidence` | `single`（单章节单次调用的默认值）；跨章节重复命中同一 fingerprint 时在 `aggregateResults` 中升为 `high` |
 | `occurrences` | 跨切片去重后的命中次数 |

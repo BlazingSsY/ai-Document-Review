@@ -11,16 +11,14 @@ import com.aireview.entity.RuleCheck;
 import com.aireview.repository.ReviewAuditLogMapper;
 import com.aireview.repository.ReviewTaskMapper;
 import com.aireview.repository.RuleCheckMapper;
-import com.aireview.review.ChunkBatchPlanner;
-import com.aireview.review.ModelTier;
 import com.aireview.review.ReviewResultSchema;
 import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.util.ChapterReferenceResolver;
 import com.aireview.util.ChunkUtils;
+import com.aireview.util.DocumentSourceMapper;
 import com.aireview.util.RuleDispatcher;
 import com.aireview.util.RuleParser;
 import com.aireview.util.WordParser;
-import com.alibaba.fastjson2.JSONObject;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -103,6 +101,9 @@ public class ReviewService {
     @Value("${review.parallel.chunk-concurrency}")
     private int chunkConcurrency;
 
+    @Value("${review.dispatch.basic-only-max-chapter:6}")
+    private int basicOnlyMaxChapter;
+
     /**
      * 收敛性审查的统一参数。这些值不放配置是因为它们是「跨模型收敛」契约本身：
      * 改一动就会让历史 ai_result 与新结果失去可比性，所以集中放在代码里。
@@ -112,8 +113,6 @@ public class ReviewService {
     private static final int CONVERGENCE_MAX_TOKENS = 8192;
     /** 单切片 prompt 中规则部分的硬上限。超过则按 rule_code asc 截断。 */
     private static final int RULE_BUDGET_TOKENS = 6000;
-    /** 非思维模型的采样次数。两次种子不同，按 fingerprint 交集做高置信、对称差做"待复核"。 */
-    private static final int NON_THINKING_SAMPLES = 2;
 
     /**
      * Submit a review task: upload the document and start async processing.
@@ -462,7 +461,7 @@ public class ReviewService {
                 final int displayChunk = chunkNumber;
                 final ChunkUtils.ChunkResult chunk = chunks.get(chunkIdx);
                 final RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
-                        chunk.getLabel(), chunk.getContent(), preparedRules);
+                        chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter);
 
                 CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
                     long startNs = System.nanoTime();
@@ -614,7 +613,7 @@ public class ReviewService {
             for (int i = 0; i < chunks.size(); i++) {
                 ChunkUtils.ChunkResult chunk = chunks.get(i);
                 RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
-                        chunk.getLabel(), chunk.getContent(), preparedRules);
+                        chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter);
                 dispatches.add(dispatch);
 
                 Map<String, Object> dispatchEntry = new LinkedHashMap<>();
@@ -628,71 +627,91 @@ public class ReviewService {
             saveChunkDebugInfo(taskId, task.getFileName(), task.getSelectedModel(), runStamp,
                     chapters, chunks, chunkDispatchTraces);
 
-            // 5b. 批处理：按规则签名分组 + token 预算装箱，一次 AI 调用审查多个切片
+            // 5b. 逐章节并行审查：每个章节切片 = 一次独立 AI 调用，单元内容为
+            //     「命中的规则（system prompt）+ 本章节切片 + 本章节引用到的其他章节切片（user message）」。
             //
-            // 设计要点（详见 README "审查管线 - 批处理与采样" 章节）：
-            //   1. ModelTier 决定单批 user 预算和 chunk 数上限；
-            //   2. ChunkBatchPlanner 把切片按签名分组、按预算装箱，输出 BatchPlan 列表；
-            //   3. 并发调度：父线程 Semaphore 控制单任务批并发，与之前 per-chunk 模式一致；
-            //   4. 校准波：先跑前 N 批，观察实际输出 token 占用率；
-            //      ratio < 50% → 后续批 chunk 数上限 +2 / ratio > 80% → -1，重新打包剩余切片；
-            //   5. 兜底：批输出缺 chunk_id 或解析失败 → 该批拆回单切片重发，并 WebSocket 提示。
+            // 设计要点：
+            //   1. 不再做批处理打包/采样翻倍/批兜底重发 —— 这些在限流(429)场景下会放大调用量、
+            //      形成「越限流越猛打」的失败风暴。改为每章节单次调用，调用量与章节数严格 1:1。
+            //   2. 跨章节引用上下文由 reviewSingleChunk → ChapterReferenceResolver 自动附加。
+            //   3. 并发调度：父线程 Semaphore 控制单任务章节并发（与失败重审路径一致）；
+            //      单章节失败只标记为可重试切片，不影响其他章节，事后可「重审失败切片」。
             int totalChunks = chunks.size();
-            ModelTier tier = ModelTier.detect(modelConfig);
-            int batchConcurrency = Math.max(1, Math.min(chunkConcurrency, totalChunks));
-            int sampleCount = ThinkingModeDetector.isThinking(modelConfig) ? 1 : NON_THINKING_SAMPLES;
-
-            List<ChunkBatchPlanner.BatchPlan> initialPlan = ChunkBatchPlanner.plan(
-                    chunks, dispatches, tier, /*adaptiveCap*/ -1);
-            log.info("Batch planning: task={}, tier={}, totalChunks={}, batches={}, sampleCount={}",
-                    taskId, tier, totalChunks, initialPlan.size(), sampleCount);
+            int effectiveConcurrency = Math.max(1, Math.min(chunkConcurrency, totalChunks));
+            log.info("Starting per-chapter parallel review: task={}, chapters/chunks={}, concurrency={}",
+                    taskId, totalChunks, effectiveConcurrency);
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                    "已规划 " + initialPlan.size() + " 个批次（模型档位 " + tier
-                            + "，单批最多 " + tier.maxChunksPerBatch() + " 片，采样 "
-                            + sampleCount + " 次）", 30);
+                    "开始逐章节并行审查，共 " + totalChunks + " 个章节切片（并发度 "
+                            + effectiveConcurrency + "）...", 35);
 
             @SuppressWarnings({"unchecked", "rawtypes"})
             final Map<String, Object>[] orderedResults = new Map[totalChunks];
             AtomicInteger completedChunkCount = new AtomicInteger(0);
-            Semaphore taskSlots = new Semaphore(batchConcurrency);
-            List<Map<String, Object>> batchFallbacks = Collections.synchronizedList(new ArrayList<>());
-            // 滑动窗口收集每批的输出占用率，用于动态调整 chunk 数上限
-            List<Double> observedRatios = Collections.synchronizedList(new ArrayList<>());
+            Semaphore taskSlots = new Semaphore(effectiveConcurrency);
+            List<CompletableFuture<Void>> chunkFutures = new ArrayList<>(totalChunks);
 
-            // 校准波：当总批次 > 3 时，先跑前 ⌈total/3⌉ 批观察输出占用率，再决定是否调高/调低 chunk 数。
-            // 总批次少时直接一次跑完（动态调整无意义）。
-            int calibrationCount = initialPlan.size() > 3 ? Math.max(2, initialPlan.size() / 3) : initialPlan.size();
-            List<ChunkBatchPlanner.BatchPlan> wave1 = initialPlan.subList(0, calibrationCount);
-            List<ChunkBatchPlanner.BatchPlan> remaining = new ArrayList<>(
-                    initialPlan.subList(calibrationCount, initialPlan.size()));
+            for (int i = 0; i < totalChunks; i++) {
+                if (cancelledTasks.contains(taskId)) break;
+                try {
+                    taskSlots.acquire();
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (cancelledTasks.contains(taskId)) {
+                    taskSlots.release();
+                    break;
+                }
 
-            runBatchWave(wave1, orderedResults, chunks, dispatches, chapters, modelConfig,
-                    taskId, taskSlots, completedChunkCount, totalChunks,
-                    observedRatios, batchFallbacks, sampleCount, /*wave*/ 1);
+                final int chunkIdx = i;
+                final int displayChunk = i + 1;
+                final ChunkUtils.ChunkResult chunk = chunks.get(i);
+                final RuleDispatcher.DispatchResult dispatch = dispatches.get(i);
 
-            // 动态调整：根据已观察到的输出占用率决定剩余批的 chunk 数上限
-            if (!remaining.isEmpty()) {
-                int newCap = adaptChunkCap(tier, observedRatios);
-                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                        "校准波完成（平均输出占用率 " + percentStr(avg(observedRatios))
-                                + "），剩余 " + remainingChunkCount(remaining) + " 片以单批最多 "
-                                + newCap + " 片继续审查", 55);
-                // 收集剩余 chunk 索引并按新 cap 重新打包
-                List<Integer> remainingIdx = new ArrayList<>();
-                for (ChunkBatchPlanner.BatchPlan b : remaining) remainingIdx.addAll(b.getChunkIndices());
-                List<ChunkBatchPlanner.BatchPlan> wave2 = ChunkBatchPlanner.replanRemaining(
-                        chunks, dispatches, remainingIdx, tier, newCap, calibrationCount + 1);
-                runBatchWave(wave2, orderedResults, chunks, dispatches, chapters, modelConfig,
-                        taskId, taskSlots, completedChunkCount, totalChunks,
-                        observedRatios, batchFallbacks, sampleCount, /*wave*/ 2);
+                CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
+                    long startNs = System.nanoTime();
+                    Map<String, Object> result;
+                    try {
+                        result = reviewSingleChunk(chunkIdx, totalChunks, chunk, dispatch,
+                                chapters, modelConfig, taskId);
+                        long elapsedMs = elapsedMs(startNs);
+                        result.put("elapsedMs", elapsedMs);
+                        int done = completedChunkCount.incrementAndGet();
+                        log.info("Chapter review completed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}",
+                                taskId, displayChunk, totalChunks, chunk.getLabel(), chunk.getEstimatedTokens(),
+                                dispatch.getAppliedRuleNames().size(), elapsedMs);
+                        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                "章节审查完成 " + displayChunk + "/" + totalChunks + " [" + chunk.getLabel()
+                                        + "]，tokens=" + chunk.getEstimatedTokens()
+                                        + "，规则=" + dispatch.getAppliedRuleNames().size()
+                                        + "，耗时=" + elapsedMs + "ms (" + done + "/" + totalChunks + ")",
+                                35 + (int) ((double) done / totalChunks * 55));
+                    } catch (Exception e) {
+                        long elapsedMs = elapsedMs(startNs);
+                        result = buildFailedChunkResult(chunkIdx, totalChunks, chunk, dispatch, e, elapsedMs);
+                        int done = completedChunkCount.incrementAndGet();
+                        log.warn("Chapter review failed: task={}, chunk={}/{}, title='{}', tokens={}, rules={}, elapsedMs={}, reason={}",
+                                taskId, displayChunk, totalChunks, chunk.getLabel(), chunk.getEstimatedTokens(),
+                                dispatch.getAppliedRuleNames().size(), elapsedMs, e.getMessage(), e);
+                        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                "章节审查失败 " + displayChunk + "/" + totalChunks + " [" + chunk.getLabel()
+                                        + "]，原因：" + e.getMessage() + "（可在完成后重审失败切片）",
+                                35 + (int) ((double) done / totalChunks * 55));
+                    } finally {
+                        taskSlots.release();
+                    }
+                    orderedResults[chunkIdx] = result;
+                }, chunkReviewExecutor);
+                chunkFutures.add(fut);
             }
+            CompletableFuture.allOf(chunkFutures.toArray(new CompletableFuture[0])).join();
 
             if (cancelledTasks.remove(taskId)) {
                 log.info("Review task {} cancelled during processing", taskId);
                 return;
             }
 
-            // 按原顺序收集结果；被取消跳过/批失败但兜底也未补回的切片位置为 null
+            // 按原章节顺序收集结果；被取消而未执行的切片位置为 null，跳过
             List<Map<String, Object>> chunkResults = new ArrayList<>(totalChunks);
             for (Map<String, Object> r : orderedResults) {
                 if (r != null) chunkResults.add(r);
@@ -733,13 +752,12 @@ public class ReviewService {
             // 在结果里冻结模型的可对比性，避免历史任务在跨模型对比 UI 里被误算进来
             boolean crossModelEligible = !ThinkingModeDetector.isThinking(modelConfig);
             aggregatedResult.put("crossModelEligible", crossModelEligible);
-            aggregatedResult.put("samplingStrategy", crossModelEligible ? "double" : "single");
+            // 逐章节方案每章节单次调用，统一标记为 single 采样
+            aggregatedResult.put("samplingStrategy", "single");
             aggregatedResult.put("modelName", modelConfig.getModelName());
             aggregatedResult.put("modelKey", modelConfig.getModelKey());
-            aggregatedResult.put("modelTier", tier.name());
-            aggregatedResult.put("batchFallbacks", batchFallbacks);
-            aggregatedResult.put("batchTotalCount", initialPlan.size());
-            aggregatedResult.put("batchFallbackCount", batchFallbacks.size());
+            aggregatedResult.put("originalSources", buildOriginalSources(chapters, chunks));
+            aggregatedResult.put("sourceTextMode", "structured_json_markdown_review_html_display");
 
             // 6.5 Persist the aggregated AI result to ./output/审查结果_<file>_<model>_<ts>.json
             saveAiResultToFile(taskId, task.getFileName(), task.getSelectedModel(), runStamp,
@@ -795,7 +813,11 @@ public class ReviewService {
                 m.put("title", ch.getTitle().isBlank() ? "(前言/无标题)" : ch.getTitle());
                 m.put("estimatedTokens", ChunkUtils.estimateTokens(ch.getFullText()));
                 m.put("contentLength", ch.getContent().length());
-                m.put("content", ch.getContent());          // full content
+                m.put("content", ch.getContent());          // backward-compatible Markdown
+                m.put("plainText", ch.getPlainText());
+                m.put("reviewMarkdown", ch.getContent());
+                m.put("html", ch.getHtml());
+                m.put("nodes", DocumentSourceMapper.toStructuredNodes(ch.getNodes()));
                 chapterList.add(m);
             }
             debug.put("chapters", chapterList);
@@ -809,7 +831,10 @@ public class ReviewService {
                 m.put("label", chunk.getLabel());
                 m.put("estimatedTokens", chunk.getEstimatedTokens());
                 m.put("contentLength", chunk.getContent().length());
-                m.put("content", chunk.getContent());       // full content
+                m.put("content", chunk.getContent());       // backward-compatible Markdown
+                m.put("reviewMarkdown", chunk.getContent());
+                m.put("source", DocumentSourceMapper.toChunkSource(
+                        chunk, i + 1, "debug_chunk"));
                 if (dispatchTraces != null && i < dispatchTraces.size()) {
                     Map<String, Object> trace = dispatchTraces.get(i);
                     m.put("appliedRules", trace.get("appliedRules"));
@@ -959,13 +984,7 @@ public class ReviewService {
      */
     private String buildPromptForRules(List<RuleDispatcher.PreparedRule> rulesForChunk) {
         if (rulesForChunk == null || rulesForChunk.isEmpty()) {
-            // 无命中规则：仍然走结构化路径，让模型回传规范 JSON 而不是自由文本。
-            RuleParser.RuleEntry placeholder = new RuleParser.RuleEntry(
-                    "R-DEFAULT-001",
-                    "通用文档质量轻量审查",
-                    "本片段未命中任何已配置规则。仅基于通用文档质量要求（错别字、引用一致性、字段完整性等）做轻量审查；"
-                            + "若没有问题，请保持 issues 为空数组，并在 summary 中说明本切片未命中规则。");
-            return RuleParser.buildStructuredSystemPrompt(List.of(placeholder));
+            return RuleParser.buildStructuredSystemPrompt(List.of(builtInQualityRule()));
         }
 
         // 转 RuleEntry + 缺失编号自动补齐
@@ -989,6 +1008,7 @@ public class ReviewService {
             log.info("Rule budget triggered: chunk rules trimmed from {} → {} (cap={} tokens)",
                     entries.size(), kept.size(), RULE_BUDGET_TOKENS);
         }
+        kept.add(0, builtInQualityRule());
         return RuleParser.buildStructuredSystemPrompt(kept);
     }
 
@@ -1117,318 +1137,6 @@ public class ReviewService {
         return sb.toString();
     }
 
-    // ------------------------------------------------------------------
-    // 批处理：单波执行 / 单批处理 / 动态调整辅助
-    // ------------------------------------------------------------------
-
-    /** 单波批处理：父线程 Semaphore 限并发，runnable 内做 chunk 兜底重发，不阻断其他批。 */
-    private void runBatchWave(List<ChunkBatchPlanner.BatchPlan> wave,
-                               Map<String, Object>[] orderedResults,
-                               List<ChunkUtils.ChunkResult> chunks,
-                               List<RuleDispatcher.DispatchResult> dispatches,
-                               List<WordParser.Chapter> chapters,
-                               AiModelConfig modelConfig,
-                               String taskId,
-                               Semaphore taskSlots,
-                               AtomicInteger completedChunkCount,
-                               int totalChunks,
-                               List<Double> observedRatios,
-                               List<Map<String, Object>> batchFallbacks,
-                               int sampleCount,
-                               int waveNum) {
-        List<CompletableFuture<Void>> futures = new ArrayList<>(wave.size());
-        for (ChunkBatchPlanner.BatchPlan batch : wave) {
-            if (cancelledTasks.contains(taskId)) break;
-            try {
-                taskSlots.acquire();
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-            if (cancelledTasks.contains(taskId)) {
-                taskSlots.release();
-                break;
-            }
-            final ChunkBatchPlanner.BatchPlan fb = batch;
-            CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
-                long startNs = System.nanoTime();
-                try {
-                    BatchOutcome outcome = reviewSingleBatch(
-                            fb, chunks, dispatches, chapters, modelConfig, taskId, sampleCount);
-                    long elapsedMs = elapsedMs(startNs);
-                    // 1) 成功命中的切片直接回填
-                    outcome.chunkResults.forEach((idx, res) -> {
-                        res.put("elapsedMs", elapsedMs);
-                        res.put("batchId", fb.getBatchId());
-                        orderedResults[idx] = res;
-                    });
-                    // 2) 输出占用率入观察队列（用于校准波后动态调整）
-                    observedRatios.add(outcome.outputRatio);
-                    // 3) 缺失 chunk_id 走单切片兜底
-                    if (!outcome.missingChunkIndices.isEmpty()) {
-                        Map<String, Object> fb1 = new LinkedHashMap<>();
-                        fb1.put("batchId", fb.getBatchId());
-                        fb1.put("chunks", outcome.missingChunkIndices.stream()
-                                .map(i -> i + 1).toList());
-                        fb1.put("reason", outcome.failureReason == null
-                                ? "输出 chunk_id 缺失" : outcome.failureReason);
-                        fb1.put("extraCalls", outcome.missingChunkIndices.size() * sampleCount);
-                        batchFallbacks.add(fb1);
-                        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                                "批 " + fb.getBatchId() + " 输出不完整，自动拆分为 "
-                                        + outcome.missingChunkIndices.size() + " 个单切片重审",
-                                Math.min(90, 30 + (int) ((double) completedChunkCount.get() / totalChunks * 60)));
-                        for (int idx : outcome.missingChunkIndices) {
-                            try {
-                                Map<String, Object> single = reviewSingleChunk(
-                                        idx, totalChunks, chunks.get(idx), dispatches.get(idx),
-                                        chapters, modelConfig, taskId);
-                                single.put("fallbackFromBatch", fb.getBatchId());
-                                orderedResults[idx] = single;
-                            } catch (Exception e) {
-                                orderedResults[idx] = buildFailedChunkResult(
-                                        idx, totalChunks, chunks.get(idx), dispatches.get(idx),
-                                        e, elapsedMs(startNs));
-                            }
-                        }
-                    }
-                    int done = completedChunkCount.addAndGet(fb.getChunkIndices().size());
-                    int progress = 30 + (int) ((double) done / totalChunks * 60);
-                    log.info("Batch wave={} completed: task={}, batch={}, chunks={}, outputRatio={}, elapsedMs={}",
-                            waveNum, taskId, fb.getBatchId(), fb.getChunkIndices().size(),
-                            percentStr(outcome.outputRatio), elapsedMs);
-                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                            "批 " + fb.getBatchId() + " 完成（" + fb.getChunkIndices().size()
-                                    + " 片，输出占用 " + percentStr(outcome.outputRatio)
-                                    + "，累计 " + done + "/" + totalChunks + "）",
-                            progress);
-                } catch (Exception e) {
-                    // 整批失败：对该批所有 chunk 走单切片兜底（不让一个批失败拖死所有切片）
-                    long elapsedMs = elapsedMs(startNs);
-                    log.warn("Batch wave={} failed; falling back to single-chunk: task={}, batch={}, reason={}",
-                            waveNum, taskId, fb.getBatchId(), e.getMessage(), e);
-                    Map<String, Object> recRec = new LinkedHashMap<>();
-                    recRec.put("batchId", fb.getBatchId());
-                    recRec.put("chunks", fb.getChunkIndices().stream().map(i -> i + 1).toList());
-                    recRec.put("reason", "批审查失败：" + e.getMessage());
-                    recRec.put("extraCalls", fb.getChunkIndices().size() * sampleCount);
-                    batchFallbacks.add(recRec);
-                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                            "批 " + fb.getBatchId() + " 审查失败，自动拆分为 "
-                                    + fb.getChunkIndices().size() + " 个单切片重审：" + e.getMessage(),
-                            Math.min(90, 30 + (int) ((double) completedChunkCount.get() / totalChunks * 60)));
-                    for (int idx : fb.getChunkIndices()) {
-                        try {
-                            Map<String, Object> single = reviewSingleChunk(
-                                    idx, totalChunks, chunks.get(idx), dispatches.get(idx),
-                                    chapters, modelConfig, taskId);
-                            single.put("fallbackFromBatch", fb.getBatchId());
-                            orderedResults[idx] = single;
-                        } catch (Exception e2) {
-                            orderedResults[idx] = buildFailedChunkResult(
-                                    idx, totalChunks, chunks.get(idx), dispatches.get(idx), e2, elapsedMs);
-                        }
-                    }
-                    completedChunkCount.addAndGet(fb.getChunkIndices().size());
-                } finally {
-                    taskSlots.release();
-                }
-            }, chunkReviewExecutor);
-            futures.add(fut);
-        }
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-    }
-
-    /** 批处理执行结果。 */
-    private static final class BatchOutcome {
-        final Map<Integer, Map<String, Object>> chunkResults; // chunkIdx → 已合并采样的 chunkResult
-        final List<Integer> missingChunkIndices;              // 模型未输出的 chunk_id 对应的原 chunkIdx
-        final double outputRatio;                             // 实际输出 token / 输出预算
-        final String failureReason;                           // 非空表示部分/整体失败的原因
-        BatchOutcome(Map<Integer, Map<String, Object>> chunkResults,
-                     List<Integer> missingChunkIndices, double outputRatio, String failureReason) {
-            this.chunkResults = chunkResults;
-            this.missingChunkIndices = missingChunkIndices;
-            this.outputRatio = outputRatio;
-            this.failureReason = failureReason;
-        }
-    }
-
-    /**
-     * 单批审查：装配批 prompt + chunk 分隔 user message → 采样 N 次 → 按 chunk_id 拆解 →
-     * 每个 chunk 按 fingerprint 合并采样。返回 BatchOutcome，调用方处理缺失 chunk_id 的兜底。
-     */
-    private BatchOutcome reviewSingleBatch(ChunkBatchPlanner.BatchPlan batch,
-                                            List<ChunkUtils.ChunkResult> chunks,
-                                            List<RuleDispatcher.DispatchResult> dispatches,
-                                            List<WordParser.Chapter> chapters,
-                                            AiModelConfig modelConfig,
-                                            String taskId,
-                                            int sampleCount) throws Exception {
-        List<Integer> chunkIdxs = batch.getChunkIndices();
-        // 1) 组装 chunk_id 列表（C-<idx+1>）和 user message
-        List<String> chunkIds = new ArrayList<>(chunkIdxs.size());
-        Map<Integer, Set<Integer>> supportingRefsByChunk = new LinkedHashMap<>();
-        StringBuilder userContent = new StringBuilder();
-        for (int idx : chunkIdxs) {
-            String cid = "C-" + (idx + 1);
-            chunkIds.add(cid);
-            ChunkUtils.ChunkResult chunk = chunks.get(idx);
-            userContent.append("===CHUNK ").append(cid).append("===\n");
-            userContent.append("章节: ").append(chunk.getLabel()).append("\n\n");
-            userContent.append(chunk.getContent());
-            Set<Integer> refIdx = ChapterReferenceResolver
-                    .findReferencedChapters(chunk.getContent(), chunk.getLabel(), chapters);
-            supportingRefsByChunk.put(idx, refIdx);
-            String supporting = ChapterReferenceResolver.renderSupportingContext(refIdx, chapters);
-            if (!supporting.isEmpty()) userContent.append(supporting);
-            userContent.append("\n\n");
-        }
-
-        // 2) 组装 batch system prompt（使用同签名的代表性 dispatch 即可，因为本批所有 chunk 同签名）
-        RuleDispatcher.DispatchResult sigDispatch = dispatches.get(chunkIdxs.get(0));
-        List<RuleParser.RuleEntry> entries = buildRuleEntriesForBatch(sigDispatch);
-        List<RuleParser.RuleEntry> kept = applyRuleBudget(entries, sigDispatch.getAppliedRules());
-        String systemPrompt = RuleParser.buildBatchStructuredSystemPrompt(kept, chunkIds);
-
-        // 3) 采样
-        List<JSONObject> sampleParsed = new ArrayList<>();
-        int totalActualOutputTokens = 0;
-        for (int s = 0; s < sampleCount; s++) {
-            long seed = stableSeed(taskId,
-                    Integer.parseInt(batch.getBatchId().substring(batch.getBatchId().lastIndexOf('-') + 1)),
-                    s);
-            AiCallOptions options = buildBatchConvergenceOptions(modelConfig, seed);
-            String aiResponse = callWithRetry(modelConfig, systemPrompt, userContent.toString(), options);
-            totalActualOutputTokens += ChunkUtils.estimateTokens(aiResponse);
-            Map<String, Object> parsed = tryParseAiJson(aiResponse);
-            if (parsed == null) {
-                // 该 sample 无法解析；记空，让后续合并按缺失处理
-                sampleParsed.add(null);
-                continue;
-            }
-            sampleParsed.add(new JSONObject(parsed));
-        }
-
-        // 4) 按 chunk_id 拆解每个采样
-        // sampleByChunk: chunkId → List<sample 子结果>
-        Map<String, List<Map<String, Object>>> sampleByChunk = new LinkedHashMap<>();
-        for (String cid : chunkIds) sampleByChunk.put(cid, new ArrayList<>());
-        for (JSONObject sample : sampleParsed) {
-            if (sample == null) continue;
-            Object chunksObj = sample.get("chunks");
-            if (!(chunksObj instanceof List<?>)) continue;
-            for (Object item : (List<?>) chunksObj) {
-                if (!(item instanceof Map<?, ?>)) continue;
-                @SuppressWarnings("unchecked")
-                Map<String, Object> entry = (Map<String, Object>) item;
-                String cid = String.valueOf(entry.get("chunk_id"));
-                if (sampleByChunk.containsKey(cid)) {
-                    sampleByChunk.get(cid).add(entry);
-                }
-            }
-        }
-
-        // 5) 每个 chunk 按 fingerprint 合并采样；采样为 0 的 chunk 进 missing 列表
-        Map<Integer, Map<String, Object>> chunkResults = new LinkedHashMap<>();
-        List<Integer> missing = new ArrayList<>();
-        for (int idx : chunkIdxs) {
-            String cid = "C-" + (idx + 1);
-            List<Map<String, Object>> chunkSamples = sampleByChunk.get(cid);
-            if (chunkSamples.isEmpty()) {
-                missing.add(idx);
-                continue;
-            }
-            Map<String, Object> merged = mergeSamples(chunkSamples, chunks.get(idx).getLabel());
-            Map<String, Object> chunkResult = new LinkedHashMap<>();
-            chunkResult.put("chunk", idx + 1);
-            chunkResult.put("chapterTitle", chunks.get(idx).getLabel());
-            chunkResult.put("totalChunks", chunks.size());
-            chunkResult.put("estimatedTokens", chunks.get(idx).getEstimatedTokens());
-            chunkResult.put("source", buildChunkSource(idx, chunks.get(idx)));
-            chunkResult.put("sourceRefs", buildChunkSourceRefs(idx, chunks.get(idx), supportingRefsByChunk.get(idx)));
-            chunkResult.put("appliedRules", dispatches.get(idx).getAppliedRuleNames());
-            chunkResult.put("samplingStrategy", sampleCount > 1 ? "double" : "single");
-            chunkResult.put("sampleCount", chunkSamples.size());
-            chunkResult.put("result", merged);
-            chunkResults.put(idx, chunkResult);
-        }
-
-        // 6) 输出占用率：实际输出 / (单批最大输出预算 × 采样次数)
-        //    单批最大输出预算按思维 16K / 非思维 8K 估算（与各 provider 默认相近）
-        int outputBudgetPerCall = ThinkingModeDetector.isThinking(modelConfig) ? 16_000 : 8_000;
-        double outputRatio = sampleCount == 0 ? 0.0
-                : (double) totalActualOutputTokens / ((long) outputBudgetPerCall * sampleCount);
-        String reason = missing.isEmpty() ? null : "输出 chunk_id 缺失：" + missing.size() + " 个";
-        return new BatchOutcome(chunkResults, missing, outputRatio, reason);
-    }
-
-    /** 从分发结果构造批 RuleEntry，缺 rule_code 时自动补 R-AUTO-NNN。 */
-    private List<RuleParser.RuleEntry> buildRuleEntriesForBatch(RuleDispatcher.DispatchResult dispatch) {
-        List<RuleParser.RuleEntry> entries = new ArrayList<>();
-        int autoSeq = 1;
-        for (RuleDispatcher.PreparedRule pr : dispatch.getAppliedRules()) {
-            String code = pr.getMetadata() != null ? pr.getMetadata().getRuleCode() : null;
-            if (code == null || code.isBlank()) {
-                code = "R-AUTO-" + String.format("%03d", autoSeq++);
-            }
-            entries.add(new RuleParser.RuleEntry(
-                    code,
-                    pr.getRule().getRuleName(),
-                    pr.getBody(),
-                    toCheckEntries(code, pr.getChecks())));
-        }
-        return entries;
-    }
-
-    /**
-     * 批量调用专用 options：在 {@link #buildConvergenceOptions} 基础上，
-     * 把 structuredSchema 换成 {@link ReviewResultSchema#batchSchema()}，并启用 prompt 缓存
-     * （Anthropic 加 cache_control，OpenAI 兼容自动命中）。
-     */
-    private AiCallOptions buildBatchConvergenceOptions(AiModelConfig modelConfig, long seed) {
-        boolean thinking = ThinkingModeDetector.isThinking(modelConfig);
-        AiCallOptions.AiCallOptionsBuilder b = AiCallOptions.builder()
-                .seed(seed)
-                .maxTokensOverride(thinking ? null : CONVERGENCE_MAX_TOKENS)
-                .structuredSchema(com.alibaba.fastjson2.JSON.parseObject(
-                        com.alibaba.fastjson2.JSON.toJSONString(ReviewResultSchema.batchSchema())))
-                .structuredSchemaName(ReviewResultSchema.BATCH_SCHEMA_NAME)
-                .enablePromptCache(true);
-        if (!thinking) {
-            b.temperature(CONVERGENCE_TEMPERATURE).topP(CONVERGENCE_TOP_P);
-        }
-        return b.build();
-    }
-
-    /** 动态调整 chunk 数上限：ratio < 50% → +2（不超过 1.5× 档位上限）；> 80% → -1（不低于 2）。 */
-    private int adaptChunkCap(ModelTier tier, List<Double> observedRatios) {
-        double avg = avg(observedRatios);
-        int base = tier.maxChunksPerBatch();
-        int ceiling = Math.max(base + 1, (int) Math.round(base * 1.5));
-        int floor = Math.max(2, base - 2);
-        if (avg < 0.5) return Math.min(base + 2, ceiling);
-        if (avg > 0.8) return Math.max(base - 1, floor);
-        return base;
-    }
-
-    private static double avg(List<Double> xs) {
-        if (xs == null || xs.isEmpty()) return 0.0;
-        double sum = 0;
-        for (Double x : xs) if (x != null) sum += x;
-        return sum / xs.size();
-    }
-
-    private static int remainingChunkCount(List<ChunkBatchPlanner.BatchPlan> batches) {
-        int n = 0;
-        for (ChunkBatchPlanner.BatchPlan b : batches) n += b.getChunkIndices().size();
-        return n;
-    }
-
-    private static String percentStr(double ratio) {
-        return String.format("%.0f%%", Math.max(0.0, Math.min(1.0, ratio)) * 100);
-    }
-
     /**
      * 单个切片的完整审查流程：组装系统提示词、附加跨章节引用上下文、调用 AI、解析响应。
      *
@@ -1450,15 +1158,12 @@ public class ReviewService {
     }
 
     /**
-     * 单切片审查：装配 prompt + 跨章节引用上下文，按模型类型选择采样策略，
-     * 再把多次采样结果按 fingerprint 合并为最终 chunkResult。
+     * 单切片审查：装配 prompt + 跨章节引用上下文，每章节单次调用大模型，
+     * 把结果整理为 chunkResult。
      *
-     * <p>采样策略由 {@link #shouldDoubleSample(AiModelConfig)} 决定：
-     * <ul>
-     *   <li>思维模型：单次采样（temperature 服务器锁定，多次采样无收敛意义且翻倍成本）；</li>
-     *   <li>非思维模型：双次采样，seed 不同；fingerprint 交集 → confidence=high 直接采纳；
-     *       对称差 → confidence=needs_review 标灰待人工复核。</li>
-     * </ul>
+     * <p>逐章节方案每章节只调用一次（{@code sampleCount=1}）：调用量与章节数 1:1，
+     * 避免双采样在限流(429)场景下翻倍打满 provider 配额。{@link #mergeSamples} 在单采样
+     * 下会把所有 issue 标记 confidence=single，下游聚合再据跨章节复现情况提升置信度。
      */
     private Map<String, Object> reviewSingleChunk(int chunkIdx, int totalChunks,
                                                    ChunkUtils.ChunkResult chunk,
@@ -1477,7 +1182,7 @@ public class ReviewService {
                 + " (" + chunkNum + "/" + totalChunks + ")\n\n" + chunk.getContent()
                 + supporting;
 
-        int sampleCount = shouldDoubleSample(modelConfig) ? NON_THINKING_SAMPLES : 1;
+        int sampleCount = 1;
         List<Map<String, Object>> samples = new ArrayList<>();
         for (int s = 0; s < sampleCount; s++) {
             long seed = stableSeed(taskId, chunkIdx, s);
@@ -1492,6 +1197,7 @@ public class ReviewService {
             samples.add(parsed);
         }
         Map<String, Object> merged = mergeSamples(samples, chunk.getLabel());
+        enrichBuiltInQualityChecks(merged);
 
         Map<String, Object> chunkResult = new HashMap<>();
         chunkResult.put("chunk", chunkNum);
@@ -1500,16 +1206,114 @@ public class ReviewService {
         chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
         chunkResult.put("source", buildChunkSource(chunkIdx, chunk));
         chunkResult.put("sourceRefs", buildChunkSourceRefs(chunkIdx, chunk, refIdx));
-        chunkResult.put("appliedRules", dispatch.getAppliedRuleNames());
+        List<String> appliedRuleNames = new ArrayList<>();
+        appliedRuleNames.add(RuleDispatcher.BASIC_QUALITY_RULE_NAME);
+        for (String ruleName : dispatch.getAppliedRuleNames()) {
+            if (!RuleDispatcher.BASIC_QUALITY_RULE_NAME.equals(ruleName)) {
+                appliedRuleNames.add(ruleName);
+            }
+        }
+        chunkResult.put("appliedRules", appliedRuleNames);
+        chunkResult.put("reviewProfile", dispatch.getAppliedRules().isEmpty()
+                ? "basic_quality" : "rule_based");
         chunkResult.put("samplingStrategy", sampleCount > 1 ? "double" : "single");
         chunkResult.put("sampleCount", sampleCount);
         chunkResult.put("result", merged);
         return chunkResult;
     }
 
-    /** 思维模型走单采样（温度服务器锁定，多次采样不收敛）；其余走双采样。 */
-    private boolean shouldDoubleSample(AiModelConfig modelConfig) {
-        return !ThinkingModeDetector.isThinking(modelConfig);
+    private RuleParser.RuleEntry builtInQualityRule() {
+        return new RuleParser.RuleEntry(
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE,
+                RuleDispatcher.BASIC_QUALITY_RULE_NAME,
+                """
+                仅审查当前章节的文字表达质量，不审查工程字段完整性、试验项目完整性、
+                设备证书、试验条件、试验程序或标准符合性。
+                章节内容简短或只有一行不是问题，不得因篇幅短判定不通过。
+                下列三个检查项对当前章节始终适用，禁止判定为 N/A。
+                """,
+                basicQualityChecks());
+    }
+
+    private List<RuleParser.CheckEntry> basicQualityChecks() {
+        return List.of(
+                new RuleParser.CheckEntry(
+                        RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C001",
+                        "是否存在错别字、漏字、多字、重复词或明显标点错误",
+                        "未发现错别字、漏字、多字、重复词或明显标点错误",
+                        "其他",
+                        true),
+                new RuleParser.CheckEntry(
+                        RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C002",
+                        "语句是否通顺，是否存在语序不当、语病或明显歧义",
+                        "语句通顺、语义明确，不存在语序不当、语病或明显歧义",
+                        "逻辑一致性",
+                        true),
+                new RuleParser.CheckEntry(
+                        RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C003",
+                        "本章节内术语、名称和称谓是否一致",
+                        "本章节内相同对象的术语、名称和称谓保持一致",
+                        "术语一致性",
+                        true));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void enrichBuiltInQualityChecks(Map<String, Object> result) {
+        List<Map<String, Object>> checks = new ArrayList<>();
+        if (result.get("check_results") instanceof List<?> rawChecks) {
+            for (Object item : rawChecks) {
+                if (item instanceof Map<?, ?> raw) {
+                    checks.add((Map<String, Object>) raw);
+                }
+            }
+        }
+
+        Map<String, RuleParser.CheckEntry> metadata = new LinkedHashMap<>();
+        for (RuleParser.CheckEntry check : basicQualityChecks()) {
+            metadata.put(check.checkCode, check);
+        }
+
+        Map<String, Map<String, Object>> checksByCode = new LinkedHashMap<>();
+        for (Map<String, Object> check : checks) {
+            String checkCode = Objects.toString(check.get("check_code"), "");
+            if (!checkCode.isBlank()) {
+                checksByCode.putIfAbsent(checkCode, check);
+            }
+            RuleParser.CheckEntry entry = metadata.get(checkCode);
+            if (entry == null) continue;
+            enrichBuiltInQualityCheck(check, entry);
+        }
+
+        for (RuleParser.CheckEntry entry : metadata.values()) {
+            if (checksByCode.containsKey(entry.checkCode)) continue;
+            Map<String, Object> missing = new LinkedHashMap<>();
+            missing.put("check_code", entry.checkCode);
+            missing.put("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
+            missing.put("check_question", entry.question);
+            missing.put("status", "Review");
+            missing.put("reason", "模型未返回该基础文字质量检查项，已转为待复核。");
+            missing.put("evidence", "");
+            missing.put("missing_items", new ArrayList<>());
+            missing.put("suggestion", "");
+            missing.put("confidence", "needs_review");
+            enrichBuiltInQualityCheck(missing, entry);
+            checks.add(missing);
+        }
+        result.put("check_results", checks);
+    }
+
+    private void enrichBuiltInQualityCheck(Map<String, Object> check,
+                                           RuleParser.CheckEntry entry) {
+        check.put("ruleName", RuleDispatcher.BASIC_QUALITY_RULE_NAME);
+        check.put("ruleDescription", "所有章节均执行基础文字质量检查；基础章节不执行具体业务规则。");
+        check.put("passCriteria", entry.passCriteria);
+        check.putIfAbsent("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
+        check.putIfAbsent("check_question", entry.question);
+        if ("N/A".equals(normalizeCheckStatus(check.get("status")))) {
+            check.put("status", "Review");
+            check.put("confidence", "needs_review");
+            check.put("reason", "基础文字质量检查始终适用，模型返回“不适用”，已转为待复核。");
+        }
     }
 
     /**
@@ -1719,16 +1523,7 @@ public class ReviewService {
     }
 
     private Map<String, Object> buildChunkSource(int chunkIdx, ChunkUtils.ChunkResult chunk) {
-        Map<String, Object> source = new LinkedHashMap<>();
-        String text = chunk.getContent() == null ? "" : chunk.getContent();
-        source.put("blockId", "CHUNK-" + String.format("%03d", chunkIdx + 1));
-        source.put("chunk", chunkIdx + 1);
-        source.put("type", "document_chunk");
-        source.put("sectionPath", chunk.getLabel());
-        source.put("text", text);
-        source.put("textLength", text.length());
-        source.put("estimatedTokens", chunk.getEstimatedTokens());
-        return source;
+        return DocumentSourceMapper.toChunkSource(chunk, chunkIdx + 1, "document_chunk");
     }
 
     private List<Map<String, Object>> buildChunkSourceRefs(int chunkIdx, ChunkUtils.ChunkResult chunk) {
@@ -1768,16 +1563,18 @@ public class ReviewService {
      *   <li>4xx (except 429) → fail fast. These are permanent client-side errors
      *       (bad request, expired key, wrong model id) — retrying just wastes
      *       {@code retryIntervalMs × maxRetryAttempts} of wall-clock time.</li>
-     *   <li>429 / 5xx / network errors / transient response parsing failures →
+     *   <li>5xx / network errors / transient response parsing failures →
      *       retry with exponential backoff: {@code retryIntervalMs × 2^(attempt-1)},
      *       capped at 30s so a misconfigured {@code maxRetryAttempts=10} doesn't
      *       sleep for 8 minutes.</li>
+     *   <li>429 (rate limited) → wait the longer of the provider's {@code Retry-After}
+     *       header and a steeper exponential backoff ({@code retryIntervalMs × 2^attempt}),
+     *       capped at 60s. Provider rate-limit windows are ~minute-scale, so the old
+     *       1+2+4=7s budget couldn't outlast them and burned all attempts inside one
+     *       window — the dominant cause of the "大量切片审查失败" 429 storm.</li>
      *   <li>InterruptedException → propagate immediately, preserving interrupt
      *       status so task cancellation works.</li>
      * </ul>
-     *
-     * <p>With the defaults ({@code maxAttempts=4}, {@code intervalMs=1000}) the
-     * total backoff budget is 1+2+4=7s instead of the previous 4×6=24s.
      */
     private String callWithRetry(AiModelConfig config, String systemPrompt,
                                   String userContent) throws Exception {
@@ -1812,7 +1609,16 @@ public class ReviewService {
                         attempt, maxRetryAttempts, e.getMessage());
             }
             if (attempt < maxRetryAttempts) {
-                long sleepMs = Math.min(retryIntervalMs * (1L << (attempt - 1)), 30_000L);
+                long sleepMs;
+                if (lastException instanceof AiApiException ae && ae.getStatusCode() == 429) {
+                    // 429：尊重 Retry-After，并用更陡的退避抗住分钟级限流窗口（封顶 60s）
+                    long retryAfterMs = ae.getRetryAfterSeconds() > 0
+                            ? ae.getRetryAfterSeconds() * 1000L : 0L;
+                    long expoMs = retryIntervalMs * (1L << attempt);
+                    sleepMs = Math.min(Math.max(retryAfterMs, expoMs), 60_000L);
+                } else {
+                    sleepMs = Math.min(retryIntervalMs * (1L << (attempt - 1)), 30_000L);
+                }
                 try {
                     Thread.sleep(sleepMs);
                 } catch (InterruptedException ie) {
@@ -2271,11 +2077,97 @@ public class ReviewService {
         Map<String, Object> aiResult = task.getAiResult();
         if (aiResult == null) return null;
         Map<String, Object> enriched = new LinkedHashMap<>(aiResult);
+        enrichCheckMetadata(task.getScenarioId(), enriched);
         if (!enriched.containsKey("originalSources")) {
             enriched.put("originalSources", buildOriginalSources(task));
-            enriched.put("sourceTextMode", "original_word_document");
+            enriched.put("sourceTextMode", "structured_json_markdown_review_html_display");
         }
         return enriched;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void enrichCheckMetadata(Long scenarioId, Map<String, Object> aiResult) {
+        Object rawChecks = aiResult.get("allCheckResults");
+        if (scenarioId == null || !(rawChecks instanceof List<?> checkList) || checkList.isEmpty()) {
+            return;
+        }
+
+        List<Rule> rules = ruleService.getRulesByScenarioId(scenarioId);
+        List<Long> ruleIds = rules.stream()
+                .map(Rule::getId)
+                .filter(Objects::nonNull)
+                .toList();
+        if (ruleIds.isEmpty()) return;
+
+        Map<Long, Rule> rulesById = new LinkedHashMap<>();
+        Map<String, CheckMetadata> metadataByRuleCode = new LinkedHashMap<>();
+        for (Rule rule : rules) {
+            if (rule.getId() != null) rulesById.put(rule.getId(), rule);
+            String ruleCode = Objects.toString(rule.getRuleCode(), "");
+            if (!ruleCode.isBlank()) {
+                metadataByRuleCode.put(ruleCode, new CheckMetadata(
+                        Objects.toString(rule.getRuleName(), ""),
+                        ruleCode,
+                        Objects.toString(rule.getDescription(), ""),
+                        "",
+                        ""));
+            }
+        }
+
+        Map<String, CheckMetadata> metadataByCompositeKey = new LinkedHashMap<>();
+        Map<String, CheckMetadata> metadataByCheckCode = new LinkedHashMap<>();
+        for (RuleCheck ruleCheck : ruleCheckMapper.findActiveByRuleIds(ruleIds)) {
+            Rule rule = rulesById.get(ruleCheck.getRuleId());
+            String checkCode = Objects.toString(ruleCheck.getCheckCode(), "");
+            if (checkCode.isBlank()) continue;
+            String ruleCode = rule == null ? "" : Objects.toString(rule.getRuleCode(), "");
+            CheckMetadata metadata = new CheckMetadata(
+                    rule == null ? "" : Objects.toString(rule.getRuleName(), ""),
+                    ruleCode,
+                    rule == null ? "" : Objects.toString(rule.getDescription(), ""),
+                    Objects.toString(ruleCheck.getQuestion(), ""),
+                    Objects.toString(ruleCheck.getPassCriteria(), ""));
+            metadataByCompositeKey.put(ruleCode + "\u0000" + checkCode, metadata);
+            metadataByCheckCode.putIfAbsent(checkCode, metadata);
+        }
+
+        List<Map<String, Object>> enrichedChecks = new ArrayList<>();
+        for (Object item : checkList) {
+            if (!(item instanceof Map<?, ?> rawMap)) continue;
+            Map<String, Object> check = new LinkedHashMap<>((Map<String, Object>) rawMap);
+            String checkCode = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
+            String ruleCode = firstNonBlank(strField(check, "rule_code"), strField(check, "ruleCode"));
+            CheckMetadata metadata = metadataByCompositeKey.get(ruleCode + "\u0000" + checkCode);
+            if (metadata == null) metadata = metadataByCheckCode.get(checkCode);
+            if (metadata == null) metadata = metadataByRuleCode.get(ruleCode);
+            applyCheckMetadata(check, metadata);
+            enrichedChecks.add(check);
+        }
+        aiResult.put("allCheckResults", enrichedChecks);
+    }
+
+    private void applyCheckMetadata(Map<String, Object> check, CheckMetadata metadata) {
+        if (metadata == null) return;
+        if (strField(check, "ruleName").isBlank() && strField(check, "rule_name").isBlank()) {
+            check.put("ruleName", metadata.ruleName());
+        }
+        if (strField(check, "rule_code").isBlank() && strField(check, "ruleCode").isBlank()) {
+            check.put("rule_code", metadata.ruleCode());
+        }
+        if (strField(check, "ruleDescription").isBlank()
+                && strField(check, "rule_description").isBlank()) {
+            check.put("ruleDescription", metadata.ruleDescription());
+        }
+        if (strField(check, "check_question").isBlank() && strField(check, "question").isBlank()) {
+            check.put("check_question", metadata.checkQuestion());
+        }
+        if (strField(check, "passCriteria").isBlank() && strField(check, "pass_criteria").isBlank()) {
+            check.put("passCriteria", metadata.passCriteria());
+        }
+    }
+
+    private record CheckMetadata(String ruleName, String ruleCode, String ruleDescription,
+                                 String checkQuestion, String passCriteria) {
     }
 
     private List<Map<String, Object>> buildOriginalSources(ReviewTask task) {
@@ -2289,38 +2181,30 @@ public class ReviewService {
             List<WordParser.Chapter> chapters = firstRealIdx > 0
                     ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
                     : rawChapters;
-
-            for (int i = 0; i < chapters.size(); i++) {
-                WordParser.Chapter chapter = chapters.get(i);
-                String content = chapter.getContent() == null ? "" : chapter.getContent();
-                Map<String, Object> source = new LinkedHashMap<>();
-                source.put("sourceId", "CHAPTER-" + String.format("%03d", i + 1));
-                source.put("type", "original_chapter");
-                source.put("title", chapter.getTitle());
-                source.put("sectionPath", chapter.getTitle());
-                source.put("text", content);
-                source.put("textLength", content.length());
-                source.put("estimatedTokens", ChunkUtils.estimateTokens(chapter.getFullText()));
-                sources.add(source);
-            }
-
-            List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
-            for (int i = 0; i < chunks.size(); i++) {
-                ChunkUtils.ChunkResult chunk = chunks.get(i);
-                String content = chunk.getContent() == null ? "" : chunk.getContent();
-                Map<String, Object> source = new LinkedHashMap<>();
-                source.put("sourceId", "CHUNK-" + String.format("%03d", i + 1));
-                source.put("type", "original_chunk");
-                source.put("chunk", i + 1);
-                source.put("title", chunk.getLabel());
-                source.put("sectionPath", chunk.getLabel());
-                source.put("text", content);
-                source.put("textLength", content.length());
-                source.put("estimatedTokens", chunk.getEstimatedTokens());
-                sources.add(source);
-            }
+            return buildOriginalSources(
+                    chapters,
+                    ChunkUtils.chunkByChapters(chapters, maxChunkTokens));
         } catch (Exception e) {
             log.warn("Failed to build original source view for task {}: {}", task.getId(), e.getMessage());
+        }
+        return sources;
+    }
+
+    private List<Map<String, Object>> buildOriginalSources(
+            List<WordParser.Chapter> chapters,
+            List<ChunkUtils.ChunkResult> chunks) {
+        List<Map<String, Object>> sources = new ArrayList<>();
+        for (int i = 0; i < chapters.size(); i++) {
+            WordParser.Chapter chapter = chapters.get(i);
+            sources.add(DocumentSourceMapper.toChapterSource(
+                    chapter,
+                    i + 1,
+                    "CHAPTER-" + String.format("%03d", i + 1)));
+        }
+
+        for (int i = 0; i < chunks.size(); i++) {
+            sources.add(DocumentSourceMapper.toChunkSource(
+                    chunks.get(i), i + 1, "original_chunk"));
         }
         return sources;
     }

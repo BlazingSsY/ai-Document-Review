@@ -5,7 +5,11 @@ import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.xwpf.usermodel.*;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTAbstractNum;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTDecimalNumber;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTLvl;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTNumPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPrGeneral;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTc;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTVMerge;
@@ -31,20 +35,26 @@ public class WordParser {
     }
 
     /**
-     * A stable structural node in the parsed Word document.
+     * A stable structural node in the parsed Word document. Re-introduced so the RAG
+     * pipeline ({@code RagReviewService}) can split chapters into node-aligned blocks and
+     * render structured source provenance. The .docx parser populates these during its
+     * body-element walk; the legacy/.doc path leaves them empty and callers fall back to
+     * {@link Chapter#getContent()}.
      */
     public static class DocumentNode {
         private final String id;
-        private final String type;
+        private final String type;          // heading | paragraph | table | figure | chapter_title
         private final int nodeIndex;
         private final int headingLevel;
         private final String sectionPath;
         private final String text;
         private final String reviewText;
         private final String html;
+        private final TableData table;
 
-        private DocumentNode(String id, String type, int nodeIndex, int headingLevel,
-                             String sectionPath, String text, String reviewText, String html) {
+        DocumentNode(String id, String type, int nodeIndex, int headingLevel,
+                     String sectionPath, String text, String reviewText, String html,
+                     TableData table) {
             this.id = id;
             this.type = type;
             this.nodeIndex = nodeIndex;
@@ -53,6 +63,7 @@ public class WordParser {
             this.text = text;
             this.reviewText = reviewText;
             this.html = html;
+            this.table = table;
         }
 
         public String getId() { return id; }
@@ -63,34 +74,67 @@ public class WordParser {
         public String getText() { return text; }
         public String getReviewText() { return reviewText; }
         public String getHtml() { return html; }
+        public TableData getTable() { return table; }
+    }
+
+    public record TableCellData(int rowIndex, int columnIndex, String text,
+                                boolean header, int rowSpan, int colSpan) {
+    }
+
+    public record TableRowData(int rowIndex, List<TableCellData> cells) {
+        public TableRowData {
+            cells = cells == null ? List.of() : List.copyOf(cells);
+        }
+    }
+
+    public record TableData(int rowCount, int columnCount, List<TableRowData> rows) {
+        public TableData {
+            rows = rows == null ? List.of() : List.copyOf(rows);
+        }
+    }
+
+    /** Mutable draft collected during parsing, finalized into a {@link DocumentNode}. */
+    private record NodeDraft(String type, int headingLevel, String sectionPath,
+                             String text, String reviewText, String html, TableData table) {
+    }
+
+    private record TableRendering(String plainText, String markdown, String html,
+                                  TableData table) {
     }
 
     /**
-     * A document chapter with plain review text and browser-ready structured HTML.
+     * A document chapter identified by its heading-1 title and body text, plus
+     * browser-ready structured HTML and structural nodes for the RAG pipeline.
      */
     public static class Chapter {
         private final String id;
         private final String title;
         private final String content;
+        private final String plainText;
         private final String html;
         private final List<DocumentNode> nodes;
 
+        /** Legacy constructor: plain title + body; HTML derived from content, no nodes. */
         public Chapter(String title, String content) {
-            this("", title, content, buildLegacyHtml(content), List.of());
+            this("", title, content, content, buildLegacyHtml(content), List.of());
         }
 
-        private Chapter(String id, String title, String content,
-                        String html, List<DocumentNode> nodes) {
+        Chapter(String id, String title, String content, String plainText,
+                String html, List<DocumentNode> nodes) {
             this.id = id;
             this.title = title;
             this.content = content;
+            this.plainText = plainText;
             this.html = html;
-            this.nodes = List.copyOf(nodes);
+            this.nodes = nodes == null ? List.of() : List.copyOf(nodes);
         }
 
         public String getId() { return id; }
         public String getTitle() { return title; }
+        /** Markdown used as the model review input. */
         public String getContent() { return content; }
+        public String getReviewMarkdown() { return content; }
+        public String getPlainText() { return plainText; }
         public String getHtml() { return html; }
         public List<DocumentNode> getNodes() { return nodes; }
 
@@ -101,11 +145,121 @@ public class WordParser {
         }
     }
 
-    private record NodeDraft(String type, int headingLevel, String sectionPath,
-                             String text, String reviewText, String innerHtml) {
+    private static Chapter createChapter(int chapterNumber, String title,
+                                         List<NodeDraft> bodyNodes, int titleHeadingLevel) {
+        String chapterId = String.format("DOC-C%03d", chapterNumber);
+        String normalizedTitle = title == null ? "" : title.trim();
+        List<NodeDraft> drafts = new ArrayList<>();
+        if (!normalizedTitle.isBlank()) {
+            drafts.add(new NodeDraft(
+                    "chapter_title",
+                    Math.max(1, Math.min(6, titleHeadingLevel)),
+                    normalizedTitle,
+                    normalizedTitle,
+                    normalizedTitle,
+                    null,
+                    null));
+        }
+        drafts.addAll(bodyNodes);
+
+        List<DocumentNode> nodes = new ArrayList<>(drafts.size());
+        StringBuilder html = new StringBuilder();
+        StringBuilder reviewMarkdown = new StringBuilder();
+        StringBuilder plainText = new StringBuilder();
+        for (int i = 0; i < drafts.size(); i++) {
+            NodeDraft draft = drafts.get(i);
+            String nodeId = chapterId + "-N" + String.format("%04d", i + 1);
+            String nodeHtml = renderNodeHtml(nodeId, draft);
+            nodes.add(new DocumentNode(nodeId, draft.type(), i + 1, draft.headingLevel(),
+                    draft.sectionPath(), draft.text(), draft.reviewText(), nodeHtml, draft.table()));
+            html.append(nodeHtml);
+            if (!"chapter_title".equals(draft.type())
+                    && draft.reviewText() != null
+                    && !draft.reviewText().isBlank()) {
+                if (reviewMarkdown.length() > 0) reviewMarkdown.append("\n\n");
+                reviewMarkdown.append(draft.reviewText().trim());
+            }
+            if (!"chapter_title".equals(draft.type())
+                    && draft.text() != null
+                    && !draft.text().isBlank()) {
+                if (plainText.length() > 0) plainText.append("\n\n");
+                plainText.append(draft.text().trim());
+            }
+        }
+        return new Chapter(chapterId, normalizedTitle, reviewMarkdown.toString().trim(),
+                plainText.toString().trim(), html.toString(), nodes);
     }
 
-    private record TableRendering(String text, String html) {
+    private static NodeDraft paragraphNode(String sectionPath, String text) {
+        String normalized = text == null ? "" : text.trim();
+        return new NodeDraft("paragraph", 0, sectionPath, normalized, normalized, null, null);
+    }
+
+    private static NodeDraft headingNode(String sectionPath, int headingLevel, String text) {
+        String normalized = text == null ? "" : text.trim();
+        int level = Math.max(1, Math.min(6, headingLevel));
+        return new NodeDraft("heading", level, sectionPath, normalized,
+                "#".repeat(level) + " " + normalized, null, null);
+    }
+
+    private static NodeDraft figureNode(String sectionPath, String text) {
+        String normalized = text == null ? "[figure]" : text.trim();
+        return new NodeDraft("figure", 0, sectionPath, normalized, normalized, null, null);
+    }
+
+    private static NodeDraft tableNode(String sectionPath, TableRendering table) {
+        return new NodeDraft("table", 0, sectionPath, table.plainText(),
+                table.markdown(), table.html(), table.table());
+    }
+
+    private static String buildSectionPath(String chapterTitle,
+                                           NavigableMap<Integer, String> sectionHeadings) {
+        List<String> parts = new ArrayList<>();
+        if (chapterTitle != null && !chapterTitle.isBlank()) {
+            parts.add(chapterTitle.trim());
+        }
+        for (String heading : sectionHeadings.values()) {
+            if (heading != null && !heading.isBlank()
+                    && (parts.isEmpty() || !parts.get(parts.size() - 1).equals(heading.trim()))) {
+                parts.add(heading.trim());
+            }
+        }
+        return String.join(" > ", parts);
+    }
+
+    private static String renderNodeHtml(String nodeId, NodeDraft draft) {
+        String attributes = " id=\"" + nodeId + "\" data-node-id=\"" + nodeId
+                + "\" data-node-type=\"" + draft.type() + "\"";
+        if ("table".equals(draft.type())) {
+            return "<div" + attributes + " class=\"doc-node doc-table\">"
+                    + Objects.toString(draft.html(), "") + "</div>\n";
+        }
+        if ("chapter_title".equals(draft.type()) || "heading".equals(draft.type())) {
+            int level = Math.max(1, Math.min(6, draft.headingLevel()));
+            return "<h" + level + attributes + " class=\"doc-node doc-heading\">"
+                    + escapeHtml(draft.text()) + "</h" + level + ">\n";
+        }
+        String cssClass = "figure".equals(draft.type())
+                ? "doc-node doc-figure"
+                : "doc-node doc-paragraph";
+        return "<p" + attributes + " class=\"" + cssClass + "\">"
+                + escapeHtml(draft.text()).replace("\n", "<br>") + "</p>\n";
+    }
+
+    /** Wrap plain/inline-HTML content into a minimal browser-ready HTML fragment. */
+    private static String buildLegacyHtml(String content) {
+        if (content == null || content.isBlank()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (String line : content.split("\n", -1)) {
+            String t = line.strip();
+            if (t.isEmpty()) continue;
+            if (t.startsWith("<")) {
+                sb.append(line).append("\n");           // pass raw HTML (e.g. tables) through
+            } else {
+                sb.append("<p>").append(escapeHtml(t)).append("</p>\n");
+            }
+        }
+        return sb.toString().trim();
     }
 
     /**
@@ -214,15 +368,15 @@ public class WordParser {
                 List<NodeDraft> nodes = new ArrayList<>();
                 for (IBodyElement element : bodyElements) {
                     if (element instanceof XWPFParagraph p) {
-                        String t = withNumbering(p, numberingFormatter);
+                        String t = withNumbering(p, numberingFormatter, document.getStyles());
                         if (t != null && !t.isBlank()) {
                             nodes.add(paragraphNode("", t));
                         } else if (hasDrawingOrPicture(p)) {
-                            nodes.add(figureNode("", "[图表]"));
+                            nodes.add(figureNode("", "[figure]"));
                         }
                     } else if (element instanceof XWPFTable tbl) {
-                        TableRendering table = renderTable(tbl, numberingFormatter);
-                        nodes.add(tableNode("", table));
+                        nodes.add(tableNode("", convertTable(
+                                tbl, numberingFormatter, document.getStyles())));
                     }
                 }
                 chapters.add(createChapter(1, "", nodes, 1));
@@ -232,6 +386,40 @@ public class WordParser {
             int splitLevel = firstHeadingLevel;
             log.info("Splitting document by H{} (first heading level = chapter boundary)", splitLevel);
 
+            // Pre-scan for appendix markers to initialize level-0 counters.
+            // This is ONLY needed for documents where appendix main titles do NOT use the numbering system.
+            // If the appendix style defines numbering (numPr in style definition), the numbering formatter
+            // will handle it automatically through style inheritance, and we should NOT manually set counters.
+            Map<BigInteger, Integer> appendixNumIdToLetterIndex = scanForAppendixNumIds(document, bodyElements);
+
+            // Check if the appendix marker style (120) defines its own numbering.
+            // If it does, we should NOT use manual counter initialization because it would conflict.
+            boolean appendixStyleHasOwnNumbering = false;
+            XWPFStyles styles = document.getStyles();
+            if (styles != null) {
+                XWPFStyle style120 = styles.getStyle("120");
+                if (style120 != null) {
+                    try {
+                        CTStyle ctStyle = style120.getCTStyle();
+                        CTPPrGeneral pPr = ctStyle.getPPr();
+                        if (pPr != null && pPr.getNumPr() != null && pPr.getNumPr().getNumId() != null) {
+                            appendixStyleHasOwnNumbering = true;
+                            log.info("Appendix marker style (120) defines its own numbering, skipping manual counter initialization");
+                        }
+                    } catch (Exception e) {
+                        // ignore
+                    }
+                }
+            }
+
+            if (!appendixStyleHasOwnNumbering && !appendixNumIdToLetterIndex.isEmpty()) {
+                log.info("Detected appendix numbering IDs that need level-0 initialization: {}", appendixNumIdToLetterIndex);
+            }
+
+            // Current appendix letter index (1=A, 2=B, 3=C, etc.)
+            // This is ONLY updated if we need manual initialization (appendix style has no numbering).
+            int currentAppendixLetterIndex = 0;
+
             // Second pass: split document by the determined heading level.
             String currentTitle = null;
             List<NodeDraft> currentNodes = new ArrayList<>();
@@ -240,10 +428,26 @@ public class WordParser {
 
             for (IBodyElement element : bodyElements) {
                 if (element instanceof XWPFParagraph paragraph) {
-                    String rawText = paragraph.getText();
+                    // Check if this paragraph is an appendix marker (style contains "附录标识")
+                    // Only do manual counter initialization if the style doesn't define its own numbering.
+                    // Otherwise, the numbering formatter handles it through style inheritance.
+                    String paraStyleId = paragraph.getStyle();
+                    if (!appendixStyleHasOwnNumbering && isAppendixMarkerStyle(paraStyleId, document)) {
+                        currentAppendixLetterIndex++;
+                        log.debug("Detected appendix marker, setting letter index to {}", currentAppendixLetterIndex);
+                        // Initialize level-0 counters for all detected appendix numIds
+                        for (Map.Entry<BigInteger, Integer> entry : appendixNumIdToLetterIndex.entrySet()) {
+                            numberingFormatter.setCounter(entry.getKey(), 0, currentAppendixLetterIndex);
+                            // Reset level-1 counter so subsections start fresh for each appendix
+                            numberingFormatter.setCounter(entry.getKey(), 1, 0);
+                        }
+                    }
+
+                    // Use getParagraphTextWithSpecialChars to handle <w:noBreakHyphen/> and other special chars
+                    String rawText = getParagraphTextWithSpecialChars(paragraph);
                     // Reconstruct auto-numbering. This advances internal counters even when
                     // the paragraph has no visible text, so list numbering stays correct.
-                    String numberPrefix = numberingFormatter.formatNumber(paragraph);
+                    String numberPrefix = numberingFormatter.formatNumber(paragraph, document.getStyles());
                     String paraText = combinePrefixAndText(numberPrefix, rawText);
                     int headingLevel = getHeadingLevel(paragraph, styleHeadingLevels);
 
@@ -267,7 +471,8 @@ public class WordParser {
                     // OLE/image-only paragraph: add placeholder instead of silently skipping.
                     // This preserves the knowledge that visual content (Visio diagrams, EMF
                     // charts, etc.) exists at this point in the document.
-                    if ((rawText == null || rawText.isBlank()) && hasDrawingOrPicture(paragraph)) {
+                    // Note: Use paragraph.getText() for this check since it returns empty for special chars
+                    if ((paragraph.getText() == null || paragraph.getText().isBlank()) && hasDrawingOrPicture(paragraph)) {
                         figureIndex++;
                         currentNodes.add(figureNode(sectionPath, "[图表 " + figureIndex + "]"));
                         continue;
@@ -289,7 +494,8 @@ public class WordParser {
 
                 } else if (element instanceof XWPFTable table) {
                     String sectionPath = buildSectionPath(currentTitle, sectionHeadings);
-                    currentNodes.add(tableNode(sectionPath, renderTable(table, numberingFormatter)));
+                    currentNodes.add(tableNode(sectionPath, convertTable(
+                            table, numberingFormatter, document.getStyles())));
                 }
             }
 
@@ -462,18 +668,21 @@ public class WordParser {
      * @param table     the Word table to convert
      * @param formatter shared numbering formatter (so cell auto-numbers stay in sync
      *                  with body counters); may be {@code null} for nested calls
+     * @param styles    the document styles (for style-based numbering lookup)
      */
-    private static TableRendering renderTable(XWPFTable table, NumberingFormatter formatter) {
+    private static TableRendering convertTable(XWPFTable table, NumberingFormatter formatter,
+                                                XWPFStyles styles) {
         StringBuilder html = new StringBuilder();
-        StringBuilder text = new StringBuilder();
         html.append("<table border=\"1\">\n");
+        List<TableRowData> structuredRows = new ArrayList<>();
+        int columnCount = 0;
 
         List<XWPFTableRow> rows = table.getRows();
         for (int rowIdx = 0; rowIdx < rows.size(); rowIdx++) {
             XWPFTableRow row = rows.get(rowIdx);
             html.append("  <tr>\n");
             String cellTag = (rowIdx == 0) ? "th" : "td";
-            List<String> rowText = new ArrayList<>();
+            List<TableCellData> structuredCells = new ArrayList<>();
 
             List<XWPFTableCell> cells = row.getTableCells();
             int logicalCol = 0;
@@ -486,7 +695,7 @@ public class WordParser {
                     // Continuation cell: the rowspan from the matching restart cell already
                     // covers this slot, so don't emit a <td>. Still walk the cell's paragraphs
                     // to keep the numbering formatter's counters aligned with document order.
-                    extractCellText(cell, formatter);
+                    extractCellText(cell, formatter, styles);
                     logicalCol += gridSpan;
                     continue;
                 }
@@ -496,26 +705,98 @@ public class WordParser {
                     rowSpan = computeRowSpan(rows, rowIdx, logicalCol);
                 }
 
-                String cellText = extractCellText(cell, formatter);
-                rowText.add(cellText);
+                String cellText = extractCellText(cell, formatter, styles);
                 html.append("    <").append(cellTag);
                 if (rowSpan > 1) html.append(" rowspan=\"").append(rowSpan).append("\"");
                 if (gridSpan > 1) html.append(" colspan=\"").append(gridSpan).append("\"");
                 html.append(">");
                 html.append(escapeHtml(cellText));
                 html.append("</").append(cellTag).append(">\n");
+                structuredCells.add(new TableCellData(
+                        rowIdx + 1,
+                        logicalCol + 1,
+                        cellText,
+                        rowIdx == 0,
+                        rowSpan,
+                        gridSpan));
 
                 logicalCol += gridSpan;
             }
             html.append("  </tr>\n");
-            if (!rowText.isEmpty()) {
-                if (text.length() > 0) text.append('\n');
-                text.append(String.join(" | ", rowText));
-            }
+            columnCount = Math.max(columnCount, logicalCol);
+            structuredRows.add(new TableRowData(rowIdx + 1, structuredCells));
         }
 
         html.append("</table>");
-        return new TableRendering(text.toString().trim(), html.toString());
+        TableData tableData = new TableData(rows.size(), columnCount, structuredRows);
+        return new TableRendering(
+                renderTablePlainText(tableData),
+                renderTableMarkdown(tableData),
+                html.toString(),
+                tableData);
+    }
+
+    private static String renderTablePlainText(TableData table) {
+        List<String> lines = new ArrayList<>();
+        for (List<String> row : expandTableGrid(table)) {
+            lines.add(String.join(" | ", row));
+        }
+        return String.join("\n", lines).trim();
+    }
+
+    private static String renderTableMarkdown(TableData table) {
+        List<List<String>> grid = expandTableGrid(table);
+        if (grid.isEmpty() || table.columnCount() <= 0) return "";
+
+        List<String> lines = new ArrayList<>();
+        lines.add(markdownRow(grid.get(0)));
+        lines.add("| " + String.join(" | ",
+                Collections.nCopies(table.columnCount(), "---")) + " |");
+        for (int i = 1; i < grid.size(); i++) {
+            lines.add(markdownRow(grid.get(i)));
+        }
+        return String.join("\n", lines);
+    }
+
+    private static List<List<String>> expandTableGrid(TableData table) {
+        if (table == null || table.rowCount() <= 0 || table.columnCount() <= 0) {
+            return List.of();
+        }
+        List<List<String>> grid = new ArrayList<>();
+        for (int row = 0; row < table.rowCount(); row++) {
+            grid.add(new ArrayList<>(Collections.nCopies(table.columnCount(), "")));
+        }
+        for (TableRowData row : table.rows()) {
+            for (TableCellData cell : row.cells()) {
+                int startRow = Math.max(0, cell.rowIndex() - 1);
+                int startCol = Math.max(0, cell.columnIndex() - 1);
+                if (startRow >= grid.size() || startCol >= table.columnCount()) continue;
+                grid.get(startRow).set(startCol, Objects.toString(cell.text(), ""));
+                for (int r = startRow; r < Math.min(grid.size(), startRow + cell.rowSpan()); r++) {
+                    for (int c = startCol; c < Math.min(table.columnCount(), startCol + cell.colSpan()); c++) {
+                        if (r == startRow && c == startCol) continue;
+                        grid.get(r).set(c, "");
+                    }
+                }
+            }
+        }
+        return grid;
+    }
+
+    private static String markdownRow(List<String> cells) {
+        return "| " + cells.stream()
+                .map(WordParser::escapeMarkdownCell)
+                .reduce((left, right) -> left + " | " + right)
+                .orElse("") + " |";
+    }
+
+    private static String escapeMarkdownCell(String text) {
+        if (text == null) return "";
+        return text.replace("\\", "\\\\")
+                .replace("|", "\\|")
+                .replace("\r\n", "<br>")
+                .replace("\n", "<br>")
+                .replace("\r", "<br>");
     }
 
     /** Number of grid columns spanned by this cell (default 1). */
@@ -598,12 +879,13 @@ public class WordParser {
      * computed number (e.g. "1.", "1.1", "(1)") that Word would otherwise render at display
      * time. Without this, columns like 序号 that rely on auto-numbering come out empty.
      */
-    private static String extractCellText(XWPFTableCell cell, NumberingFormatter formatter) {
+    private static String extractCellText(XWPFTableCell cell, NumberingFormatter formatter, XWPFStyles styles) {
         StringBuilder sb = new StringBuilder();
         try {
             for (IBodyElement el : cell.getBodyElements()) {
                 if (el instanceof XWPFParagraph p) {
-                    String t = (formatter != null) ? withNumbering(p, formatter) : p.getText();
+                    // Use getParagraphTextWithSpecialChars to handle <w:noBreakHyphen/>
+                    String t = (formatter != null) ? withNumbering(p, formatter, styles) : getParagraphTextWithSpecialChars(p);
                     if (t != null && !t.isBlank()) {
                         if (sb.length() > 0) sb.append(" ");
                         sb.append(t.trim());
@@ -613,7 +895,7 @@ public class WordParser {
                         StringBuilder rowSb = new StringBuilder();
                         for (XWPFTableCell nCell : nRow.getTableCells()) {
                             if (rowSb.length() > 0) rowSb.append(" | ");
-                            rowSb.append(extractCellText(nCell, formatter));
+                            rowSb.append(extractCellText(nCell, formatter, styles));
                         }
                         if (rowSb.length() > 0) {
                             if (sb.length() > 0) sb.append("; ");
@@ -627,115 +909,6 @@ public class WordParser {
             if (fallback != null) return fallback.trim();
         }
         return sb.toString().trim();
-    }
-
-    private static Chapter createChapter(int chapterNumber, String title,
-                                         List<NodeDraft> bodyNodes, int titleHeadingLevel) {
-        String chapterId = "DOC-C" + String.format("%03d", chapterNumber);
-        List<NodeDraft> drafts = new ArrayList<>();
-        String normalizedTitle = title == null ? "" : title.trim();
-        if (!normalizedTitle.isBlank()) {
-            int level = Math.max(1, Math.min(6, titleHeadingLevel));
-            drafts.add(new NodeDraft(
-                    "chapter_title",
-                    level,
-                    normalizedTitle,
-                    normalizedTitle,
-                    normalizedTitle,
-                    null));
-        }
-        drafts.addAll(bodyNodes);
-
-        List<DocumentNode> nodes = new ArrayList<>();
-        StringBuilder html = new StringBuilder();
-        StringBuilder content = new StringBuilder();
-        int nodeIndex = 1;
-        for (NodeDraft draft : drafts) {
-            String nodeId = chapterId + "-N" + String.format("%04d", nodeIndex);
-            String nodeHtml = renderNodeHtml(nodeId, draft);
-            nodes.add(new DocumentNode(
-                    nodeId,
-                    draft.type(),
-                    nodeIndex,
-                    draft.headingLevel(),
-                    draft.sectionPath(),
-                    draft.text(),
-                    draft.reviewText(),
-                    nodeHtml));
-            html.append(nodeHtml);
-            if (!"chapter_title".equals(draft.type())
-                    && draft.reviewText() != null
-                    && !draft.reviewText().isBlank()) {
-                if (content.length() > 0) content.append("\n\n");
-                content.append(draft.reviewText().trim());
-            }
-            nodeIndex++;
-        }
-        return new Chapter(chapterId, normalizedTitle, content.toString().trim(),
-                html.toString(), nodes);
-    }
-
-    private static NodeDraft paragraphNode(String sectionPath, String text) {
-        String normalized = text == null ? "" : text.trim();
-        return new NodeDraft("paragraph", 0, sectionPath, normalized, normalized, null);
-    }
-
-    private static NodeDraft headingNode(String sectionPath, int headingLevel, String text) {
-        String normalized = text == null ? "" : text.trim();
-        int level = Math.max(1, Math.min(6, headingLevel));
-        return new NodeDraft("heading", level, sectionPath, normalized,
-                "#".repeat(level) + " " + normalized, null);
-    }
-
-    private static NodeDraft figureNode(String sectionPath, String text) {
-        String normalized = text == null ? "[图表]" : text.trim();
-        return new NodeDraft("figure", 0, sectionPath, normalized, normalized, null);
-    }
-
-    private static NodeDraft tableNode(String sectionPath, TableRendering table) {
-        return new NodeDraft("table", 0, sectionPath, table.text(), table.html(), table.html());
-    }
-
-    private static String buildSectionPath(String chapterTitle,
-                                           NavigableMap<Integer, String> sectionHeadings) {
-        List<String> parts = new ArrayList<>();
-        if (chapterTitle != null && !chapterTitle.isBlank()) {
-            parts.add(chapterTitle.trim());
-        }
-        for (String heading : sectionHeadings.values()) {
-            if (heading != null && !heading.isBlank()
-                    && (parts.isEmpty() || !parts.get(parts.size() - 1).equals(heading.trim()))) {
-                parts.add(heading.trim());
-            }
-        }
-        return String.join(" > ", parts);
-    }
-
-    private static String renderNodeHtml(String nodeId, NodeDraft draft) {
-        String attributes = " id=\"" + nodeId + "\" data-node-id=\"" + nodeId
-                + "\" data-node-type=\"" + draft.type() + "\"";
-        if ("table".equals(draft.type())) {
-            return "<div" + attributes + " class=\"doc-node doc-table\">"
-                    + Objects.toString(draft.innerHtml(), "") + "</div>\n";
-        }
-        int level = draft.headingLevel();
-        if ("chapter_title".equals(draft.type()) || "heading".equals(draft.type())) {
-            int safeLevel = Math.max(1, Math.min(6, level));
-            return "<h" + safeLevel + attributes + " class=\"doc-node doc-heading\">"
-                    + escapeHtml(draft.text()) + "</h" + safeLevel + ">\n";
-        }
-        String cssClass = "figure".equals(draft.type())
-                ? "doc-node doc-figure"
-                : "doc-node doc-paragraph";
-        return "<p" + attributes + " class=\"" + cssClass + "\">"
-                + escapeHtml(draft.text()).replace("\n", "<br>") + "</p>\n";
-    }
-
-    private static String buildLegacyHtml(String content) {
-        if (content == null || content.isBlank()) return "";
-        return "<div class=\"doc-node doc-paragraph\">"
-                + escapeHtml(content).replace("\r\n", "\n").replace("\n", "<br>")
-                + "</div>";
     }
 
     /**
@@ -804,6 +977,100 @@ public class WordParser {
     }
 
     /**
+     * Pre-scan the document to find numIds that are used for appendix subsection numbering.
+     *
+     * In some documents, appendix subsections (e.g., "A.1 试验故障报告单", "B.1 试验前检测记录表")
+     * use a numbering definition where:
+     * - Level 0: format=upperLetter, lvlText="附录%1" (should produce "附录A", "附录B")
+     * - Level 1: format=decimal, lvlText="%1.%2" (should produce "A.1", "B.1")
+     *
+     * However, the appendix main titles ("附录A 检测记录表", "附录B 试验故障报告") may not
+     * use the numbering system at all (numId=null), so level 0's counter never gets initialized.
+     * This causes subsections to show "0.1" instead of "A.1".
+     *
+     * This method scans for paragraphs at level 1 that use lvlText containing "%1" where
+     * level 0 uses upperLetter format, and returns their numIds so we can manually
+     * initialize the level-0 counter based on document structure.
+     *
+     * @param document the XWPFDocument
+     * @param bodyElements the flattened body elements
+     * @return a map of numId → any non-zero value (placeholder), indicating these numIds need appendix letter initialization
+     */
+    private static Map<BigInteger, Integer> scanForAppendixNumIds(XWPFDocument document, List<IBodyElement> bodyElements) {
+        Map<BigInteger, Integer> result = new HashMap<>();
+        XWPFNumbering numbering = document.getNumbering();
+        if (numbering == null) return result;
+
+        for (IBodyElement el : bodyElements) {
+            if (!(el instanceof XWPFParagraph p)) continue;
+
+            BigInteger numId = p.getNumID();
+            BigInteger ilvl = p.getNumIlvl();
+            if (numId == null || numId.signum() == 0) continue;
+
+            // Only interested in level 1 paragraphs (where %1 references level 0)
+            int level = (ilvl != null) ? ilvl.intValue() : 0;
+            if (level != 1) continue;
+
+            try {
+                XWPFNum num = numbering.getNum(numId);
+                if (num == null) continue;
+                BigInteger absNumId = num.getCTNum().getAbstractNumId().getVal();
+                XWPFAbstractNum absNum = numbering.getAbstractNum(absNumId);
+                if (absNum == null) continue;
+                CTAbstractNum ctAbsNum = absNum.getCTAbstractNum();
+                List<CTLvl> lvlList = ctAbsNum.getLvlList();
+                if (lvlList == null || lvlList.size() < 2) continue;
+
+                // Check level 0: must use upperLetter format and lvlText containing "附录"
+                CTLvl lvl0 = lvlList.get(0);
+                String fmt0 = lvl0.getNumFmt() != null ? lvl0.getNumFmt().getVal().toString() : "decimal";
+                String txt0 = lvl0.getLvlText() != null ? lvl0.getLvlText().getVal() : "";
+
+                // Check level 1: lvlText must contain "%1" (reference to level 0)
+                CTLvl lvl1 = lvlList.get(1);
+                String txt1 = lvl1.getLvlText() != null ? lvl1.getLvlText().getVal() : "";
+
+                if ("upperLetter".equalsIgnoreCase(fmt0) &&
+                    txt0.contains("附录") &&
+                    txt1.contains("%1")) {
+                    // This numId needs appendix letter initialization
+                    result.put(numId, 1);
+                }
+            } catch (Exception e) {
+                // ignore
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Check if a style is an "appendix marker" style - a paragraph that marks the start
+     * of a new appendix (e.g., "附录A 检测记录表", "附录B 试验故障报告").
+     *
+     * These paragraphs typically have style names containing "附录标识" or similar.
+     * They are used to visually separate appendices but may not use the numbering system.
+     *
+     * @param styleId the style ID of the paragraph
+     * @param document the XWPFDocument to look up style names
+     * @return true if this style indicates an appendix marker
+     */
+    private static boolean isAppendixMarkerStyle(String styleId, XWPFDocument document) {
+        if (styleId == null) return false;
+
+        XWPFStyles styles = document.getStyles();
+        if (styles == null) return false;
+
+        XWPFStyle style = styles.getStyle(styleId);
+        if (style == null || style.getName() == null) return false;
+
+        String name = style.getName().toLowerCase();
+        // Match styles like "附录标识", "附录标识5#", etc.
+        return name.contains("附录标识");
+    }
+
+    /**
      * Check if a paragraph contains only drawings or pictures (no meaningful text).
      * Also detects embedded OLE objects (Visio, Excel, etc.) via w:pict elements.
      */
@@ -839,9 +1106,66 @@ public class WordParser {
      * Convenience for the no-headings code path: get the paragraph text with auto-numbering
      * prepended. Always advances the formatter's counters, even if the paragraph is empty.
      */
-    private static String withNumbering(XWPFParagraph paragraph, NumberingFormatter formatter) {
-        String prefix = formatter.formatNumber(paragraph);
-        return combinePrefixAndText(prefix, paragraph.getText());
+    private static String withNumbering(XWPFParagraph paragraph, NumberingFormatter formatter, XWPFStyles styles) {
+        String prefix = formatter.formatNumber(paragraph, styles);
+        // Use getParagraphTextWithSpecialChars to handle <w:noBreakHyphen/> and other special chars
+        String rawText = getParagraphTextWithSpecialChars(paragraph);
+        return combinePrefixAndText(prefix, rawText);
+    }
+
+    /**
+     * Get paragraph text while preserving special characters that POI's getText() ignores.
+     *
+     * POI's XWPFParagraph.getText() silently skips certain special XML elements:
+     * - <w:noBreakHyphen/> (non-breaking hyphen, U+2011) - should render as '-'
+     * - <w:softHyphen/> (soft hyphen, U+00AD) - should render as hyphen when visible
+     *
+     * This method reconstructs the text by examining the raw XML and inserting these
+     * characters where they appear in the document structure.
+     *
+     * @param paragraph the paragraph to extract text from
+     * @return the text with special characters properly rendered
+     */
+    private static String getParagraphTextWithSpecialChars(XWPFParagraph paragraph) {
+        // First get the standard text from POI
+        String standardText = paragraph.getText();
+        if (standardText == null) return null;
+
+        // Check if the paragraph XML contains noBreakHyphen or softHyphen elements
+        try {
+            String xml = paragraph.getCTP().xmlText();
+            if (!xml.contains("<w:noBreakHyphen") && !xml.contains("<w:softHyphen")) {
+                // No special hyphens, return standard text
+                return standardText;
+            }
+
+            // Reconstruct text by walking through runs and inserting hyphens
+            StringBuilder sb = new StringBuilder();
+            for (XWPFRun run : paragraph.getRuns()) {
+                String runText = run.getText(0);
+                if (runText != null) {
+                    sb.append(runText);
+                }
+                // Check if this run is followed by a noBreakHyphen in the XML
+                // by examining the run's CTR XML
+                try {
+                    String runXml = run.getCTR().xmlText();
+                    // Check if the run element itself is a noBreakHyphen
+                    if (runXml.contains("<w:noBreakHyphen") || runXml.equals("<w:noBreakHyphen/>")) {
+                        sb.append("-"); // Render as regular hyphen for simplicity
+                    }
+                    if (runXml.contains("<w:softHyphen")) {
+                        sb.append("-"); // Soft hyphen renders as hyphen when visible
+                    }
+                } catch (Exception e) {
+                    // Ignore XML parsing errors for individual runs
+                }
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.debug("Failed to extract special chars from paragraph: {}", e.getMessage());
+            return standardText;
+        }
     }
 
     /**
@@ -870,16 +1194,57 @@ public class WordParser {
         // key = "numId:level", value = current count
         private final Map<String, Integer> counters = new HashMap<>();
 
+        // The numId used by heading paragraphs in this document.
+        // This is determined when the first heading 1 paragraph with an explicit numId is encountered.
+        // All subsequent heading paragraphs (even those without explicit numId) should use this numId
+        // to maintain consistent numbering across all heading levels.
+        private BigInteger headingNumId = null;
+
         NumberingFormatter(XWPFNumbering numbering) {
             this.numbering = numbering;
+        }
+
+        /**
+         * Manually set the counter for a specific numId and level.
+         * This is used to initialize ancestor level counters that would otherwise
+         * remain at 0 because no paragraphs exist at that level in the document.
+         *
+         * For example, in documents where appendix subsections (level 1) reference
+         * level 0 counters that were never initialized by appendix main titles
+         * (which may not use the numbering system), this method allows us to
+         * manually set the correct letter counter (A=1, B=2, C=3, etc.) before
+         * processing the subsections.
+         *
+         * @param numId the numbering ID
+         * @param level the level (0-based)
+         * @param value the counter value to set
+         */
+        void setCounter(BigInteger numId, int level, int value) {
+            String key = numId + ":" + level;
+            counters.put(key, value);
+        }
+
+        /**
+         * Get the current counter value for a specific numId and level.
+         * Returns 0 if the counter has not been initialized.
+         */
+        int getCounter(BigInteger numId, int level) {
+            String key = numId + ":" + level;
+            return counters.getOrDefault(key, 0);
         }
 
         /**
          * Compute the numbering prefix for the given paragraph, or {@code null} if it has
          * no numbering, the numbering definition is missing, or the format is non-numeric
          * (bullets / "none").
+         *
+         * This method also checks the paragraph's style for numbering definitions if the
+         * paragraph itself doesn't have explicit numbering. However, this style inheritance
+         * is ONLY applied to specific styles that need it (like appendix marker styles),
+         * NOT to general heading styles which may have their own numbering system that
+         * should not interfere with document parsing.
          */
-        String formatNumber(XWPFParagraph paragraph) {
+        String formatNumber(XWPFParagraph paragraph, XWPFStyles styles) {
             if (numbering == null || paragraph == null) return null;
             BigInteger numId;
             BigInteger ilvl;
@@ -889,6 +1254,52 @@ public class WordParser {
             } catch (Exception e) {
                 return null;
             }
+
+            // Check if this is a heading paragraph (heading 1-6 / 标题 1-6 only)
+            // Do NOT match other styles that contain "标题" (like "图表标题", "附录标题")
+            boolean isHeading = false;
+            String styleId = paragraph.getStyle();
+            if (styles != null && styleId != null) {
+                XWPFStyle style = styles.getStyle(styleId);
+                if (style != null && style.getName() != null) {
+                    String name = style.getName().toLowerCase();
+                    // Only match heading 1-6 or 标题 1-6, not "图表标题" or "附录标题"
+                    for (int i = 1; i <= 6; i++) {
+                        if (name.equals("heading " + i) || name.equals("heading" + i) ||
+                            name.equals("标题" + i) || name.equals("标题 " + i)) {
+                            isHeading = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // If paragraph has explicit numId and it's a heading, record this as the document's heading numId
+            if (numId != null && numId.signum() > 0 && isHeading && headingNumId == null) {
+                headingNumId = numId;
+                log.debug("Recording heading numId: {}", headingNumId);
+            }
+
+            // If paragraph has no explicit numbering, check if the style defines numbering.
+            if (numId == null || numId.signum() == 0) {
+                if (styles != null && styleId != null && shouldUseStyleNumbering(styleId, styles)) {
+                    // For heading styles, use the recorded heading numId (if available)
+                    // instead of the style-defined numId, which may be incorrect.
+                    if (isHeading && headingNumId != null) {
+                        numId = headingNumId;
+                        ilvl = getHeadingIlvl(styleId, styles);
+                    } else if (isHeading && headingNumId == null) {
+                        // No heading numId recorded yet, skip numbering for this heading
+                        // (it will be recorded when a heading with explicit numId is encountered)
+                        return null;
+                    } else {
+                        // For appendix marker styles, use the style-defined numId
+                        numId = getNumIdFromStyle(styleId, styles);
+                        ilvl = getIlvlFromStyle(styleId, styles);
+                    }
+                }
+            }
+
             // numId == 0 is OOXML's explicit "no numbering"; treat the same as null.
             if (numId == null || numId.signum() == 0) return null;
 
@@ -939,6 +1350,11 @@ public class WordParser {
                         ? lvl.getLvlText().getVal()
                         : ("%" + (currentLevel + 1) + ".");
 
+                // DEBUG: 输出编号格式模板
+                if (log.isDebugEnabled()) {
+                    log.debug("Numbering format template (lvlText): '{}' for level {}", lvlText, currentLevel);
+                }
+
                 // Substitute %1, %2, ... with the formatted counter for that ancestor level.
                 StringBuilder result = new StringBuilder();
                 int i = 0;
@@ -971,6 +1387,148 @@ public class WordParser {
                 log.debug("Failed to format numbering for paragraph: {}", e.getMessage());
                 return null;
             }
+        }
+
+        /**
+         * Get the numId from a style definition's numPr element.
+         * In OOXML, numbering can be defined at the style level, and paragraphs
+         * inherit this if they don't have their own numPr.
+         */
+        private BigInteger getNumIdFromStyle(String styleId, XWPFStyles styles) {
+            try {
+                XWPFStyle style = styles.getStyle(styleId);
+                if (style == null) return null;
+                CTStyle ctStyle = style.getCTStyle();
+                CTPPrGeneral pPr = ctStyle.getPPr();
+                if (pPr == null) return null;
+                CTNumPr numPr = pPr.getNumPr();
+                if (numPr == null) return null;
+                CTDecimalNumber numId = numPr.getNumId();
+                if (numId == null) return null;
+                return numId.getVal();
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        /**
+         * Get the ilvl (indent level) from a style definition's numPr element.
+         */
+        private BigInteger getIlvlFromStyle(String styleId, XWPFStyles styles) {
+            try {
+                XWPFStyle style = styles.getStyle(styleId);
+                if (style == null) return BigInteger.ZERO;
+                CTStyle ctStyle = style.getCTStyle();
+                CTPPrGeneral pPr = ctStyle.getPPr();
+                if (pPr == null) return BigInteger.ZERO;
+                CTNumPr numPr = pPr.getNumPr();
+                if (numPr == null) return BigInteger.ZERO;
+                CTDecimalNumber ilvl = numPr.getIlvl();
+                if (ilvl == null) return BigInteger.ZERO;
+                return ilvl.getVal();
+            } catch (Exception e) {
+                return BigInteger.ZERO;
+            }
+        }
+
+        /**
+         * Determine whether style-based numbering inheritance should be used for this style.
+         *
+         * This method returns true for:
+         * - Appendix marker styles (样式名称 contains "附录标识")
+         * - Heading styles (heading 1-6), but with special handling to use the correct numId
+         *
+         * For heading styles, the style definition may specify a different numId than what
+         * is actually used by heading paragraphs in the document. For example, heading 1
+         * paragraphs may use numId=9, while heading 2 style definition specifies numId=1.
+         * Using the wrong numId would cause counter conflicts.
+         *
+         * @param styleId the style ID to check
+         * @param styles the document styles
+         * @return true if this style should use style-based numbering inheritance
+         */
+        private boolean shouldUseStyleNumbering(String styleId, XWPFStyles styles) {
+            if (styles == null) return false;
+
+            XWPFStyle style = styles.getStyle(styleId);
+            if (style == null || style.getName() == null) return false;
+
+            String name = style.getName().toLowerCase();
+
+            // Allow style numbering for appendix marker styles
+            if (name.contains("附录标识")) {
+                return true;
+            }
+
+            // Also allow for heading styles (heading 1-6 / 标题1-6)
+            // but we'll use a different method to get the correct numId
+            if (name.contains("heading") || name.contains("标题")) {
+                return true;
+            }
+
+            return false;
+        }
+
+        /**
+         * Get the numId for a heading style, using the document's actual heading numbering.
+         *
+         * For heading styles, the style definition may specify a wrong numId (e.g., heading 2
+         * style may define numId=1, but heading 1 paragraphs actually use numId=9). To avoid
+         * counter conflicts, we find the numId used by the FIRST heading 1 paragraph in the
+         * document, and use that for all heading styles.
+         *
+         * @param styleId the style ID
+         * @param styles the document styles
+         * @return the correct numId for heading styles, or null if not applicable
+         */
+        private BigInteger getHeadingNumId(String styleId, XWPFStyles styles) {
+            // This will be determined during parsing by tracking heading 1's numId
+            // For now, return null - the actual logic is in formatNumber method
+            return null;
+        }
+
+        /**
+         * Get the ilvl (indent level) for a heading style based on its level.
+         *
+         * heading 1 → ilvl 0
+         * heading 2 → ilvl 1
+         * heading 3 → ilvl 2
+         * etc.
+         *
+         * @param styleId the style ID
+         * @param styles the document styles
+         * @return the ilvl for this heading level
+         */
+        private BigInteger getHeadingIlvl(String styleId, XWPFStyles styles) {
+            if (styles == null) return BigInteger.ZERO;
+
+            XWPFStyle style = styles.getStyle(styleId);
+            if (style == null || style.getName() == null) return BigInteger.ZERO;
+
+            String name = style.getName().toLowerCase();
+
+            // Determine heading level from style name
+            for (int i = 1; i <= 6; i++) {
+                if (name.equals("heading " + i) || name.equals("heading" + i) ||
+                    name.equals("标题" + i) || name.equals("标题 " + i)) {
+                    return BigInteger.valueOf(i - 1);  // heading 1 = ilvl 0
+                }
+            }
+
+            // Pattern match for non-standard names
+            if (name.startsWith("heading") || name.startsWith("标题")) {
+                String numStr = name.replaceAll("[^0-9]", "");
+                if (!numStr.isEmpty()) {
+                    try {
+                        int lvl = Integer.parseInt(numStr);
+                        if (lvl >= 1 && lvl <= 6) {
+                            return BigInteger.valueOf(lvl - 1);
+                        }
+                    } catch (NumberFormatException ignored) { }
+                }
+            }
+
+            return BigInteger.ZERO;
         }
 
         private static String formatValue(int value, String numFmt) {

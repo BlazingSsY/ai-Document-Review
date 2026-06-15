@@ -13,6 +13,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Decide which rules apply to a given chunk based on each rule's optional metadata.
@@ -29,6 +31,11 @@ import java.util.Set;
  */
 @Slf4j
 public class RuleDispatcher {
+
+    public static final String BASIC_QUALITY_RULE_NAME = "基础文字质量审查";
+    public static final String BASIC_QUALITY_RULE_CODE = "R-BASIC-QUALITY";
+    private static final Pattern LEADING_CHAPTER_NUMBER = Pattern.compile(
+            "^\\s*(?:第\\s*)?(\\d+)(?:\\s*章)?(?:\\s|[.．、:：-]|$)");
 
     private RuleDispatcher() {
     }
@@ -109,9 +116,31 @@ public class RuleDispatcher {
     public static DispatchResult dispatchForChunk(String chapterTitle,
                                                   String chapterBody,
                                                   List<PreparedRule> prepared) {
+        return dispatchForChunk(chapterTitle, chapterBody, prepared, 0);
+    }
+
+    /**
+     * Dispatch with a lightweight-review prefix. Chapters whose leading number is
+     * between 1 and {@code basicOnlyMaxChapter} do not receive configured business
+     * rules. The caller supplies the built-in text-quality rule for those chapters.
+     */
+    public static DispatchResult dispatchForChunk(String chapterTitle,
+                                                  String chapterBody,
+                                                  List<PreparedRule> prepared,
+                                                  int basicOnlyMaxChapter) {
         List<PreparedRule> applied = new ArrayList<>();
         List<String> appliedNames = new ArrayList<>();
         List<Map<String, Object>> traces = new ArrayList<>();
+
+        if (isBasicReviewOnlyChapter(chapterTitle, basicOnlyMaxChapter)) {
+            Map<String, Object> trace = new LinkedHashMap<>();
+            trace.put("ruleName", BASIC_QUALITY_RULE_NAME);
+            trace.put("ruleCode", BASIC_QUALITY_RULE_CODE);
+            trace.put("ruleType", "built_in_quality");
+            trace.put("reason", "basic_chapter_profile");
+            traces.add(trace);
+            return new DispatchResult(applied, List.of(BASIC_QUALITY_RULE_NAME), traces);
+        }
 
         // Match against the chapter's first-level heading only.
         String titleHay = Objects.toString(chapterTitle, "").toLowerCase(Locale.ROOT);
@@ -156,6 +185,18 @@ public class RuleDispatcher {
         }
 
         return new DispatchResult(applied, appliedNames, traces);
+    }
+
+    public static boolean isBasicReviewOnlyChapter(String chapterTitle, int basicOnlyMaxChapter) {
+        if (basicOnlyMaxChapter <= 0 || chapterTitle == null || chapterTitle.isBlank()) return false;
+        Matcher matcher = LEADING_CHAPTER_NUMBER.matcher(chapterTitle);
+        if (!matcher.find()) return false;
+        try {
+            int chapterNumber = Integer.parseInt(matcher.group(1));
+            return chapterNumber >= 1 && chapterNumber <= basicOnlyMaxChapter;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
     }
 
     /** All document-level rules — typically run once on the aggregated summary. */

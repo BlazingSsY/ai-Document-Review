@@ -16,6 +16,7 @@ import com.aireview.repository.RagRuleCheckMapper;
 import com.aireview.review.ReviewResultSchema;
 import com.aireview.review.llm.JsonExtractor;
 import com.aireview.util.ChunkUtils;
+import com.aireview.util.DocumentSourceMapper;
 import com.aireview.util.WordParser;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -410,7 +411,7 @@ public class RagReviewService {
         List<Map<String, Object>> checks = copyCheckResults(enriched.get("allCheckResults"));
         if (!checks.isEmpty()) {
             if (includeOriginalDocument) {
-                enrichRuleNames(task.getScenarioId(), checks);
+                enrichCheckMetadata(task.getScenarioId(), checks);
             }
             enriched.put("allCheckResults", checks);
             applyProblemSummary(enriched, checks);
@@ -420,7 +421,7 @@ public class RagReviewService {
             List<Map<String, Object>> originalDocument = buildOriginalDocumentSources(task);
             if (!originalDocument.isEmpty()) {
                 enriched.put("originalSources", originalDocument);
-                enriched.put("sourceTextMode", "original_word_structured_html_chapters");
+                enriched.put("sourceTextMode", "structured_json_markdown_review_html_display");
             }
         }
         return enriched;
@@ -438,23 +439,60 @@ public class RagReviewService {
         return checks;
     }
 
-    private void enrichRuleNames(Long scenarioId, List<Map<String, Object>> checks) {
+    private void enrichCheckMetadata(Long scenarioId, List<Map<String, Object>> checks) {
         if (scenarioId == null || checks.isEmpty()) return;
+        List<RagRule> rules = ragRuleService.getRulesByScenarioId(scenarioId);
         Map<String, String> ruleNamesByCode = new HashMap<>();
-        for (RagRule rule : ragRuleService.getRulesByScenarioId(scenarioId)) {
+        Map<String, String> ruleDescriptionsByCode = new HashMap<>();
+        Map<Long, RagRule> rulesById = new HashMap<>();
+        for (RagRule rule : rules) {
+            if (rule.getId() != null) {
+                rulesById.put(rule.getId(), rule);
+            }
             if (rule.getRuleCode() != null && !rule.getRuleCode().isBlank()) {
                 ruleNamesByCode.put(rule.getRuleCode(), rule.getRuleName());
+                ruleDescriptionsByCode.put(rule.getRuleCode(), rule.getDescription());
+            }
+        }
+        List<Long> ruleIds = rules.stream()
+                .map(RagRule::getId)
+                .filter(Objects::nonNull)
+                .toList();
+        Map<String, RagRuleCheck> metadataByCompositeKey = new HashMap<>();
+        Map<String, RagRuleCheck> metadataByCheckCode = new HashMap<>();
+        if (!ruleIds.isEmpty()) {
+            for (RagRuleCheck ruleCheck : ragRuleCheckMapper.findActiveByRuleIds(ruleIds)) {
+                RagRule rule = rulesById.get(ruleCheck.getRuleId());
+                String ruleCode = rule == null ? "" : Objects.toString(rule.getRuleCode(), "");
+                String checkCode = Objects.toString(ruleCheck.getCheckCode(), "");
+                if (checkCode.isBlank()) continue;
+                metadataByCompositeKey.put(ruleCode + "\u0000" + checkCode, ruleCheck);
+                metadataByCheckCode.putIfAbsent(checkCode, ruleCheck);
             }
         }
         for (Map<String, Object> check : checks) {
             String currentName = firstNonBlank(
                     Objects.toString(check.get("ruleName"), ""),
                     Objects.toString(check.get("rule_name"), ""));
-            if (!currentName.isBlank()) continue;
             String ruleCode = Objects.toString(check.get("rule_code"), "");
-            String ruleName = ruleNamesByCode.get(ruleCode);
-            if (ruleName != null && !ruleName.isBlank()) {
-                check.put("ruleName", ruleName);
+            String checkCode = firstNonBlank(
+                    Objects.toString(check.get("check_code"), ""),
+                    Objects.toString(check.get("checkCode"), ""));
+            RagRuleCheck ruleCheck = metadataByCompositeKey.get(ruleCode + "\u0000" + checkCode);
+            if (ruleCheck == null) ruleCheck = metadataByCheckCode.get(checkCode);
+            if (currentName.isBlank()) {
+                String ruleName = ruleNamesByCode.get(ruleCode);
+                if (ruleName != null && !ruleName.isBlank()) {
+                    check.put("ruleName", ruleName);
+                }
+            }
+            String ruleDescription = ruleDescriptionsByCode.get(ruleCode);
+            if (ruleDescription != null && !ruleDescription.isBlank()) {
+                check.putIfAbsent("ruleDescription", ruleDescription);
+            }
+            if (ruleCheck != null) {
+                check.putIfAbsent("passCriteria", Objects.toString(ruleCheck.getPassCriteria(), ""));
+                check.putIfAbsent("check_question", Objects.toString(ruleCheck.getQuestion(), ""));
             }
         }
     }
@@ -674,7 +712,7 @@ public class RagReviewService {
         aiResult.put("originalSources", java.util.stream.IntStream.range(0, chapters.size())
                 .mapToObj(i -> toOriginalSource(chapters.get(i), i + 1))
                 .toList());
-        aiResult.put("sourceTextMode", "original_word_structured_html_chapters");
+        aiResult.put("sourceTextMode", "structured_json_markdown_review_html_display");
         Map<String, Object> retrievalStats = new LinkedHashMap<>();
         retrievalStats.put("engine", "pgvector");
         retrievalStats.put("indexStrategy", preparedDocument.vectorIndexStrategy());
@@ -769,8 +807,10 @@ public class RagReviewService {
         check.put("check_code", plan.checkCode());
         check.put("rule_code", plan.ruleCode());
         check.put("ruleName", plan.ruleName());
+        check.put("ruleDescription", plan.ruleDescription());
         check.put("category", plan.category());
         check.put("check_question", plan.checkQuestion());
+        check.put("passCriteria", plan.passCriteria());
         check.put("status", "Review");
         check.put("reason", "单项审查失败，自动补审后仍未成功：" + rootErrorMessage(attempt.error()));
         check.put("evidence", "");
@@ -1035,8 +1075,10 @@ public class RagReviewService {
         check.putIfAbsent("check_code", plan.checkCode());
         check.putIfAbsent("rule_code", plan.ruleCode());
         check.put("ruleName", plan.ruleName());
+        check.put("ruleDescription", plan.ruleDescription());
         check.putIfAbsent("category", plan.category());
         check.putIfAbsent("check_question", plan.checkQuestion());
+        check.put("passCriteria", plan.passCriteria());
         check.put("status", normalizeCheckStatus(check.get("status")));
         check.putIfAbsent("reason", "");
         check.putIfAbsent("evidence", "");
@@ -1114,37 +1156,10 @@ public class RagReviewService {
     }
 
     private Map<String, Object> toOriginalSource(WordParser.Chapter chapter, int chapterIndex) {
-        String content = chapter.getNodes().stream()
-                .filter(node -> !"chapter_title".equals(node.getType()))
-                .map(WordParser.DocumentNode::getText)
-                .filter(Objects::nonNull)
-                .filter(text -> !text.isBlank())
-                .reduce((left, right) -> left + "\n\n" + right)
-                .orElseGet(() -> chapter.getContent() == null ? "" : chapter.getContent());
-        Map<String, Object> source = new LinkedHashMap<>();
-        source.put("sourceId", firstNonBlank(
-                chapter.getId(),
-                "DOC-C" + String.format("%03d", chapterIndex)));
-        source.put("type", "original_chapter");
-        source.put("chapterIndex", chapterIndex);
-        source.put("title", chapter.getTitle());
-        source.put("sectionPath", chapter.getTitle());
-        source.put("text", content);
-        source.put("html", chapter.getHtml());
-        source.put("nodes", chapter.getNodes().stream().map(node -> {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("id", node.getId());
-            item.put("type", node.getType());
-            item.put("nodeIndex", node.getNodeIndex());
-            item.put("headingLevel", node.getHeadingLevel());
-            item.put("sectionPath", node.getSectionPath());
-            item.put("text", node.getText());
-            return item;
-        }).toList());
-        source.put("contentFormat", "structured_html");
-        source.put("textLength", content.length());
-        source.put("estimatedTokens", ChunkUtils.estimateTokens(chapter.getFullText()));
-        return source;
+        return DocumentSourceMapper.toChapterSource(
+                chapter,
+                chapterIndex,
+                firstNonBlank(chapter.getId(), "DOC-C" + String.format("%03d", chapterIndex)));
     }
 
     private String normalizeCheckStatus(Object raw) {
@@ -1200,6 +1215,10 @@ public class RagReviewService {
                              String checkQuestion, String passCriteria, String category) {
         String ruleName() {
             return rule != null ? rule.getRuleName() : "";
+        }
+
+        String ruleDescription() {
+            return rule != null ? Objects.toString(rule.getDescription(), "") : "";
         }
 
         String ruleContent() {

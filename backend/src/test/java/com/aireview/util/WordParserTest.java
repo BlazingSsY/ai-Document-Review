@@ -12,6 +12,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -53,10 +54,39 @@ class WordParserTest {
         assertTrue(first.get(0).getHtml().contains("<table border=\"1\">"));
         assertTrue(first.get(0).getHtml().contains("&lt;script&gt;"));
         assertFalse(first.get(0).getHtml().contains("<script>"));
+        assertTrue(first.get(0).getContent().contains("| 项目 | 要求 |"));
+        assertTrue(first.get(0).getContent().contains("| --- | --- |"));
+        assertFalse(first.get(0).getContent().contains("<th>"));
+        assertTrue(first.get(0).getPlainText().contains("项目 | 要求"));
         assertTrue(first.get(0).getNodes().stream()
                 .anyMatch(node -> "table".equals(node.getType()) && node.getText().contains("温度")));
+        WordParser.DocumentNode tableNode = first.get(0).getNodes().stream()
+                .filter(node -> "table".equals(node.getType()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(2, tableNode.getTable().rowCount());
+        assertEquals(2, tableNode.getTable().columnCount());
+        assertEquals("项目", tableNode.getTable().rows().get(0).cells().get(0).text());
         assertTrue(first.get(0).getNodes().stream()
                 .anyMatch(node -> "1 第一章 > 1.1 子节".equals(node.getSectionPath())));
+
+        List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(first, 10000);
+        Map<String, Object> source = DocumentSourceMapper.toChunkSource(
+                chunks.get(0), 1, "document_chunk");
+        assertEquals("structured_json", source.get("contentFormat"));
+        assertEquals("markdown", source.get("reviewFormat"));
+        assertTrue(String.valueOf(source.get("html")).contains("<table border=\"1\">"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> structuredNodes =
+                (List<Map<String, Object>>) source.get("nodes");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> structuredTable = (Map<String, Object>) structuredNodes.stream()
+                .filter(node -> "table".equals(node.get("type")))
+                .findFirst()
+                .orElseThrow()
+                .get("table");
+        assertEquals(2, structuredTable.get("rowCount"));
+        assertEquals(2, structuredTable.get("columnCount"));
 
         RagReviewService service = new RagReviewService(
                 null, null, null, null, null, null, null);

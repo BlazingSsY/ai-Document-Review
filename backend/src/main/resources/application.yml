@@ -80,6 +80,12 @@ review:
     # chunkReviewExecutor 池子大小 = 此值 × async.max-pool-size，会自动跟随，
     # 因此调这一处即可，不需要动 AsyncConfig。
     chunk-concurrency: 6
+  dispatch:
+    # 一级章节号不大于该值时，仅执行内置文字质量检查，不注入业务规则。
+    # 设为 0 可关闭此档位，恢复所有章节按规则元数据正常调度。
+    # 这是当前试验大纲模板的过渡配置；长期应将业务规则维护为
+    # section_specific，并通过适用章节/关键词精确分发。
+    basic-only-max-chapter: 6
   rag:
     # 注：enabled / fallback-to-legacy 已废弃（RAG 与 CHUNK 现在通过前端侧边栏二选一
     # 进入，两条管线物理隔离、独立运行）。保留下面的 RAG 调参以便 RagReviewService

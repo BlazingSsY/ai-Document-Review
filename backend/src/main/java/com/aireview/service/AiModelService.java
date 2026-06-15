@@ -386,9 +386,28 @@ public class AiModelService {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
             throw new AiApiException(response.statusCode(), response.body(),
-                    "AI API HTTP " + response.statusCode() + ": " + response.body());
+                    "AI API HTTP " + response.statusCode() + ": " + response.body(),
+                    parseRetryAfterSeconds(response));
         }
         return JSON.parseObject(response.body());
+    }
+
+    /**
+     * Read the {@code Retry-After} response header (seconds form) so the retry layer can
+     * wait exactly as long as the provider asked on a 429. Returns {@code -1} when the
+     * header is absent or not an integer count of seconds (HTTP-date form is ignored —
+     * all the providers we call emit the seconds form).
+     */
+    private static long parseRetryAfterSeconds(HttpResponse<?> response) {
+        try {
+            return response.headers().firstValue("Retry-After")
+                    .map(String::trim)
+                    .filter(v -> v.matches("\\d+"))
+                    .map(Long::parseLong)
+                    .orElse(-1L);
+        } catch (Exception e) {
+            return -1L;
+        }
     }
 
     private List<List<Double>> parseEmbeddingVectors(JSONObject response) {
@@ -543,7 +562,8 @@ public class AiModelService {
         if (response.statusCode() != 200) {
             log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
             throw new AiApiException(response.statusCode(), response.body(),
-                    "AI API HTTP " + response.statusCode() + ": " + response.body());
+                    "AI API HTTP " + response.statusCode() + ": " + response.body(),
+                    parseRetryAfterSeconds(response));
         }
 
         String content = isAnthropic

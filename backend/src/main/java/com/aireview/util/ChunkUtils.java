@@ -107,14 +107,19 @@ public class ChunkUtils {
 
             if (tokens <= maxTokens) {
                 // Chapter fits in one chunk
-                results.add(new ChunkResult(label, fullText, tokens));
+                results.add(new ChunkResult(label, fullText, tokens, i, chapter));
             } else {
                 // Chapter too large, split by paragraphs
                 log.info("Chapter '{}' has ~{} tokens, splitting further (max {})", label, tokens, maxTokens);
                 List<String> subChunks = splitLargeText(fullText, maxTokens);
                 for (int j = 0; j < subChunks.size(); j++) {
                     String subLabel = label + " (" + (j + 1) + "/" + subChunks.size() + ")";
-                    results.add(new ChunkResult(subLabel, subChunks.get(j), estimateTokens(subChunks.get(j))));
+                    results.add(new ChunkResult(
+                            subLabel,
+                            subChunks.get(j),
+                            estimateTokens(subChunks.get(j)),
+                            i,
+                            chapter));
                 }
             }
         }
@@ -210,15 +215,26 @@ public class ChunkUtils {
         private final String label;
         private final String content;
         private final int estimatedTokens;
+        private final int chapterIndex;
+        private final WordParser.Chapter sourceChapter;
 
         public ChunkResult(String label, String content, int estimatedTokens) {
+            this(label, content, estimatedTokens, -1, null);
+        }
+
+        public ChunkResult(String label, String content, int estimatedTokens,
+                           int chapterIndex, WordParser.Chapter sourceChapter) {
             this.label = label;
             this.content = content;
             this.estimatedTokens = estimatedTokens;
+            this.chapterIndex = chapterIndex;
+            this.sourceChapter = sourceChapter;
         }
 
         public String getLabel() { return label; }
         public String getContent() { return content; }
         public int getEstimatedTokens() { return estimatedTokens; }
+        public int getChapterIndex() { return chapterIndex; }
+        public WordParser.Chapter getSourceChapter() { return sourceChapter; }
     }
 }

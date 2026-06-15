@@ -10,11 +10,23 @@ public class AiApiException extends RuntimeException {
 
     private final int statusCode;
     private final String responseBody;
+    /**
+     * Seconds the provider asked us to wait before retrying, parsed from the
+     * {@code Retry-After} response header. {@code -1} when the header is absent or
+     * unparseable. The retry layer honours this on 429 so we don't hammer the
+     * provider inside its rate-limit window.
+     */
+    private final long retryAfterSeconds;
 
     public AiApiException(int statusCode, String responseBody, String message) {
+        this(statusCode, responseBody, message, -1L);
+    }
+
+    public AiApiException(int statusCode, String responseBody, String message, long retryAfterSeconds) {
         super(message);
         this.statusCode = statusCode;
         this.responseBody = responseBody;
+        this.retryAfterSeconds = retryAfterSeconds;
     }
 
     public int getStatusCode() {
@@ -23,6 +35,10 @@ public class AiApiException extends RuntimeException {
 
     public String getResponseBody() {
         return responseBody;
+    }
+
+    public long getRetryAfterSeconds() {
+        return retryAfterSeconds;
     }
 
     /**

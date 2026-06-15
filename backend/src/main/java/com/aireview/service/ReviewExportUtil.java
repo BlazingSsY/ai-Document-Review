@@ -76,6 +76,7 @@ public final class ReviewExportUtil {
                     if (!(item instanceof Map<?, ?>)) continue;
                     @SuppressWarnings("unchecked")
                     Map<String, Object> check = (Map<String, Object>) item;
+                    if (isHighConfidenceNotApplicable(check)) continue;
                     writeCheckResultRow(sheet.createRow(rowNum), rowNum, check, dataStyle);
                     rowNum++;
                 }
@@ -323,6 +324,11 @@ public final class ReviewExportUtil {
             case "Review" -> "待复核";
             default -> raw.trim();
         };
+    }
+
+    private static boolean isHighConfidenceNotApplicable(Map<String, Object> check) {
+        return "N/A".equalsIgnoreCase(strField(check, "status").trim())
+                && "high".equalsIgnoreCase(strField(check, "confidence").trim());
     }
 
     /**

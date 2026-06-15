@@ -9,12 +9,21 @@
   margin-bottom: 12px;
 }
 
+.review-page {
+  height: calc(100vh - 112px);
+  min-height: 640px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
 .review-workspace {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: calc(100vh - 112px);
-  min-height: 0;
+  min-height: calc(100vh - 112px);
+  padding-bottom: 12px;
   background: #f5f7fa;
 }
 
@@ -84,8 +93,9 @@
   display: grid;
   grid-template-columns: minmax(360px, 0.95fr) minmax(420px, 1.05fr);
   gap: 12px;
-  min-height: 360px;
-  flex: 1;
+  height: clamp(620px, calc(100vh - 190px), 900px);
+  min-height: 620px;
+  flex: none;
   overflow: hidden;
 }
 
@@ -383,6 +393,7 @@
 .source-html-view table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: auto;
   background: #fff;
 }
 
@@ -397,8 +408,20 @@
 }
 
 .source-html-view th {
-  background: #f5f7fa;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eaf2ff;
+  color: #1f2937;
   font-weight: 600;
+}
+
+.source-html-view tr:nth-child(even) td {
+  background: #fafcff;
+}
+
+.source-html-view tr:hover td {
+  background: #f0f7ff;
 }
 
 .source-html-view .source-node-highlight {
@@ -430,22 +453,20 @@
   grid-template-columns: minmax(420px, 1.45fr) minmax(320px, 0.8fr);
   gap: 12px;
   flex-shrink: 0;
-  min-height: 190px;
-  max-height: 240px;
+  height: 420px;
+  min-height: 420px;
 }
 
 .log-card,
 .runtime-card {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
 
-.log-card {
-  display: flex;
-  flex-direction: column;
-}
-
-.log-card .ant-card-body {
+.log-card .ant-card-body,
+.runtime-card .ant-card-body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -453,7 +474,6 @@
 
 .log-window {
   height: 100%;
-  max-height: 188px;
   overflow-y: auto;
   background: #fafafa;
   padding: 4px 0;
@@ -514,7 +534,6 @@
 }
 
 .runtime-card .ant-card-body {
-  max-height: 188px;
   overflow-y: auto;
 }
 
@@ -527,23 +546,49 @@
 
 .runtime-item {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f0f0f0;
   color: #374151;
   font-size: 12px;
 }
 
-.runtime-item span:first-child {
+.runtime-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.runtime-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runtime-item-heading span:first-child {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.runtime-rule-names {
+  color: #6b7280;
+  line-height: 1.6;
+  white-space: normal;
+  word-break: break-word;
 }
 
 @media (max-width: 1100px) {
-  .review-workspace {
+  .review-page {
     height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .review-workspace {
+    min-height: 0;
   }
 
   .review-overview-strip,
@@ -557,12 +602,19 @@
     min-height: 480px;
   }
 
-  .review-bottom-grid {
-    max-height: none;
+  .review-main-grid {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
   }
 
-  .log-window,
-  .runtime-card .ant-card-body {
-    max-height: 260px;
+  .review-bottom-grid {
+    height: auto;
+    min-height: 0;
+  }
+
+  .log-card,
+  .runtime-card {
+    height: 360px;
   }
 }

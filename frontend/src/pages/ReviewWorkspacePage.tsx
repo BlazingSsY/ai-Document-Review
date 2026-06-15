@@ -298,6 +298,12 @@ function isProblemCheck(item: Record<string, unknown>): boolean {
   return status !== 'Pass' && status !== 'N/A';
 }
 
+function isHighConfidenceNotApplicable(item: Record<string, unknown>): boolean {
+  const status = textField(item, ['status']).trim().toUpperCase();
+  const confidence = textField(item, ['confidence']).trim().toLowerCase();
+  return status === 'N/A' && confidence === 'high';
+}
+
 function confidenceLabel(confidence: string): string {
   if (confidence === 'high') return '高置信度';
   if (confidence === 'medium') return '中置信度';
@@ -330,6 +336,14 @@ function locatorCandidates(locator: string): string[] {
       .map((part) => part.replace(/^[“"'‘’]+|[”"'‘’]+$/g, '').trim())
       .filter((part) => part.length >= 8),
   ].sort((left, right) => right.length - left.length);
+}
+
+function normalizeLocatorText(value: string): string {
+  return value
+    .replace(/\|?\s*:?-{3,}:?\s*(?=\||$)/g, ' ')
+    .replace(/[|`*_#>]/g, ' ')
+    .replace(/\s+/g, '')
+    .trim();
 }
 
 function buildHighlightedSourceHtml(
@@ -368,9 +382,14 @@ function buildHighlightedSourceHtml(
     const candidates = locatorCandidates(locator);
     startIndex = nodes.findIndex((node) => {
       const nodeText = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      const compactNodeText = normalizeLocatorText(nodeText);
       return candidates.some((candidate) => {
         const value = candidate.replace(/\s+/g, ' ').trim();
-        return nodeText.includes(value) || (nodeText.length >= 8 && value.includes(nodeText));
+        const compactValue = normalizeLocatorText(value);
+        return nodeText.includes(value)
+          || (nodeText.length >= 8 && value.includes(nodeText))
+          || (compactValue.length >= 4 && compactNodeText.includes(compactValue))
+          || (compactNodeText.length >= 8 && compactValue.includes(compactNodeText));
       });
     });
     endIndex = startIndex;
@@ -729,14 +748,21 @@ function ReviewWorkspacePage() {
   const issues = extractIssues(task.aiResult);
   const checkResults = extractCheckResults(task.aiResult);
   const hasCheckMatrix = checkResults.length > 0;
-  const reviewItems = hasCheckMatrix ? checkResults : issues;
+  const visibleCheckResults = checkResults.filter((item) => !isHighConfidenceNotApplicable(item));
+  const reviewItems = hasCheckMatrix ? visibleCheckResults : issues;
   const problemCount = hasCheckMatrix
-    ? checkResults.filter(isProblemCheck).length
+    ? visibleCheckResults.filter(isProblemCheck).length
     : issues.length;
   const overallScore = task.aiResult?.overallScore as number | undefined;
   const totalChunks = task.aiResult?.totalChunks as number | undefined;
   const categoryCounts = (task.aiResult?.categoryCounts || {}) as Record<string, number>;
-  const checkStatusCounts = (task.aiResult?.checkStatusCounts || {}) as Record<string, number>;
+  const checkStatusCounts = hasCheckMatrix
+    ? visibleCheckResults.reduce<Record<string, number>>((counts, item) => {
+        const itemStatus = textField(item, ['status']) || 'Review';
+        counts[itemStatus] = (counts[itemStatus] || 0) + 1;
+        return counts;
+      }, {})
+    : {};
   const chunkResults = (task.aiResult?.chunkResults || []) as Array<Record<string, unknown>>;
   const originalSources = recordArray(task.aiResult?.originalSources);
   const failedChunks = (task.aiResult?.failedChunks || []) as Array<Record<string, unknown>>;
@@ -766,7 +792,7 @@ function ReviewWorkspacePage() {
   const displayedChunkCount = totalChunks ?? (chunkResults.length > 0 ? chunkResults.length : '-');
 
   return (
-    <div>
+    <div className="review-page">
       <div className="page-header review-page-header">
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/dashboard')}>
@@ -850,7 +876,9 @@ function ReviewWorkspacePage() {
               <div>
                 <h3>{hasCheckMatrix ? '检查项判定矩阵' : '大模型审查结果'}</h3>
                 <Text type="secondary">
-                  点击任一{hasCheckMatrix ? '检查项' : '问题'}，右侧定位并显示完整章节原文。
+                  {hasCheckMatrix
+                    ? '点击检查项查看原文。“不适用”仅表示已匹配检查项存在明确豁免或前置条件不成立；未匹配规则不会进入矩阵。'
+                    : '点击任一问题，右侧定位并显示完整章节原文。'}
                 </Text>
               </div>
               <Tag>{reviewItems.length} 条</Tag>
@@ -1121,17 +1149,21 @@ function ReviewWorkspacePage() {
                 <div>
                   <Text strong>规则调度</Text>
                   <div className="runtime-list">
-                    {chunkResults.slice(0, 12).map((cr, idx) => {
+                    {chunkResults.map((cr, idx) => {
                       const applied = (cr.appliedRules || []) as string[];
                       const title = String(cr.chapterTitle || `切片 ${idx + 1}`);
                       return (
                         <div key={idx} className="runtime-item">
-                          <span>{title}</span>
-                          <Text type="secondary">{applied.length} 条规则</Text>
+                          <div className="runtime-item-heading">
+                            <span>{title}</span>
+                            <Text type="secondary">{applied.length} 条规则</Text>
+                          </div>
+                          {applied.length > 0 && (
+                            <div className="runtime-rule-names">{applied.join('、')}</div>
+                          )}
                         </div>
                       );
                     })}
-                    {chunkResults.length > 12 && <Text type="secondary">其余 {chunkResults.length - 12} 个切片已省略</Text>}
                   </div>
                 </div>
               )}
