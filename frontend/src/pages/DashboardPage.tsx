@@ -60,6 +60,8 @@ const EMPTY_STATS: UnifiedStats = {
 };
 
 function countReviewProblems(task: ReviewTask): number | '-' {
+  // Prefer the backend-cached scalar count so the list never needs the full aiResult.
+  if (typeof task.problemCount === 'number') return task.problemCount;
   const checks = task.aiResult?.allCheckResults;
   if (Array.isArray(checks) && checks.length > 0) {
     return checks.filter((item) => {

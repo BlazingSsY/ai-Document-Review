@@ -717,13 +717,13 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
           </Form.Item>
           <Form.Item
             name="keywords"
-            label="适用范围"
-            extra="提交审查时会与上传文档的一级标题进行匹配，命中即认为该规则适用于该章节。下拉框中可选择当前规则库已有的范围；也可直接键入新的回车确认。"
+            label="匹配关键词"
+            extra="自定义本规则的匹配关键词：审查时会与上传文档的一级标题做匹配，命中任一关键词即认为该规则适用于该章节（仅专项规则按此触发）。例如磁影响章节可同时填“磁影响、磁效应”。下拉可选当前规则库已有关键词，也可直接键入后回车新增。"
           >
             <Select
               mode="tags"
               tokenSeparators={[',', '，']}
-              placeholder="选择或输入适用范围"
+              placeholder="选择或输入匹配关键词"
               options={libraryScopeOptions}
             />
           </Form.Item>

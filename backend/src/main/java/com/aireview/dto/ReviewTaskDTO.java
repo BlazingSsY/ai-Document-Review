@@ -18,6 +18,8 @@ public class ReviewTaskDTO {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private String failReason;
+    /** Cached scalar problem count for the task list (avoids shipping the full aiResult). */
+    private Integer problemCount;
     /**
      * "CHUNK"（全文逐章审查）或 "RAG"（智能召回审查）。
      * 由列表/详情接口在序列化时填入，让前端按管线分流后续调用。

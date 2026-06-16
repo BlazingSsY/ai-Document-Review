@@ -3,6 +3,7 @@ package com.aireview.util;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.xwpf.usermodel.*;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTAbstractNum;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTDecimalNumber;
@@ -30,6 +31,16 @@ import java.util.*;
  */
 @Slf4j
 public class WordParser {
+
+    static {
+        // POI guards against "zip bombs" by rejecting any entry whose
+        // compressed:uncompressed ratio is below MIN_INFLATE_RATIO (default 0.01).
+        // Vector images embedded in real .docx files (EMF/WMF) legitimately compress
+        // far beyond that (e.g. ratio 0.003), tripping a false "Zip bomb detected!"
+        // error. We process trusted, user-uploaded review documents, so relax the
+        // ratio to allow these highly-compressible media entries through.
+        ZipSecureFile.setMinInflateRatio(0.0001d);
+    }
 
     private WordParser() {
     }
@@ -349,13 +360,19 @@ public class WordParser {
                 if (element instanceof XWPFParagraph p) {
                     int lvl = getHeadingLevel(p, styleHeadingLevels);
                     if (lvl > 0) {
+                        // Ignore stray empty heading paragraphs (no text, no figure) when
+                        // choosing the chapter-split level. A blank heading must not dictate
+                        // the split level — e.g. an empty H2 sitting before the first real H1
+                        // would otherwise force the whole document to be split by H2. This
+                        // mirrors the empty-heading skip in the second pass below.
+                        String text = getParagraphTextWithSpecialChars(p);
+                        if ((text == null || text.isBlank()) && !hasDrawingOrPicture(p)) {
+                            continue;
+                        }
                         if (firstHeadingLevel == -1) {
                             firstHeadingLevel = lvl;
                         }
-                        String text = p.getText();
-                        if (text != null && !text.isBlank()) {
-                            detectedHeadingTexts.add("H" + lvl + ": " + text.trim());
-                        }
+                        detectedHeadingTexts.add("H" + lvl + ": " + text.trim());
                     }
                 }
             }

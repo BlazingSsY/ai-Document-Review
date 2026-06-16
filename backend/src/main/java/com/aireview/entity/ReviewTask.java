@@ -37,6 +37,9 @@ public class ReviewTask {
 
     private String failReason;
 
+    /** Scalar problem count cached on completion/manual-review so the task list never reads ai_result. */
+    private Integer problemCount;
+
     // Status constants
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_PROCESSING = "PROCESSING";

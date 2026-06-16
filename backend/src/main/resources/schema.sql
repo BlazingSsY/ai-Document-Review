@@ -776,7 +776,92 @@ BEGIN
     RAISE NOTICE 'RAG split migration: completed';
 END $rag_migration$;
 
+-- Dashboard list performance: store a scalar problem count per task so the unified
+-- task list never has to read/deserialize the large ai_result JSON just to show "问题数".
+ALTER TABLE review_tasks     ADD COLUMN IF NOT EXISTS problem_count INTEGER;
+ALTER TABLE rag_review_tasks ADD COLUMN IF NOT EXISTS problem_count INTEGER;
+
+-- One-time backfill for historical rows (only where still NULL). Mirrors the frontend's
+-- count: chunk side = Fail+Review check items (fallback totalIssues); RAG side = totalIssues
+-- (which already equals the non-Pass check count). Going-forward rows are set in Java exactly.
+UPDATE review_tasks SET problem_count = CASE
+        WHEN (COALESCE((ai_result->'checkStatusCounts'->>'Pass')::int, 0)
+            + COALESCE((ai_result->'checkStatusCounts'->>'Fail')::int, 0)
+            + COALESCE((ai_result->'checkStatusCounts'->>'Review')::int, 0)) > 0
+        THEN COALESCE((ai_result->'checkStatusCounts'->>'Fail')::int, 0)
+           + COALESCE((ai_result->'checkStatusCounts'->>'Review')::int, 0)
+        ELSE COALESCE((ai_result->>'totalIssues')::int, 0)
+    END
+WHERE problem_count IS NULL AND ai_result IS NOT NULL;
+
+UPDATE rag_review_tasks SET problem_count = COALESCE((ai_result->>'totalIssues')::int, 0)
+WHERE problem_count IS NULL AND ai_result IS NOT NULL;
+
 -- Seed supervisor account (password: admin_root)
 INSERT INTO users (email, password_hash, name, role)
 VALUES ('admin_root', '$2a$10$ETZlQAgiNM5jbwyBXaG5tOcbZjq8g7Fl7DceMfUmajyOI0/4ASDB.', '项目主管', 'supervisor')
 ON CONFLICT (email) DO NOTHING;
+
+-- Seed the editable built-in "基础文字质量审查" rule + checks.
+-- ReviewService still injects this rule into every chapter prompt and enforces it
+-- (禁止 N/A、漏项补齐、不受 token 预算裁剪) in code; sourcing its preface and checks
+-- from here just lets users edit the wording/criteria via the rule-management UI.
+-- Fully idempotent: each row is inserted only when absent (keyed by name / rule_code /
+-- check_code), so re-running schema.sql on every startup is safe and never duplicates.
+DO $basic_quality_seed$
+DECLARE
+    v_creator_id BIGINT;
+    v_library_id BIGINT;
+    v_rule_id    BIGINT;
+BEGIN
+    SELECT id INTO v_creator_id FROM users WHERE email = 'admin_root' LIMIT 1;
+    IF v_creator_id IS NULL THEN
+        RETURN; -- no supervisor account to own the seed; ReviewService falls back to defaults
+    END IF;
+
+    SELECT id INTO v_library_id FROM rule_libraries WHERE name = '系统内置规则' LIMIT 1;
+    IF v_library_id IS NULL THEN
+        INSERT INTO rule_libraries (name, description, creator_id)
+        VALUES ('系统内置规则',
+                '系统内置、跨规则库始终生效的基础规则；可在此编辑其检查项与说明。',
+                v_creator_id)
+        RETURNING id INTO v_library_id;
+    END IF;
+
+    SELECT id INTO v_rule_id FROM rules WHERE rule_code = 'R-BASIC-QUALITY' LIMIT 1;
+    IF v_rule_id IS NULL THEN
+        INSERT INTO rules (rule_name, file_type, content, creator_id, library_id,
+                           is_valid, rule_code, rule_type, document_type, description)
+        VALUES ('基础文字质量审查', 'md',
+'仅审查当前章节的文字表达质量，不审查工程字段完整性、试验项目完整性、设备证书、试验条件、试验程序或标准符合性。
+章节内容简短或只有一行不是问题，不得因篇幅短判定不通过。
+下列检查项对当前章节始终适用，不得跳过；如无法确定请判待复核（Review）。',
+                v_creator_id, v_library_id, TRUE, 'R-BASIC-QUALITY', 'global', '通用',
+                '系统内置基础文字质量审查规则，所有章节始终执行。')
+        RETURNING id INTO v_rule_id;
+    END IF;
+
+    INSERT INTO rule_checks (rule_id, check_code, check_type, question, pass_criteria,
+                             category, evidence_required, display_order, is_active)
+    SELECT v_rule_id, 'R-BASIC-QUALITY-C001', 'other',
+           '是否存在错别字、漏字、多字、重复词或明显标点错误',
+           '未发现错别字、漏字、多字、重复词或明显标点错误',
+           '其他', TRUE, 1, TRUE
+    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-BASIC-QUALITY-C001');
+
+    INSERT INTO rule_checks (rule_id, check_code, check_type, question, pass_criteria,
+                             category, evidence_required, display_order, is_active)
+    SELECT v_rule_id, 'R-BASIC-QUALITY-C002', 'other',
+           '语句是否通顺，是否存在语序不当、语病或明显歧义',
+           '语句通顺、语义明确，不存在语序不当、语病或明显歧义',
+           '逻辑一致性', TRUE, 2, TRUE
+    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-BASIC-QUALITY-C002');
+
+    INSERT INTO rule_checks (rule_id, check_code, check_type, question, pass_criteria,
+                             category, evidence_required, display_order, is_active)
+    SELECT v_rule_id, 'R-BASIC-QUALITY-C003', 'other',
+           '本章节内术语、名称和称谓是否一致',
+           '本章节内相同对象的术语、名称和称谓保持一致',
+           '术语一致性', TRUE, 3, TRUE
+    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-BASIC-QUALITY-C003');
+END $basic_quality_seed$;

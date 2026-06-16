@@ -320,6 +320,17 @@ function sourceReasonLabel(reason: string): string {
   return reason || '来源匹配';
 }
 
+function sourceChapterLabel(source: Record<string, unknown> | null | undefined): string {
+  const title = textField(source, ['sectionPath', 'chapterTitle', 'title']);
+  const titleMatch = title.match(/^\s*(?:第\s*)?([0-9]+(?:\.[0-9]+)*|[一二三四五六七八九十百千万零〇]+)\s*(?:章|节|条|款|部分|[、.．\s]|$)/);
+  if (titleMatch) return `章节 ${titleMatch[1]}`;
+  const chapterIndex = numericField(source, ['chapterIndex']);
+  if (chapterIndex !== undefined) return `章节 ${chapterIndex}`;
+  const chunk = numericField(source, ['chunk', 'sourceChunk']);
+  if (chunk !== undefined) return `切片 ${chunk}`;
+  return '';
+}
+
 const ALLOWED_SOURCE_TAGS = new Set([
   'DIV', 'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
   'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD',
@@ -781,6 +792,7 @@ function ReviewWorkspacePage() {
   const activeSourceHtml = textField(activeSource, ['html', 'contentHtml']);
   const activeSourceTitle = textField(activeSource, ['sectionPath', 'chapterTitle', 'title']) || sourceTitle(activeChunk);
   const activeSourceId = textField(activeSource, ['sourceId', 'blockId']);
+  const activeSourceChapterLabel = sourceChapterLabel(activeSource);
   const activeEvidenceSourceId = textField(activeSource, ['evidenceSourceId']);
   const activeStartNodeId = textField(activeSource, ['startNodeId', 'start_node_id']);
   const activeEndNodeId = textField(activeSource, ['endNodeId', 'end_node_id']);
@@ -877,7 +889,7 @@ function ReviewWorkspacePage() {
                 <h3>{hasCheckMatrix ? '检查项判定矩阵' : '大模型审查结果'}</h3>
                 <Text type="secondary">
                   {hasCheckMatrix
-                    ? '点击检查项查看原文。“不适用”仅表示已匹配检查项存在明确豁免或前置条件不成立；未匹配规则不会进入矩阵。'
+                    ? '点击检查项查看原文。判定仅为通过 / 不通过 / 待复核三种；证据不足、部分满足或不适用均判为待复核，交人工复核。'
                     : '点击任一问题，右侧定位并显示完整章节原文。'}
                 </Text>
               </div>
@@ -926,11 +938,10 @@ function ReviewWorkspacePage() {
                           ? 'purple'
                           : 'default';
                   const needsManualCheck = confidence === 'needs_review';
-                  // Show the 人工校验 dropdown not only on 待复核 items, but also on every
-                  // definitive 通过/不通过 judgement, so reviewers can override the AI when
-                  // its accuracy is unreliable. Requires a check_code to persist the decision.
-                  const showManualDecision = needsManualCheck
-                    || (hasCheckMatrix && (statusValue === 'Pass' || statusValue === 'Fail'));
+                  // Show the 人工校验 dropdown on every check-matrix item (通过/不通过/待复核)
+                  // so reviewers can override the AI when its accuracy is unreliable, plus any
+                  // non-matrix item flagged needs_review. Requires a check_code to persist.
+                  const showManualDecision = needsManualCheck || hasCheckMatrix;
                   const sourceChunkNo = numericField(item, ['sourceChunk', 'chunk']);
                   const missingItems = Array.isArray(item.missing_items) ? item.missing_items : [];
                   const active = idx === activeIndex;
@@ -1035,7 +1046,9 @@ function ReviewWorkspacePage() {
                 <Text type="secondary">{activeSourceTitle || '完整章节原文'}</Text>
               </div>
               <Space wrap size={4}>
-                {activeSourceId && <Tag color="blue">{activeSourceId}</Tag>}
+                {(activeSourceChapterLabel || activeSourceId) && (
+                  <Tag color="blue">{activeSourceChapterLabel || activeSourceId}</Tag>
+                )}
                 {activeSourceLength !== undefined && <Tag>{activeSourceLength} 字</Tag>}
                 {activeSourceTokens !== undefined && <Tag>{activeSourceTokens} tokens</Tag>}
                 {hasCheckMatrix && activeItem && (
@@ -1068,7 +1081,7 @@ function ReviewWorkspacePage() {
                 <div className="source-provenance">
                   <Text type="secondary">定位溯源</Text>
                   <Space wrap size={6}>
-                    {activeEvidenceSourceId && <Tag color="blue">证据块 {activeEvidenceSourceId}</Tag>}
+                    {activeEvidenceSourceId && <Tag color="blue">定位片段</Tag>}
                     {activeSourceReason && <Tag color="geekblue">{sourceReasonLabel(activeSourceReason)}</Tag>}
                     {activeSourceScore !== undefined && <Tag>召回分 {activeSourceScore.toFixed(3)}</Tag>}
                   </Space>
@@ -1197,9 +1210,7 @@ function ReviewWorkspacePage() {
             <Select
               options={[
                 { label: '通过', value: 'Pass' },
-                { label: '部分通过', value: 'Partial' },
                 { label: '不通过', value: 'Fail' },
-                { label: '不适用', value: 'N/A' },
                 { label: '待复核', value: 'Review' },
               ]}
             />

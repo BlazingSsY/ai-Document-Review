@@ -67,13 +67,14 @@ public class ChapterReferenceResolver {
         Matcher m = NUMERIC_REF.matcher(chunkContent);
         while (m.find()) {
             String num = m.group(1);
-            for (int i = 0; i < chapters.size(); i++) {
-                WordParser.Chapter ch = chapters.get(i);
-                if (ch == null || ch.getTitle() == null || ch.getTitle().isBlank()) continue;
-                if (sameChapter(ch.getTitle(), currentChapterTitle)) continue;
-                if (titleStartsWithNumber(ch.getTitle(), num)) {
-                    hits.add(i);
-                }
+            boolean matched = addChaptersStartingWith(num, currentChapterTitle, chapters, hits);
+            // Sub-section references like "见5.5节" rarely match a top-level (H1) chapter
+            // title directly, since chapters are split by H1 only. Fall back to the containing
+            // top-level chapter (the segment before the first dot, e.g. "5"), whose chunk
+            // holds that sub-section — so "见X.X章节" still pulls the right chunk as context.
+            if (!matched && num.contains(".")) {
+                String topLevel = num.substring(0, num.indexOf('.'));
+                addChaptersStartingWith(topLevel, currentChapterTitle, chapters, hits);
             }
         }
 
@@ -103,6 +104,26 @@ public class ChapterReferenceResolver {
         }
 
         return hits;
+    }
+
+    /**
+     * Add every chapter whose title prefix matches {@code num} (skipping the current chapter)
+     * to {@code hits}. Returns true if at least one chapter matched.
+     */
+    private static boolean addChaptersStartingWith(String num, String currentChapterTitle,
+                                                   List<WordParser.Chapter> chapters,
+                                                   Set<Integer> hits) {
+        boolean matched = false;
+        for (int i = 0; i < chapters.size(); i++) {
+            WordParser.Chapter ch = chapters.get(i);
+            if (ch == null || ch.getTitle() == null || ch.getTitle().isBlank()) continue;
+            if (sameChapter(ch.getTitle(), currentChapterTitle)) continue;
+            if (titleStartsWithNumber(ch.getTitle(), num)) {
+                hits.add(i);
+                matched = true;
+            }
+        }
+        return matched;
     }
 
     /** Two chapter titles refer to the same chapter when their normalised forms match exactly. */

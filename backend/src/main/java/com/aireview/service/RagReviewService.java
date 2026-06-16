@@ -190,11 +190,30 @@ public class RagReviewService {
      */
     public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit) {
         LambdaQueryWrapper<RagReviewTask> query = new LambdaQueryWrapper<>();
+        // Exclude the heavy ai_result JSON from the list query (see ReviewService.recentTasksForUser).
+        query.select(RagReviewTask.class, info -> !"ai_result".equals(info.getColumn()));
         query.eq(RagReviewTask::getUserId, userId);
         query.orderByDesc(RagReviewTask::getCreatedAt);
         Page<RagReviewTask> pageParam = new Page<>(1, Math.max(1, limit));
         return ragReviewTaskMapper.selectPage(pageParam, query).getRecords()
-                .stream().map(this::toDTO).toList();
+                .stream().map(this::toListDTO).toList();
+    }
+
+    /** Lightweight DTO for the task list: metadata + cached problem count, never ai_result. */
+    private ReviewTaskDTO toListDTO(RagReviewTask task) {
+        ReviewTaskDTO dto = new ReviewTaskDTO();
+        dto.setId(task.getId());
+        dto.setUserId(task.getUserId());
+        dto.setFileName(task.getFileName());
+        dto.setScenarioId(task.getScenarioId());
+        dto.setSelectedModel(task.getSelectedModel());
+        dto.setStatus(task.getStatus());
+        dto.setCreatedAt(task.getCreatedAt());
+        dto.setUpdatedAt(task.getUpdatedAt());
+        dto.setFailReason(task.getFailReason());
+        dto.setProblemCount(task.getProblemCount());
+        dto.setReviewMode("RAG");
+        return dto;
     }
 
     public Map<String, Object> getStats(Long userId) {
@@ -318,6 +337,7 @@ public class RagReviewService {
         aiResult.put("manualReviewSummary", ReviewExportUtil.buildManualReviewSummary(allCheckResults));
         applyProblemSummary(aiResult, allCheckResults);
         task.setAiResult(aiResult);
+        task.setProblemCount(ReviewExportUtil.computeProblemCount(aiResult));
         task.setUpdatedAt(LocalDateTime.now());
         ragReviewTaskMapper.updateById(task);
 
@@ -400,6 +420,7 @@ public class RagReviewService {
         dto.setCreatedAt(task.getCreatedAt());
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
+        dto.setProblemCount(task.getProblemCount());
         dto.setReviewMode("RAG");
         return dto;
     }
@@ -530,7 +551,8 @@ public class RagReviewService {
                 Objects.toString(check.get("manualStatus"), ""),
                 Objects.toString(check.get("status"), "Review"));
         String normalized = normalizeCheckStatus(status);
-        return !"Pass".equals(normalized) && !"N/A".equals(normalized);
+        // 三级判定下只有 Pass 不算问题；Fail / Review 都需呈现。
+        return !"Pass".equals(normalized);
     }
 
     // ============================ Pipeline ============================
@@ -851,8 +873,7 @@ public class RagReviewService {
                 if (text.isBlank()) continue;
                 RagDocumentBlock block = new RagDocumentBlock();
                 block.setTaskId(taskId);
-                String chapterKey = firstNonBlank(chapter.getId(), "DOC-C" + String.format("%03d", chapterIdx + 1))
-                        .replace("DOC-", "");
+                String chapterKey = "C" + String.format("%03d", chapterIdx + 1);
                 block.setBlockId("BLOCK-" + chapterKey + "-" + String.format("%04d", blockIdx));
                 block.setBlockType("node_range");
                 block.setChapterIndex(chapterIdx + 1);
@@ -1159,7 +1180,7 @@ public class RagReviewService {
         return DocumentSourceMapper.toChapterSource(
                 chapter,
                 chapterIndex,
-                firstNonBlank(chapter.getId(), "DOC-C" + String.format("%03d", chapterIndex)));
+                "CHAPTER-" + String.format("%03d", chapterIndex));
     }
 
     private String normalizeCheckStatus(Object raw) {
@@ -1169,9 +1190,8 @@ public class RagReviewService {
         String lower = value.toLowerCase(Locale.ROOT);
         return switch (lower) {
             case "pass", "passed" -> "Pass";
-            case "partial", "partially_passed" -> "Partial";
             case "fail", "failed" -> "Fail";
-            case "n/a", "na", "not_applicable", "not applicable" -> "N/A";
+            // 三级判定：部分通过(Partial) 与 不适用(N/A) 一律并入待复核(Review)。
             default -> "Review";
         };
     }
@@ -1208,6 +1228,9 @@ public class RagReviewService {
         task.setStatus(status);
         task.setFailReason(failReason);
         task.setUpdatedAt(LocalDateTime.now());
+        if (task.getAiResult() != null) {
+            task.setProblemCount(ReviewExportUtil.computeProblemCount(task.getAiResult()));
+        }
         ragReviewTaskMapper.updateById(task);
     }
 

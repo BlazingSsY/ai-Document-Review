@@ -25,4 +25,15 @@ public interface RuleMapper extends BaseMapper<Rule> {
             + "INNER JOIN scenario_library_mapping slm ON r.library_id = slm.library_id "
             + "WHERE slm.scenario_id = #{scenarioId} AND r.is_valid = true")
     List<Long> findIdsByScenarioId(@Param("scenarioId") Long scenarioId);
+
+    /**
+     * Resolve a rule id by its (manually-assigned) rule_code. Used to load the editable
+     * built-in "基础文字质量审查" rule (rule_code = R-BASIC-QUALITY) regardless of which
+     * scenario/library is selected, so its UI-edited preface and checks feed the always-on
+     * injection in {@code ReviewService}. Returns the lowest id if duplicates exist; null
+     * when no valid rule carries that code (caller falls back to the hard-coded default).
+     */
+    @Select("SELECT id FROM rules WHERE rule_code = #{ruleCode} AND is_valid = true "
+            + "ORDER BY id ASC LIMIT 1")
+    Long findIdByRuleCode(@Param("ruleCode") String ruleCode);
 }

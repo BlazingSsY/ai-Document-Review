@@ -37,6 +37,9 @@ public class RagReviewTask {
 
     private String failReason;
 
+    /** Scalar problem count cached on completion/manual-review so the task list never reads ai_result. */
+    private Integer problemCount;
+
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_PROCESSING = "PROCESSING";
     public static final String STATUS_COMPLETED = "COMPLETED";

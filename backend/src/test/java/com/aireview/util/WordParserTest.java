@@ -99,6 +99,32 @@ class WordParserTest {
         assertTrue(blocks.stream().allMatch(block -> "node_range".equals(block.getBlockType())));
     }
 
+    @Test
+    void ragBlockIdsUseDisplayedChapterOrderAfterFrontMatterIsSkipped() {
+        WordParser.Chapter chapter = new WordParser.Chapter(
+                "DOC-C002",
+                "1 First chapter",
+                "Body",
+                "Body",
+                "<p data-node-id=\"DOC-C002-N0001\">Body</p>",
+                List.of());
+
+        RagReviewService service = new RagReviewService(
+                null, null, null, null, null, null, null);
+        ReflectionTestUtils.setField(service, "blockMaxChars", 40);
+        List<RagDocumentBlock> blocks = ReflectionTestUtils.invokeMethod(
+                service, "buildBlocks", "task-1", List.of(chapter));
+
+        assertFalse(blocks.isEmpty());
+        assertEquals("BLOCK-C001-0001", blocks.get(0).getBlockId());
+        assertEquals(1, blocks.get(0).getChapterIndex());
+
+        Map<String, Object> source = ReflectionTestUtils.invokeMethod(
+                service, "toOriginalSource", chapter, 1);
+        assertEquals("CHAPTER-001", source.get("sourceId"));
+        assertEquals(1, source.get("chapterIndex"));
+    }
+
     private static void heading(XWPFDocument document, String style, String text) {
         XWPFParagraph paragraph = document.createParagraph();
         paragraph.setStyle(style);

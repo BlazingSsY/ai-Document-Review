@@ -11,12 +11,14 @@ import com.aireview.entity.RuleCheck;
 import com.aireview.repository.ReviewAuditLogMapper;
 import com.aireview.repository.ReviewTaskMapper;
 import com.aireview.repository.RuleCheckMapper;
+import com.aireview.repository.RuleMapper;
 import com.aireview.review.ReviewResultSchema;
 import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.util.ChapterReferenceResolver;
 import com.aireview.util.ChunkUtils;
 import com.aireview.util.DocumentSourceMapper;
 import com.aireview.util.RuleDispatcher;
+import com.aireview.util.RuleMetadata;
 import com.aireview.util.RuleParser;
 import com.aireview.util.WordParser;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,6 +59,7 @@ public class ReviewService {
     private final AiModelService aiModelService;
     private final WebSocketService webSocketService;
     private final RuleCheckMapper ruleCheckMapper;
+    private final RuleMapper ruleMapper;
     private final ReviewAuditLogMapper reviewAuditLogMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -274,6 +277,7 @@ public class ReviewService {
         syncChunkCheckResult(aiResult, target);
         aiResult.put("manualReviewSummary", buildManualReviewSummary(allCheckResults));
         task.setAiResult(aiResult);
+        task.setProblemCount(ReviewExportUtil.computeProblemCount(aiResult));
         task.setUpdatedAt(LocalDateTime.now());
         reviewTaskMapper.updateById(task);
 
@@ -983,8 +987,16 @@ public class ReviewService {
      * </ol>
      */
     private String buildPromptForRules(List<RuleDispatcher.PreparedRule> rulesForChunk) {
+        return RuleParser.buildStructuredSystemPrompt(buildRuleEntriesForChunk(rulesForChunk));
+    }
+
+    /**
+     * Build the ordered rule-entry list injected into a chunk's prompt: the editable
+     * built-in quality rule first, then the dispatched rules (after token-budget trim).
+     */
+    private List<RuleParser.RuleEntry> buildRuleEntriesForChunk(List<RuleDispatcher.PreparedRule> rulesForChunk) {
         if (rulesForChunk == null || rulesForChunk.isEmpty()) {
-            return RuleParser.buildStructuredSystemPrompt(List.of(builtInQualityRule()));
+            return List.of(builtInQualityRule());
         }
 
         // 转 RuleEntry + 缺失编号自动补齐
@@ -992,6 +1004,11 @@ public class ReviewService {
         int autoSeq = 1;
         for (RuleDispatcher.PreparedRule pr : rulesForChunk) {
             String code = pr.getMetadata() != null ? pr.getMetadata().getRuleCode() : null;
+            // Skip the editable built-in rule if it was dispatched through a scenario/library:
+            // it is always prepended separately below, so including it here would duplicate it.
+            if (RuleDispatcher.BASIC_QUALITY_RULE_CODE.equals(code)) {
+                continue;
+            }
             if (code == null || code.isBlank()) {
                 code = "R-AUTO-" + String.format("%03d", autoSeq++);
             }
@@ -1009,7 +1026,7 @@ public class ReviewService {
                     entries.size(), kept.size(), RULE_BUDGET_TOKENS);
         }
         kept.add(0, builtInQualityRule());
-        return RuleParser.buildStructuredSystemPrompt(kept);
+        return kept;
     }
 
     private void attachChecks(List<RuleDispatcher.PreparedRule> preparedRules) {
@@ -1172,7 +1189,11 @@ public class ReviewService {
                                                    AiModelConfig modelConfig,
                                                    String taskId) throws Exception {
         int chunkNum = chunkIdx + 1;
-        String systemPrompt = buildPromptForRules(dispatch.getAppliedRules());
+        List<RuleParser.RuleEntry> ruleEntries = buildRuleEntriesForChunk(dispatch.getAppliedRules());
+        String systemPrompt = RuleParser.buildStructuredSystemPrompt(ruleEntries);
+        // 1a: floor check_results at the number of injected rules/checks so weak models
+        // can't drop them; paired with the prompt's coverage anchoring (same count).
+        int minChecks = RuleParser.expectedCheckCount(ruleEntries);
 
         Set<Integer> refIdx = ChapterReferenceResolver
                 .findReferencedChapters(chunk.getContent(), chunk.getLabel(), chapters);
@@ -1186,7 +1207,7 @@ public class ReviewService {
         List<Map<String, Object>> samples = new ArrayList<>();
         for (int s = 0; s < sampleCount; s++) {
             long seed = stableSeed(taskId, chunkIdx, s);
-            AiCallOptions options = buildConvergenceOptions(modelConfig, seed);
+            AiCallOptions options = buildConvergenceOptions(modelConfig, seed, minChecks);
             String aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent, options);
             Map<String, Object> parsed = tryParseAiJson(aiResponse);
             if (parsed == null) {
@@ -1222,20 +1243,73 @@ public class ReviewService {
         return chunkResult;
     }
 
+    /** Default preface used when the editable rule row is missing or has blank content. */
+    private static final String BASIC_QUALITY_DEFAULT_PREFACE = """
+            仅审查当前章节的文字表达质量，不审查工程字段完整性、试验项目完整性、
+            设备证书、试验条件、试验程序或标准符合性。
+            章节内容简短或只有一行不是问题，不得因篇幅短判定不通过。
+            下列三个检查项对当前章节始终适用，不得跳过；如无法确定请判待复核（Review）。
+            """;
+
+    /**
+     * Built-in 基础文字质量审查 rule injected into every chapter prompt. Its preface and
+     * checks are sourced from the editable DB rule (rule_code = R-BASIC-QUALITY) so users
+     * can tune them from the UI; if that row is absent (fresh DB, failed seed) we fall back
+     * to {@link #BASIC_QUALITY_DEFAULT_PREFACE} / {@link #defaultBasicQualityChecks()} so the
+     * always-on review never disappears. Code-side enforcement (禁止 N/A、漏项补齐、不受预算
+     * 裁剪) is unchanged and keyed on {@link RuleDispatcher#BASIC_QUALITY_RULE_CODE}.
+     */
     private RuleParser.RuleEntry builtInQualityRule() {
+        Rule dbRule = loadEditableBasicQualityRule();
+        String name = RuleDispatcher.BASIC_QUALITY_RULE_NAME;
+        String preface = BASIC_QUALITY_DEFAULT_PREFACE;
+        if (dbRule != null) {
+            if (dbRule.getRuleName() != null && !dbRule.getRuleName().isBlank()) {
+                name = dbRule.getRuleName().trim();
+            }
+            String body = RuleMetadata.stripFrontmatter(
+                    Objects.toString(dbRule.getContent(), ""), dbRule.getFileType());
+            if (body != null && !body.isBlank()) {
+                preface = body.trim();
+            }
+        }
         return new RuleParser.RuleEntry(
-                RuleDispatcher.BASIC_QUALITY_RULE_CODE,
-                RuleDispatcher.BASIC_QUALITY_RULE_NAME,
-                """
-                仅审查当前章节的文字表达质量，不审查工程字段完整性、试验项目完整性、
-                设备证书、试验条件、试验程序或标准符合性。
-                章节内容简短或只有一行不是问题，不得因篇幅短判定不通过。
-                下列三个检查项对当前章节始终适用，禁止判定为 N/A。
-                """,
-                basicQualityChecks());
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE, name, preface, basicQualityChecks());
     }
 
+    /**
+     * The three (or user-edited) basic-quality checks. Loaded from the editable DB rule's
+     * {@code rule_checks}; falls back to {@link #defaultBasicQualityChecks()} when the rule
+     * row or its active checks are missing. Drives both the prompt and the N/A / missing-item
+     * enforcement in {@link #enrichBuiltInQualityChecks(Map)}.
+     */
     private List<RuleParser.CheckEntry> basicQualityChecks() {
+        Rule dbRule = loadEditableBasicQualityRule();
+        if (dbRule != null && dbRule.getId() != null) {
+            try {
+                List<RuleCheck> dbChecks = ruleCheckMapper.findActiveByRuleId(dbRule.getId());
+                if (dbChecks != null && !dbChecks.isEmpty()) {
+                    return toCheckEntries(RuleDispatcher.BASIC_QUALITY_RULE_CODE, dbChecks);
+                }
+            } catch (Exception e) {
+                log.warn("加载可编辑基础文字质量检查项失败，回退内置默认：{}", e.getMessage());
+            }
+        }
+        return defaultBasicQualityChecks();
+    }
+
+    /** Load the editable built-in rule row by rule_code; null when absent or on error. */
+    private Rule loadEditableBasicQualityRule() {
+        try {
+            Long id = ruleMapper.findIdByRuleCode(RuleDispatcher.BASIC_QUALITY_RULE_CODE);
+            return id == null ? null : ruleMapper.selectById(id);
+        } catch (Exception e) {
+            log.warn("加载可编辑基础文字质量规则失败，回退内置默认：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    private List<RuleParser.CheckEntry> defaultBasicQualityChecks() {
         return List.of(
                 new RuleParser.CheckEntry(
                         RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C001",
@@ -1324,12 +1398,24 @@ public class ReviewService {
      * </ul>
      */
     private AiCallOptions buildConvergenceOptions(AiModelConfig modelConfig, long seed) {
+        return buildConvergenceOptions(modelConfig, seed, 0);
+    }
+
+    /**
+     * Build convergence options. When {@code minChecks > 0}, the structured schema sets a
+     * {@code minItems} floor on check_results (1a coverage enforcement); otherwise the plain
+     * schema is used.
+     */
+    private AiCallOptions buildConvergenceOptions(AiModelConfig modelConfig, long seed, int minChecks) {
         boolean thinking = ThinkingModeDetector.isThinking(modelConfig);
+        com.alibaba.fastjson2.JSONObject schema = minChecks > 0
+                ? ReviewResultSchema.schemaWithMinChecks(minChecks)
+                : ReviewResultSchema.schema();
         AiCallOptions.AiCallOptionsBuilder b = AiCallOptions.builder()
                 .seed(seed)
                 .maxTokensOverride(thinking ? null : CONVERGENCE_MAX_TOKENS)
                 .structuredSchema(com.alibaba.fastjson2.JSON.parseObject(
-                        com.alibaba.fastjson2.JSON.toJSONString(ReviewResultSchema.schema())))
+                        com.alibaba.fastjson2.JSON.toJSONString(schema)))
                 .structuredSchemaName(ReviewResultSchema.SCHEMA_NAME);
         if (!thinking) {
             b.temperature(CONVERGENCE_TEMPERATURE).topP(CONVERGENCE_TOP_P);
@@ -1459,7 +1545,7 @@ public class ReviewService {
     }
 
     private String chooseMostConservativeStatus(List<Map<String, Object>> occurrences) {
-        List<String> order = List.of("Fail", "Partial", "Review", "N/A", "Pass");
+        List<String> order = List.of("Fail", "Review", "Pass");
         for (String status : order) {
             for (Map<String, Object> item : occurrences) {
                 if (status.equals(normalizeCheckStatus(item.get("status")))) {
@@ -1923,10 +2009,11 @@ public class ReviewService {
         String lower = s.toLowerCase(Locale.ROOT);
         return switch (lower) {
             case "pass", "passed", "通过", "符合" -> "Pass";
-            case "partial", "partially_passed", "部分通过", "部分符合", "部分满足" -> "Partial";
             case "fail", "failed", "不通过", "不符合", "未通过" -> "Fail";
-            case "n/a", "na", "not_applicable", "not applicable", "不适用" -> "N/A";
-            case "review", "needs_review", "待复核", "人工复核", "需复核" -> "Review";
+            // 三级判定：部分通过(Partial) 与 不适用(N/A) 一律并入待复核(Review)，交人工判定。
+            case "partial", "partially_passed", "部分通过", "部分符合", "部分满足",
+                 "n/a", "na", "not_applicable", "not applicable", "不适用",
+                 "review", "needs_review", "待复核", "人工复核", "需复核" -> "Review";
             default -> ReviewResultSchema.CHECK_STATUS_ENUM.contains(s) ? s : "Review";
         };
     }
@@ -2070,6 +2157,9 @@ public class ReviewService {
         task.setStatus(status);
         task.setFailReason(failReason);
         task.setUpdatedAt(LocalDateTime.now());
+        if (task.getAiResult() != null) {
+            task.setProblemCount(ReviewExportUtil.computeProblemCount(task.getAiResult()));
+        }
         reviewTaskMapper.updateById(task);
     }
 
@@ -2225,6 +2315,7 @@ public class ReviewService {
         dto.setCreatedAt(task.getCreatedAt());
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
+        dto.setProblemCount(task.getProblemCount());
         dto.setReviewMode("CHUNK");
         return dto;
     }
@@ -2235,10 +2326,31 @@ public class ReviewService {
      */
     public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit) {
         LambdaQueryWrapper<ReviewTask> query = new LambdaQueryWrapper<>();
+        // Exclude the heavy ai_result JSON from the list query — the dashboard only needs
+        // metadata + the cached problem_count, and reading hundreds of big blobs was the
+        // cause of the multi-second list load.
+        query.select(ReviewTask.class, info -> !"ai_result".equals(info.getColumn()));
         query.eq(ReviewTask::getUserId, userId);
         query.orderByDesc(ReviewTask::getCreatedAt);
         Page<ReviewTask> pageParam = new Page<>(1, Math.max(1, limit));
         return reviewTaskMapper.selectPage(pageParam, query).getRecords()
-                .stream().map(this::toDTO).toList();
+                .stream().map(this::toListDTO).toList();
+    }
+
+    /** Lightweight DTO for the task list: metadata + cached problem count, never ai_result. */
+    private ReviewTaskDTO toListDTO(ReviewTask task) {
+        ReviewTaskDTO dto = new ReviewTaskDTO();
+        dto.setId(task.getId());
+        dto.setUserId(task.getUserId());
+        dto.setFileName(task.getFileName());
+        dto.setScenarioId(task.getScenarioId());
+        dto.setSelectedModel(task.getSelectedModel());
+        dto.setStatus(task.getStatus());
+        dto.setCreatedAt(task.getCreatedAt());
+        dto.setUpdatedAt(task.getUpdatedAt());
+        dto.setFailReason(task.getFailReason());
+        dto.setProblemCount(task.getProblemCount());
+        dto.setReviewMode("CHUNK");
+        return dto;
     }
 }

@@ -194,7 +194,7 @@ public class RuleParser {
         sp.append("      \"evidence\": \"判定依据：摘录支持该结论的原文片段或表格行\"\n");
         sp.append("    }\n");
         sp.append("  ],\n");
-        sp.append("  \"passed_items\": [\"通过或不适用的检查项\"]\n");
+        sp.append("  \"passed_items\": [\"通过的检查项\"]\n");
         sp.append("}\n\n");
 
         sp.append("【章节定位规则（location 字段必须遵守）】\n");
@@ -241,7 +241,7 @@ public class RuleParser {
      * <ol>
      *   <li>ROLE + 任务（极简，不到 200 字）；</li>
      *   <li>JSON Schema（机器可读，直接 stringify {@link ReviewResultSchema#schema()}）；</li>
-     *   <li>Few-shot 锚点：1 正例 + 1 不通过例 + 1 不适用例，含 category 判定说明；</li>
+     *   <li>Few-shot 锚点：1 不通过例 + 1 待复核例 + 1 混合例，含 category 判定说明；</li>
      *   <li>规则清单：调用方已按 {@code rule_code} 升序排序，每条以 {@code [R-XXX]} 编号；</li>
      * </ol>
      * 末尾追加严重度默认值兜底和"只能用清单内编号"的约束，把模型自由度压到最小。
@@ -275,9 +275,9 @@ public class RuleParser {
         sp.append("location 锚点：按 \"一级标题 > 二级标题 > 三级标题\" 写，逐字与原文一致，禁止仅写 \"原文\" / \"表格中\" / \"上文\"。\n\n");
         sp.append("示例 1（正例，识别为问题）：\n");
         sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"category\":\"完整性\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\"}],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"是否明确工作温度区间\",\"status\":\"Fail\",\"reason\":\"原文未给出明确温度上下限\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\",\"missing_items\":[\"工作温度区间\"],\"suggestion\":\"补充明确温度区间\",\"confidence\":\"high\"}]}\n");
-        sp.append("示例 2（规则已适配到本章节，但明确前置条件不成立 → N/A，不产生 issue）：\n");
-        sp.append("{\"summary\":\"本章节明确说明无陪试设备，陪试设备检查项不适用\",\"issues\":[],\"passed_items\":[\"[R-001] 陪试设备检查项不适用\"],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"陪试设备信息是否完整\",\"status\":\"N/A\",\"reason\":\"原文明示陪试设备为无，且规则允许无陪试设备时不适用\",\"evidence\":\"陪试设备：无\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"high\"}]}\n");
-        sp.append("示例 3（混合，部分通过部分不通过）：\n");
+        sp.append("示例 2（规则已适配到本章节，但原文明示前置条件不成立/不适用 → 判 Review 交人工复核，不产生 issue）：\n");
+        sp.append("{\"summary\":\"本章节明确说明无陪试设备，陪试设备检查项前置条件不成立，转待复核\",\"issues\":[],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"陪试设备信息是否完整\",\"status\":\"Review\",\"reason\":\"原文明示陪试设备为无，前置条件不成立，无法直接判通过，转人工复核\",\"evidence\":\"陪试设备：无\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"needs_review\"}]}\n");
+        sp.append("示例 3（混合，有的检查项通过、有的不通过）：\n");
         sp.append("{\"summary\":\"试验步骤完整，但术语不一致\",\"issues\":[{\"location\":\"5 试验步骤 > 5.3\",\"description\":\"同一项目混用 \\\"试件\\\" 与 \\\"样件\\\"\",\"suggestion\":\"统一为 \\\"试件\\\"\",\"rule\":\"术语一致性\",\"rule_code\":\"R-007\",\"category\":\"术语一致性\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\"}],\"passed_items\":[\"[R-003] 试验步骤完整\"],\"check_results\":[{\"check_code\":\"R-003-C001\",\"rule_code\":\"R-003\",\"check_question\":\"试验步骤是否完整\",\"status\":\"Pass\",\"reason\":\"步骤要素均已给出\",\"evidence\":\"原文列出准备、执行和记录步骤\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"high\"},{\"check_code\":\"R-007-C001\",\"rule_code\":\"R-007\",\"check_question\":\"术语是否一致\",\"status\":\"Fail\",\"reason\":\"同一对象出现两个术语\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\",\"missing_items\":[],\"suggestion\":\"统一术语\",\"confidence\":\"high\"}]}\n\n");
 
         // ④ 规则清单
@@ -314,11 +314,11 @@ public class RuleParser {
         sp.append("\n本次注入的 rule_code 清单：").append(String.join(", ", manifest)).append("\n");
         sp.append("issues[].rule_code 必须且只能从该清单中选择；不在清单内的编号不允许出现。\n");
         sp.append("若规则下列出了原子检查项，则必须为每个原子检查项输出一条 check_results[]；"
-                + "status 只能是 Pass、Partial、Fail、N/A、Review。"
-                + "证据不足不得判 Pass，应判 Review；部分满足判 Partial。"
-                + "N/A 仅用于规则已经适配到当前章节、但原文明示其前置条件不成立或存在可核验豁免依据的情况；"
-                + "不能因为章节主题与规则无关而批量判 N/A，这类规则应由规则分发阶段排除。"
-                + "基础文字质量检查始终适用，禁止判 N/A。\n");
+                + "status 只能是 Pass、Fail、Review 三选一（不得使用 N/A 或 Partial）。"
+                + "证据充分且满足通过标准判 Pass；明确不满足判 Fail；"
+                + "证据不足、部分满足、或原文明示前置条件不成立/不适用，一律判 Review 交人工复核（不得判 Pass）。"
+                + "不能因为章节主题与规则无关而批量判 Review，这类规则应由规则分发阶段排除。"
+                + "基础文字质量检查始终适用。\n");
 
         // 表格阅读规则（保留，原 prompt 中证实对 HTML 表格审查很关键）
         sp.append("\n【表格阅读注意事项】\n");
@@ -326,7 +326,31 @@ public class RuleParser {
         sp.append("- rowspan/colspan 合并单元格的值同时适用于其覆盖的行/列，判定时按合并语义视为已填写；\n");
         sp.append("- 一行只有一个 <td> 且以 \"注/备注/说明\" 开头的为补充说明行，不作为数据缺失依据；\n");
         sp.append("- 章节正文中若出现 \"=== 以下为本章节引用的其他章节内容 ===\" 分隔块，仅用于补充上下文，不要对其内容套用规则。\n");
+
+        // 末尾强制全覆盖锚定：放在 prompt 最后利用 recency，配合 schema 的 minItems，
+        // 逼模型为每条注入规则都产出 check_results，避免弱模型（如 DeepSeek-V4-Flash）漏判。
+        int expected = expectedCheckCount(sorted);
+        sp.append("\n【强制全覆盖（务必遵守）】\n");
+        sp.append("本次共注入 ").append(expected).append(" 个待判定项（基础文字质量检查 + 上述每条规则各至少一项）。\n");
+        sp.append("check_results 数组必须【至少包含 ").append(expected).append(" 条】，且逐一覆盖上面列出的每一条规则：\n");
+        sp.append("- 即使某条规则判 Pass、或与本章主题关系不大，也必须为其输出一条 check_results；\n");
+        sp.append("- rule_code 用该规则编号；有原子检查项的用其 check_code，无原子检查项的用『规则编号-C001』作为 check_code；\n");
+        sp.append("- 严禁遗漏、合并或少于 ").append(expected).append(" 条。\n");
         return sp.toString();
+    }
+
+    /**
+     * 期望的 check_results 条数 = 每条规则至少 1 条；定义了原子检查项的按其数量计。
+     * 同时用于末尾覆盖锚定文案与 schema 的 {@code minItems} 下限。
+     */
+    public static int expectedCheckCount(List<RuleEntry> entries) {
+        if (entries == null) return 0;
+        int n = 0;
+        for (RuleEntry e : entries) {
+            int c = (e.checks == null) ? 0 : e.checks.size();
+            n += Math.max(1, c);
+        }
+        return n;
     }
 
     /**

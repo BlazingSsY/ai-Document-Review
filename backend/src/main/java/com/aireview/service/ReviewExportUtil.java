@@ -332,6 +332,32 @@ public final class ReviewExportUtil {
     }
 
     /**
+     * Scalar "problem count" for a task, matching the dashboard's display logic
+     * (frontend countReviewProblems): when check results exist, count items whose effective
+     * status (manualStatus overriding status) is not Pass/N/A; otherwise fall back to the
+     * number of issues. Cached into {@code problem_count} so the task list never reads ai_result.
+     */
+    public static int computeProblemCount(Map<String, Object> aiResult) {
+        if (aiResult == null) return 0;
+        Object checksObj = aiResult.get("allCheckResults");
+        if (checksObj instanceof List<?> checks && !checks.isEmpty()) {
+            int n = 0;
+            for (Object o : checks) {
+                if (!(o instanceof Map<?, ?> m)) continue;
+                Object ms = m.get("manualStatus");
+                Object st = m.get("status");
+                String s = (ms != null && !ms.toString().isBlank())
+                        ? ms.toString().trim()
+                        : (st != null ? st.toString().trim() : "Review");
+                if (!"Pass".equalsIgnoreCase(s) && !"N/A".equalsIgnoreCase(s)) n++;
+            }
+            return n;
+        }
+        Object issues = aiResult.get("allIssues");
+        return issues instanceof List<?> l ? l.size() : 0;
+    }
+
+    /**
      * Look up a check_result by code (+ optional source chunk) inside a flat list. Returns
      * null if no match. Used by manual-decision handlers when patching `allCheckResults`.
      */

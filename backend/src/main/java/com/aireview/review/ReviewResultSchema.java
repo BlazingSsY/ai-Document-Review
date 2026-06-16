@@ -18,7 +18,7 @@ import java.util.List;
  *   <li>{@code summary}：当前切片的中文总结。</li>
  *   <li>{@code issues[]}：每条问题必须填齐 rule_code / category / location /
  *       description / suggestion / evidence；这些字段就是跨模型可对比的最小集。</li>
- *   <li>{@code passed_items[]}：通过或不适用的检查项（建议带上 [R-XXX] 编号）。</li>
+ *   <li>{@code passed_items[]}：通过的检查项（建议带上 [R-XXX] 编号）。</li>
  * </ul>
  *
  * <p>category 用 enum 写死，模型不允许自由发挥；当无法判断时强制输出 {@code 其他}。
@@ -27,7 +27,9 @@ public final class ReviewResultSchema {
 
     public static final List<String> CATEGORY_ENUM = List.of(
             "格式", "完整性", "标准符合性", "逻辑一致性", "术语一致性", "其他");
-    public static final List<String> CHECK_STATUS_ENUM = List.of("Pass", "Partial", "Fail", "N/A", "Review");
+    // 三级判定：Pass（通过）、Fail（不通过）、Review（待复核）。不再使用 Partial / N/A，
+    // 模型遇到「部分通过」「不适用 / 前置条件不成立」一律判 Review，交人工复核。
+    public static final List<String> CHECK_STATUS_ENUM = List.of("Pass", "Fail", "Review");
 
     public static final String SCHEMA_NAME = "review_result";
     public static final String BATCH_SCHEMA_NAME = "batch_review_result";
@@ -71,11 +73,12 @@ public final class ReviewResultSchema {
         checkProps.put("check_code", strProp("原子检查项编号，必须使用本次注入清单内的编号。"));
         checkProps.put("rule_code", strProp("所属规则编号，必须使用本次注入清单内的规则编号。"));
         checkProps.put("check_question", strProp("检查项问题。"));
-        checkProps.put("status", enumProp(CHECK_STATUS_ENUM, "五级判定：Pass、Partial、Fail、N/A、Review。"));
+        checkProps.put("status", enumProp(CHECK_STATUS_ENUM,
+                "三级判定：Pass（通过）、Fail（不通过）、Review（待复核）。部分通过、不适用一律判 Review。"));
         checkProps.put("reason", strProp("判定理由，说明为何给出该状态。"));
         checkProps.put("evidence", strProp("证据原文摘录；证据不足时写明未找到直接证据。"));
         checkProps.put("missing_items", missingArr);
-        checkProps.put("suggestion", strProp("整改建议；Pass/N/A 可为空字符串。"));
+        checkProps.put("suggestion", strProp("整改建议；Pass 可为空字符串。"));
         checkProps.put("confidence", enumProp(List.of("high", "medium", "low", "needs_review"),
                 "置信度。证据不足、冲突或模型不确定时填 needs_review。"));
 
@@ -142,6 +145,23 @@ public final class ReviewResultSchema {
         root.put("required", JSON.parseArray(JSON.toJSONString(List.of("chunks"))));
         root.put("properties", rootProps);
         root.put("additionalProperties", false);
+        return root;
+    }
+
+    /**
+     * Per-request variant of {@link #schema()} that sets a {@code minItems} floor on the
+     * {@code check_results} array, so the model must return at least that many judgements
+     * (one per injected rule). Used together with the prompt's coverage anchoring to stop
+     * weak models from silently dropping rule checks. {@code check_results} stays a free
+     * array (model may still produce its own check_codes), so body-only rules keep working.
+     */
+    public static JSONObject schemaWithMinChecks(int minItems) {
+        JSONObject root = schema();
+        if (minItems > 0) {
+            root.getJSONObject("properties")
+                .getJSONObject("check_results")
+                .put("minItems", minItems);
+        }
         return root;
     }
 
