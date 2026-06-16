@@ -445,11 +445,24 @@ public class WordParser {
 
                     // Use getParagraphTextWithSpecialChars to handle <w:noBreakHyphen/> and other special chars
                     String rawText = getParagraphTextWithSpecialChars(paragraph);
+                    int headingLevel = getHeadingLevel(paragraph, styleHeadingLevels);
+
+                    // Skip stray empty heading paragraphs: a styled heading with no visible
+                    // text and no figure is a blank line, not a real chapter/section. If we
+                    // let it through, formatNumber() below would advance the heading counter
+                    // (so "试验目的" becomes "2" instead of "1", shifting every chapter +1)
+                    // and the chapter-boundary branch would emit a phantom chapter. We must
+                    // skip BEFORE calling formatNumber so the numbering counter is not advanced.
+                    if (headingLevel > 0
+                            && (rawText == null || rawText.isBlank())
+                            && !hasDrawingOrPicture(paragraph)) {
+                        continue;
+                    }
+
                     // Reconstruct auto-numbering. This advances internal counters even when
                     // the paragraph has no visible text, so list numbering stays correct.
                     String numberPrefix = numberingFormatter.formatNumber(paragraph, document.getStyles());
                     String paraText = combinePrefixAndText(numberPrefix, rawText);
-                    int headingLevel = getHeadingLevel(paragraph, styleHeadingLevels);
 
                     // Chapter boundary: save current chapter and start new one
                     if (headingLevel == splitLevel) {

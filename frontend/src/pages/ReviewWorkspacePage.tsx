@@ -926,6 +926,11 @@ function ReviewWorkspacePage() {
                           ? 'purple'
                           : 'default';
                   const needsManualCheck = confidence === 'needs_review';
+                  // Show the 人工校验 dropdown not only on 待复核 items, but also on every
+                  // definitive 通过/不通过 judgement, so reviewers can override the AI when
+                  // its accuracy is unreliable. Requires a check_code to persist the decision.
+                  const showManualDecision = needsManualCheck
+                    || (hasCheckMatrix && (statusValue === 'Pass' || statusValue === 'Fail'));
                   const sourceChunkNo = numericField(item, ['sourceChunk', 'chunk']);
                   const missingItems = Array.isArray(item.missing_items) ? item.missing_items : [];
                   const active = idx === activeIndex;
@@ -966,7 +971,10 @@ function ReviewWorkspacePage() {
                           onClick={(event) => event.stopPropagation()}
                           onMouseDown={(event) => event.stopPropagation()}
                         >
-                          {needsManualCheck ? (
+                          {!needsManualCheck && (
+                            <Tag color={confidenceColor}>{confidenceLabel(confidence)}</Tag>
+                          )}
+                          {showManualDecision && (
                             <>
                               <Tag color="purple">人工校验</Tag>
                               <Select
@@ -984,8 +992,6 @@ function ReviewWorkspacePage() {
                                 ]}
                               />
                             </>
-                          ) : (
-                            <Tag color={confidenceColor}>{confidenceLabel(confidence)}</Tag>
                           )}
                         </div>
                       </div>
