@@ -764,7 +764,6 @@ function ReviewWorkspacePage() {
   const problemCount = hasCheckMatrix
     ? visibleCheckResults.filter(isProblemCheck).length
     : issues.length;
-  const overallScore = task.aiResult?.overallScore as number | undefined;
   const totalChunks = task.aiResult?.totalChunks as number | undefined;
   const categoryCounts = (task.aiResult?.categoryCounts || {}) as Record<string, number>;
   const checkStatusCounts = hasCheckMatrix
@@ -848,10 +847,6 @@ function ReviewWorkspacePage() {
 
       <div className="review-workspace">
         <section className="review-overview-strip" aria-label="审查概要">
-          <div className="overview-item">
-            <span className="overview-label">综合评分</span>
-            <strong>{overallScore !== undefined ? overallScore : '-'}</strong>
-          </div>
           <div className="overview-item">
             <span className="overview-label">问题数</span>
             <strong className={problemCount > 0 ? 'danger-text' : undefined}>{problemCount}</strong>

@@ -31,7 +31,8 @@
       "Bash(python3 -:*)",
       "Bash(java -version)",
       "Bash(/usr/local/bin/docker compose:*)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Read(//d/VS Code/Project/样例文件/7型QTP案例/样例设备QTP/备份仪表-航电系统//**)"
     ]
   }
 }

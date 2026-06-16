@@ -125,6 +125,36 @@ class WordParserTest {
         assertEquals(1, source.get("chapterIndex"));
     }
 
+    @Test
+    void splitsByHeading1EvenWhenAHeading2PrecedesTheFirstChapter() throws Exception {
+        Path file = tempDir.resolve("frontmatter-h2.docx");
+        try (XWPFDocument document = new XWPFDocument()) {
+            // Front matter: a "list of figures" heading styled as Heading 2 that appears
+            // before any Heading 1 — exactly the pattern that made first-heading-wins split
+            // the whole document by H2.
+            heading(document, "Heading2", "图目录");
+            heading(document, "Heading1", "1 目的");
+            document.createParagraph().createRun().setText("目的正文");
+            heading(document, "Heading2", "1.1 子节");
+            document.createParagraph().createRun().setText("子节正文");
+            heading(document, "Heading1", "2 范围");
+            document.createParagraph().createRun().setText("范围正文");
+            try (var output = Files.newOutputStream(file)) {
+                document.write(output);
+            }
+        }
+
+        List<WordParser.Chapter> chapters = WordParser.parseChapters(file.toString());
+        List<String> titles = chapters.stream().map(WordParser.Chapter::getTitle).toList();
+
+        // Split must happen at H1: the H1 chapters are real boundaries...
+        assertTrue(titles.contains("1 目的"), "expected an H1 chapter '1 目的', got " + titles);
+        assertTrue(titles.contains("2 范围"), "expected an H1 chapter '2 范围', got " + titles);
+        // ...while the H2 subsection stays inside its chapter, never a boundary.
+        assertFalse(titles.contains("1.1 子节"),
+                "H2 subsection must not become a chapter boundary, got " + titles);
+    }
+
     private static void heading(XWPFDocument document, String style, String text) {
         XWPFParagraph paragraph = document.createParagraph();
         paragraph.setStyle(style);

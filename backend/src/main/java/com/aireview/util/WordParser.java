@@ -352,9 +352,18 @@ public class WordParser {
             // strips them out, so we have to recompute and prepend them ourselves.
             NumberingFormatter numberingFormatter = new NumberingFormatter(document.getNumbering());
 
-            // First pass: find the FIRST heading level that appears in the document.
-            // This is the chapter-split boundary (top-level heading = chapter heading).
-            int firstHeadingLevel = -1;
+            // First pass: find the TOP-LEVEL heading level present in the document — the
+            // highest-ranking heading (smallest level number) that actually appears. This is
+            // the chapter-split boundary, so any document containing a Heading 1 (一级标题) is
+            // always split by Heading 1.
+            //
+            // We deliberately do NOT use the FIRST heading found in document order. Front
+            // matter often carries a stray higher-numbered heading before the first real
+            // chapter — e.g. a "图目录" (list of figures) styled as Heading 2 that precedes
+            // every Heading-1 chapter. First-heading-wins would latch onto that H2 and split
+            // the whole document by H2. Taking the minimum level present demotes the leading
+            // H2 to a subordinate (non-split) heading and keeps the chapter boundary at H1.
+            int topHeadingLevel = -1;
             List<String> detectedHeadingTexts = new ArrayList<>();
             for (IBodyElement element : bodyElements) {
                 if (element instanceof XWPFParagraph p) {
@@ -362,25 +371,24 @@ public class WordParser {
                     if (lvl > 0) {
                         // Ignore stray empty heading paragraphs (no text, no figure) when
                         // choosing the chapter-split level. A blank heading must not dictate
-                        // the split level — e.g. an empty H2 sitting before the first real H1
-                        // would otherwise force the whole document to be split by H2. This
-                        // mirrors the empty-heading skip in the second pass below.
+                        // the split level. This mirrors the empty-heading skip in the second
+                        // pass below.
                         String text = getParagraphTextWithSpecialChars(p);
                         if ((text == null || text.isBlank()) && !hasDrawingOrPicture(p)) {
                             continue;
                         }
-                        if (firstHeadingLevel == -1) {
-                            firstHeadingLevel = lvl;
+                        if (topHeadingLevel == -1 || lvl < topHeadingLevel) {
+                            topHeadingLevel = lvl;
                         }
                         detectedHeadingTexts.add("H" + lvl + ": " + text.trim());
                     }
                 }
             }
-            log.info("Detected {} heading(s). First heading level: H{}. Sample: {}",
-                    detectedHeadingTexts.size(), firstHeadingLevel,
+            log.info("Detected {} heading(s). Top-level heading: H{}. Sample: {}",
+                    detectedHeadingTexts.size(), topHeadingLevel,
                     detectedHeadingTexts.stream().limit(20).toList());
 
-            if (firstHeadingLevel == -1) {
+            if (topHeadingLevel == -1) {
                 log.warn("No headings found in document, treating entire document as a single chapter.");
                 List<NodeDraft> nodes = new ArrayList<>();
                 for (IBodyElement element : bodyElements) {
@@ -400,8 +408,8 @@ public class WordParser {
                 return chapters;
             }
 
-            int splitLevel = firstHeadingLevel;
-            log.info("Splitting document by H{} (first heading level = chapter boundary)", splitLevel);
+            int splitLevel = topHeadingLevel;
+            log.info("Splitting document by H{} (top-level heading = chapter boundary)", splitLevel);
 
             // Pre-scan for appendix markers to initialize level-0 counters.
             // This is ONLY needed for documents where appendix main titles do NOT use the numbering system.
@@ -596,9 +604,12 @@ public class WordParser {
                     }
                     if (matched) continue;
 
-                    // Pattern match for non-standard names starting with "heading"/"标题"
+                    // Pattern match for non-standard names starting with "heading"/"标题".
+                    // Use only the FIRST numeric run — custom style names such as "标题1 5#"
+                    // must resolve to level 1, not "15" (every digit in the name concatenated,
+                    // which lands out of range and silently drops the style).
                     if (nameLower.startsWith("heading") || nameLower.startsWith("标题")) {
-                        String numStr = nameLower.replaceAll("[^0-9]", "");
+                        String numStr = firstNumberRun(nameLower);
                         if (!numStr.isEmpty()) {
                             try {
                                 int lvl = Integer.parseInt(numStr);
@@ -942,6 +953,17 @@ public class WordParser {
     }
 
     /**
+     * Return the first contiguous run of digits in {@code text}, or "" if there is none.
+     * Used to read the level out of a heading style name (e.g. "标题1 5#" → "1") without
+     * concatenating later digits the way {@code replaceAll("[^0-9]", "")} would ("15").
+     */
+    private static String firstNumberRun(String text) {
+        if (text == null) return "";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\d+").matcher(text);
+        return m.find() ? m.group() : "";
+    }
+
+    /**
      * Escape special HTML characters.
      */
     private static String escapeHtml(String text) {
@@ -980,7 +1002,7 @@ public class WordParser {
                 }
             }
             if (lower.startsWith("heading") || lower.startsWith("标题")) {
-                String numStr = lower.replaceAll("[^0-9]", "");
+                String numStr = firstNumberRun(lower);
                 if (!numStr.isEmpty()) {
                     try {
                         int lvl = Integer.parseInt(numStr);
