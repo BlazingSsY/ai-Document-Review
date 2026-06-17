@@ -19,13 +19,13 @@ export const STATUS_COLORS: Record<string, string> = {
 };
 
 export const MODEL_PROVIDERS = [
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Anthropic', value: 'anthropic' },
   { label: 'Moonshot', value: 'moonshot' },
-  { label: '阿里通义', value: 'alibaba' },
-  { label: 'Jina AI', value: 'jina' },
-  { label: 'Cohere', value: 'cohere' },
+  { label: '阿里千问', value: 'alibaba' },
+  { label: 'DeepSeek', value: 'deepseek' },
+  { label: 'MiniMax', value: 'minimax' },
+  { label: 'GLM', value: 'glm' },
   { label: '自定义', value: 'custom' },
+  { label: '本地模型', value: 'local' },
 ];
 
 export const MODEL_TYPES = [

@@ -504,15 +504,12 @@ public class AiModelService {
     }
 
     /**
-     * 收敛性审查主用入口。在 legacy 调用基础上加三件事：
+     * 收敛性审查主用入口。统一走 OpenAI 兼容协议，在 legacy 调用基础上加两件事：
      * <ol>
      *   <li>统一参数：temperature / top_p / seed / max_tokens 全部按 {@link AiCallOptions} 强制；
      *       思维模型仍 omit temperature 以避免 Moonshot/GLM 的 400 拒绝。</li>
-     *   <li>provider 结构化输出：OpenAI 兼容协议走 {@code response_format=json_schema}，
-     *       Anthropic 走 {@code tool_use+tool_choice=tool}，其余 fallback 到
-     *       {@code response_format=json_object} 或仅 prompt 约束。</li>
-     *   <li>Anthropic 协议适配：headers 用 {@code x-api-key + anthropic-version}，
-     *       system 单独字段，响应解析 {@code content[].text} 与 {@code tool_use.input}。</li>
+     *   <li>结构化输出：有 schema 走 {@code response_format=json_schema}，
+     *       否则 fallback 到 {@code response_format=json_object} 或仅 prompt 约束。</li>
      * </ol>
      */
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent,
@@ -531,27 +528,19 @@ public class AiModelService {
 
         boolean thinking = isThinkingModel(config);
         String provider = config.getProvider() != null ? config.getProvider().toLowerCase(Locale.ROOT) : "openai";
-        boolean isAnthropic = "anthropic".equals(provider);
 
         int timeoutSec = config.getTimeout() != null ? config.getTimeout() : 180;
         int maxTokens = resolveMaxTokens(config, options, thinking);
 
-        JSONObject requestBody = isAnthropic
-                ? buildAnthropicRequestBody(config, systemPrompt, userContent, options, thinking, maxTokens)
-                : buildOpenAiRequestBody(config, systemPrompt, userContent, options, thinking, maxTokens);
+        JSONObject requestBody = buildOpenAiRequestBody(config, systemPrompt, userContent, options, thinking, maxTokens);
 
-        HttpRequest.Builder rb = HttpRequest.newBuilder()
+        HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(fullUrl))
                 .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + config.getApiKey())
                 .timeout(Duration.ofSeconds(timeoutSec))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()));
-        if (isAnthropic) {
-            rb.header("x-api-key", config.getApiKey());
-            rb.header("anthropic-version", "2023-06-01");
-        } else {
-            rb.header("Authorization", "Bearer " + config.getApiKey());
-        }
-        HttpRequest request = rb.build();
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
+                .build();
 
         log.debug("AI request body (truncated): provider={}, model={}, thinking={}, structured={}, seed={}, contentLen={}",
                 provider, requestBody.getString("model"), thinking,
@@ -566,9 +555,7 @@ public class AiModelService {
                     parseRetryAfterSeconds(response));
         }
 
-        String content = isAnthropic
-                ? parseAnthropicResponse(response.body())
-                : parseOpenAiResponse(response.body());
+        String content = parseOpenAiResponse(response.body());
         log.info("AI model response received, length: {}", content.length());
         return content;
     }
@@ -639,63 +626,6 @@ public class AiModelService {
         return body;
     }
 
-    /** Anthropic /v1/messages 请求体；用 tool_use 强制结构化输出。 */
-    private JSONObject buildAnthropicRequestBody(AiModelConfig config, String systemPrompt, String userContent,
-                                                  AiCallOptions options, boolean thinking, int maxTokens) {
-        JSONObject body = new JSONObject();
-        body.put("model", resolveModelId(config));
-        body.put("max_tokens", maxTokens);
-        // 启用 prompt 缓存时，system 必须用 content block 数组形式才能挂 cache_control。
-        // 5 分钟 ephemeral TTL；首次写入按 1.25× 价、命中按 0.1× 价。
-        if (options.isEnablePromptCache()) {
-            JSONArray sysBlocks = new JSONArray();
-            JSONObject block = new JSONObject();
-            block.put("type", "text");
-            block.put("text", systemPrompt);
-            JSONObject cc = new JSONObject();
-            cc.put("type", "ephemeral");
-            block.put("cache_control", cc);
-            sysBlocks.add(block);
-            body.put("system", sysBlocks);
-        } else {
-            body.put("system", systemPrompt);
-        }
-
-        JSONArray messages = new JSONArray();
-        JSONObject userMsg = new JSONObject();
-        userMsg.put("role", "user");
-        userMsg.put("content", userContent);
-        messages.add(userMsg);
-        body.put("messages", messages);
-
-        if (!thinking) {
-            Double t = options.getTemperature() != null ? options.getTemperature()
-                    : (config.getTemperature() != null ? config.getTemperature() : 0.1);
-            body.put("temperature", t);
-        }
-        if (options.getTopP() != null) {
-            body.put("top_p", options.getTopP());
-        }
-        // Anthropic 不支持 seed，跳过即可。
-
-        // tool_use 强制结构化输出：定义一个 submit_review_result 工具并强制调用它，
-        // 这样 Claude 必须返回严格匹配 input_schema 的参数对象。
-        if (options.getStructuredSchema() != null) {
-            JSONArray tools = new JSONArray();
-            JSONObject tool = new JSONObject();
-            tool.put("name", options.getStructuredSchemaName());
-            tool.put("description", "返回结构化的文档审查结果。");
-            tool.put("input_schema", options.getStructuredSchema());
-            tools.add(tool);
-            body.put("tools", tools);
-            JSONObject toolChoice = new JSONObject();
-            toolChoice.put("type", "tool");
-            toolChoice.put("name", options.getStructuredSchemaName());
-            body.put("tool_choice", toolChoice);
-        }
-        return body;
-    }
-
     private String resolveModelId(AiModelConfig config) {
         return config.getModelKey() != null && !config.getModelKey().isBlank()
                 ? config.getModelKey() : config.getModelName();
@@ -720,33 +650,6 @@ public class AiModelService {
             }
         }
         return content == null ? "" : content;
-    }
-
-    /**
-     * 解析 Anthropic /v1/messages 的响应。优先取 tool_use 的 input（结构化输出场景），
-     * 否则拼接 content[].text。
-     */
-    private String parseAnthropicResponse(String body) {
-        JSONObject responseBody = JSON.parseObject(body);
-        JSONArray content = responseBody.getJSONArray("content");
-        if (content == null || content.isEmpty()) {
-            log.error("Anthropic returned empty content. Full response: {}", body);
-            throw new RuntimeException("Anthropic returned empty response");
-        }
-        StringBuilder textBuf = new StringBuilder();
-        for (int i = 0; i < content.size(); i++) {
-            JSONObject block = content.getJSONObject(i);
-            String type = block.getString("type");
-            if ("tool_use".equals(type)) {
-                // 结构化输出主路径：直接返回 input 的 JSON 字符串。
-                JSONObject input = block.getJSONObject("input");
-                if (input != null) return input.toJSONString();
-            } else if ("text".equals(type)) {
-                String t = block.getString("text");
-                if (t != null) textBuf.append(t);
-            }
-        }
-        return textBuf.toString();
     }
 
     /**
@@ -886,6 +789,20 @@ public class AiModelService {
         }
 
         String provider = config.getProvider() != null ? config.getProvider().toLowerCase() : "openai";
+
+        // 本地模型：用户提供完整地址，后端原样使用，不补全 /v1、/chat/completions、
+        // /embeddings、/rerank 等任何路径（仅去掉末尾斜杠、缺协议头时补 http://）。
+        if ("local".equals(provider)) {
+            String url = endpoint.trim();
+            if (url.endsWith("/")) {
+                url = url.substring(0, url.length() - 1);
+            }
+            if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                url = "http://" + url;
+            }
+            return url;
+        }
+
         String baseUrl = endpoint.trim();
 
         // 确保URL以http开头
@@ -912,59 +829,21 @@ public class AiModelService {
             return baseUrl.endsWith("/v1") ? baseUrl + "/rerank" : baseUrl + "/v1/rerank";
         }
 
-        // 根据提供商添加API路径
-        switch (provider) {
-            case "openai":
-                if (!baseUrl.contains("/v1")) {
-                    return baseUrl + "/v1/chat/completions";
-                } else if (baseUrl.endsWith("/v1")) {
-                    return baseUrl + "/chat/completions";
-                } else {
-                    return baseUrl;
-                }
-            case "anthropic":
-                if (!baseUrl.contains("/v1/messages")) {
-                    return baseUrl + "/v1/messages";
-                } else {
-                    return baseUrl;
-                }
-            case "moonshot":
-                // Moonshot
-                if (baseUrl.contains("/chat/completions")) {
-                    return baseUrl;
-                }
-                if (baseUrl.endsWith("/v1")) {
-                    return baseUrl + "/chat/completions";
-                }
-                if (baseUrl.contains("/v1/")) {
-                    // 已经包含 /v1/xxx 等子路径，直接使用
-                    return baseUrl;
-                }
-                // 既不含 /v1 也不含 /chat/completions：补全完整路径
-                return baseUrl + "/v1/chat/completions";
-            case "alibaba":
-                // 阿里通义千问API
-                if (!baseUrl.contains("/api/v1/services/aigc/text-generation/generation")) {
-                    return baseUrl;
-                } else {
-                    return baseUrl;
-                }
-            default:
-                // 对于自定义或其他第三方供应商：用户只需输入到 ".../v1"，
-                // 我们自动补全为 OpenAI-兼容的 /chat/completions 路径。
-                if (baseUrl.contains("/chat/completions")) {
-                    return baseUrl;
-                }
-                if (baseUrl.endsWith("/v1")) {
-                    return baseUrl + "/chat/completions";
-                }
-                if (baseUrl.contains("/v1/")) {
-                    // 已经包含 /v1/xxx 等子路径，直接使用
-                    return baseUrl;
-                }
-                // 既不含 /v1 也不含 /chat/completions：补全完整路径
-                return baseUrl + "/v1/chat/completions";
+        // 统一按 OpenAI 兼容协议补全路径：moonshot / 阿里千问 / deepseek / minimax / glm /
+        // 自定义供应商都走这套规则（本地模型已在前面提前返回，embedding/reranker 也已处理）。
+        // 用户只需填到 ".../v1"，系统自动补 /chat/completions；已是完整路径则原样使用。
+        if (baseUrl.contains("/chat/completions")) {
+            return baseUrl;
         }
+        if (baseUrl.endsWith("/v1")) {
+            return baseUrl + "/chat/completions";
+        }
+        if (baseUrl.contains("/v1/")) {
+            // 已经包含 /v1/xxx 等子路径，直接使用
+            return baseUrl;
+        }
+        // 既不含 /v1 也不含 /chat/completions：补全完整路径
+        return baseUrl + "/v1/chat/completions";
     }
 
     private String maskApiKey(String apiKey) {

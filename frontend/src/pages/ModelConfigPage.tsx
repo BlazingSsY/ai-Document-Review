@@ -72,6 +72,8 @@ function ModelConfigPage() {
   const [thinkingTouched, setThinkingTouched] = useState(false);
   const thinkingMode = Form.useWatch('thinkingMode', form);
   const modelType = (Form.useWatch('modelType', form) || activeModelType) as ModelType;
+  // 本地模型：用户需填写完整 URL，后端不补全 /v1、/chat/completions 等路径。
+  const isLocalProvider = Form.useWatch('providerSelect', form) === 'local';
   const isChatModel = modelType === 'chat';
   const isEmbeddingModel = modelType === 'embedding';
 
@@ -132,6 +134,16 @@ function ModelConfigPage() {
   useEffect(() => {
     fetchModels();
   }, [page, activeModelType]);
+
+  // 本地模型无需鉴权：选中时自动填充占位 Key 并锁定输入；切换到其它供应商时，
+  // 若仍是这个占位值则清空，避免把 sk-local 误带到需要真实 Key 的供应商。
+  useEffect(() => {
+    if (isLocalProvider) {
+      form.setFieldsValue({ apiKey: 'sk-local' });
+    } else if (form.getFieldValue('apiKey') === 'sk-local') {
+      form.setFieldsValue({ apiKey: '' });
+    }
+  }, [isLocalProvider, form]);
 
   const openCreateModal = () => {
     setEditingModel(null);
@@ -491,7 +503,7 @@ function ModelConfigPage() {
             label="模型名称"
             rules={[{ required: true, message: '请输入模型名称' }]}
           >
-            <Input placeholder="例：GPT-4o" />
+            <Input placeholder="例：DeepSeek-V3" />
           </Form.Item>
           <Form.Item
             name="providerSelect"
@@ -501,8 +513,9 @@ function ModelConfigPage() {
             <Select
               placeholder="请选择供应商"
               options={[
-                ...MODEL_PROVIDERS.filter((p) => p.value !== 'custom'),
+                ...MODEL_PROVIDERS.filter((p) => p.value !== 'custom' && p.value !== 'local'),
                 { label: '自定义供应商', value: '__custom__' },
+                ...MODEL_PROVIDERS.filter((p) => p.value === 'local'),
               ]}
               onChange={(v) => setIsCustomProvider(v === '__custom__')}
             />
@@ -521,13 +534,13 @@ function ModelConfigPage() {
             label="模型标识"
             rules={[{ required: true, message: '请输入模型标识' }]}
             extra={isChatModel
-              ? '填写官方模型ID，例：gpt-4o、kimi-k2-thinking、kimi-k2.6、glm-5.1。系统会据此自动建议是否开启思考模式。'
+              ? '填写官方模型ID，例：deepseek-chat、kimi-k2-thinking、kimi-k2.6、glm-5.1。系统会据此自动建议是否开启思考模式。'
               : isEmbeddingModel
-                ? '填写向量模型ID，例：text-embedding-3-large、bge-m3、jina-embeddings-v3。'
-                : '填写重排模型ID，例：bge-reranker-v2-m3、jina-reranker-v2-base-multilingual。'}
+                ? '填写向量模型ID，例：bge-m3、text-embedding-v3。'
+                : '填写重排模型ID，例：bge-reranker-v2-m3。'}
           >
             <Input
-              placeholder={isChatModel ? '例：gpt-4o, claude-3-opus, kimi-k2-thinking' : isEmbeddingModel ? '例：text-embedding-3-large' : '例：bge-reranker-v2-m3'}
+              placeholder={isChatModel ? '例：deepseek-chat, kimi-k2-thinking, glm-5.1' : isEmbeddingModel ? '例：bge-m3' : '例：bge-reranker-v2-m3'}
               onBlur={(e) => handleModelKeyChange(e.target.value)}
             />
           </Form.Item>
@@ -535,20 +548,24 @@ function ModelConfigPage() {
             name="apiEndpoint"
             label="API 地址"
             rules={[{ required: true, message: '请输入 API 地址' }]}
-            extra={isChatModel
-              ? '只需填写到 v1，例：https://api.minimaxi.com/v1，系统会自动补全 /chat/completions 路径'
-              : isEmbeddingModel
-                ? '只需填写到 v1，系统会自动补全 /embeddings；如果供应商路径特殊，可直接填写完整 embeddings 地址。'
-                : '只需填写到 v1，系统会自动补全 /rerank；如果供应商路径特殊，可直接填写完整 rerank 地址。'}
+            extra={isLocalProvider
+              ? '本地模型请填写完整地址，系统不会自动补全任何路径。'
+              : isChatModel
+                ? '只需填写到 v1，例：https://api.minimaxi.com/v1，系统会自动补全 /chat/completions 路径'
+                : isEmbeddingModel
+                  ? '只需填写到 v1，系统会自动补全 /embeddings；如果供应商路径特殊，可直接填写完整 embeddings 地址。'
+                  : '只需填写到 v1，系统会自动补全 /rerank；如果供应商路径特殊，可直接填写完整 rerank 地址。'}
           >
-            <Input placeholder="例：https://api.minimaxi.com/v1" />
+            <Input placeholder={isLocalProvider ? '例：http://192.168.1.10:8000/v1/chat/completions' : '例：https://api.minimaxi.com/v1'} />
           </Form.Item>
           <Form.Item
             name="apiKey"
             label="API Key"
             rules={[{ required: !editingModel, message: '请输入 API Key' }]}
+            extra={isLocalProvider ? '本地模型无需鉴权，已自动填充占位 Key（sk-local），无需修改。' : undefined}
           >
             <Input.Password
+              disabled={isLocalProvider}
               placeholder={editingModel ? '留空则不修改' : '请输入 API Key'}
             />
           </Form.Item>

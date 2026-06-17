@@ -25,6 +25,17 @@ public final class EndpointResolver {
         }
         String provider = config.getProvider() != null
                 ? config.getProvider().toLowerCase(Locale.ROOT) : "openai";
+
+        // 本地模型：用户提供完整地址，原样使用，不补全任何路径。
+        if ("local".equals(provider)) {
+            String url = endpoint.trim();
+            if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
+            if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                url = "http://" + url;
+            }
+            return url;
+        }
+
         String base = endpoint.trim();
         if (!base.startsWith("http://") && !base.startsWith("https://")) {
             base = "https://" + base;
@@ -33,20 +44,10 @@ public final class EndpointResolver {
             base = base.substring(0, base.length() - 1);
         }
 
-        switch (provider) {
-            case "openai":
-                if (!base.contains("/v1")) return base + "/v1/chat/completions";
-                if (base.endsWith("/v1")) return base + "/chat/completions";
-                return base;
-            case "anthropic":
-                if (!base.contains("/v1/messages")) return base + "/v1/messages";
-                return base;
-            case "moonshot":
-            default:
-                if (base.contains("/chat/completions")) return base;
-                if (base.endsWith("/v1")) return base + "/chat/completions";
-                if (base.contains("/v1/")) return base;
-                return base + "/v1/chat/completions";
-        }
+        // OpenAI 兼容路径补全（moonshot / deepseek / minimax / glm / alibaba / 自定义等统一走此逻辑）。
+        if (base.contains("/chat/completions")) return base;
+        if (base.endsWith("/v1")) return base + "/chat/completions";
+        if (base.contains("/v1/")) return base;
+        return base + "/v1/chat/completions";
     }
 }
