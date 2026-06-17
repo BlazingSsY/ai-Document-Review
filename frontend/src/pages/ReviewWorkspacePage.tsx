@@ -27,7 +27,8 @@ import {
 } from '@ant-design/icons';
 import type { ReviewTask, ReviewMode } from '../api/reviews';
 import {
-  getReviewApi, getReviewDetailAnyPipeline, PIPELINE_LABEL, PIPELINE_COLOR,
+  getReviewApi, getReviewDetailAnyPipeline, getReviewSourcesAnyPipeline,
+  PIPELINE_LABEL, PIPELINE_COLOR,
 } from '../api/pipelineApi';
 import { STATUS_LABELS } from '../utils/constants';
 import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
@@ -479,6 +480,7 @@ function ReviewWorkspacePage() {
   const [manualTarget, setManualTarget] = useState<Record<string, unknown> | null>(null);
   const [activeIssueIndex, setActiveIssueIndex] = useState(0);
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
   const [manualForm] = Form.useForm();
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -492,6 +494,31 @@ function ReviewWorkspacePage() {
   const reviewMode: ReviewMode = (task?.reviewMode ?? 'CHUNK') as ReviewMode;
   const reviewApi = getReviewApi(reviewMode);
 
+  // 首屏渲染后按需补齐原文/溯源（originalSources + chunkResults）。只往 aiResult 里
+  // 补这两个缺失字段，绝不覆盖已有数据；用 prev.id 守卫，避免切换任务时把旧响应写错。
+  const fetchSources = useCallback(async (id: string) => {
+    setSourcesLoading(true);
+    try {
+      const res = await getReviewSourcesAnyPipeline(id);
+      const sources = res.data.data;
+      setTask((prev) => {
+        if (!prev || prev.id !== id || !prev.aiResult) return prev;
+        return {
+          ...prev,
+          aiResult: {
+            ...prev.aiResult,
+            originalSources: prev.aiResult.originalSources ?? sources?.originalSources ?? [],
+            chunkResults: prev.aiResult.chunkResults ?? sources?.chunkResults ?? [],
+          },
+        };
+      });
+    } catch {
+      // 溯源原文为尽力而为：矩阵已经渲染，失败不影响主功能。
+    } finally {
+      setSourcesLoading(false);
+    }
+  }, []);
+
   const fetchDetail = useCallback(async () => {
     if (!taskId) return;
     setLoading(true);
@@ -499,6 +526,10 @@ function ReviewWorkspacePage() {
       const res = await getReviewDetailAnyPipeline(taskId);
       const t = res.data.data;
       setTask(t);
+      // 详情是 light 负载（无 originalSources）；已完成的任务在此后台补齐原文。
+      if (t.aiResult && !t.aiResult.originalSources) {
+        void fetchSources(taskId);
+      }
       const existing = useLogStore.getState().logsByTask[taskId];
       if (!existing || existing.length === 0) {
         const s = t.status?.toUpperCase();
@@ -519,7 +550,7 @@ function ReviewWorkspacePage() {
     } finally {
       setLoading(false);
     }
-  }, [taskId, addLog]);
+  }, [taskId, addLog, fetchSources]);
 
   const handleReReview = async () => {
     if (!taskId) return;
@@ -711,7 +742,12 @@ function ReviewWorkspacePage() {
             // Use the unified dispatch endpoint — this WS handler fires before we
             // know whether the task is RAG or CHUNK on the very first load.
             const res = await getReviewDetailAnyPipeline(taskId);
-            setTask(res.data.data);
+            const t = res.data.data;
+            setTask(t);
+            // light 负载，完成后后台补齐原文/溯源。
+            if (t.aiResult && !t.aiResult.originalSources) {
+              void fetchSources(taskId);
+            }
           } catch {
             // Ignore refresh failures; the polling entry point can still reload the task.
           }
@@ -723,7 +759,7 @@ function ReviewWorkspacePage() {
     return () => {
       taskWebSocket.unsubscribe(taskId, handler);
     };
-  }, [taskId]);
+  }, [taskId, fetchSources]);
 
   useEffect(() => {
     fetchDetail();
@@ -1095,6 +1131,11 @@ function ReviewWorkspacePage() {
                 <div className="empty-panel">
                   <Spin />
                   <Text type="secondary">审查完成后显示完整章节原文。</Text>
+                </div>
+              ) : sourcesLoading ? (
+                <div className="empty-panel">
+                  <Spin />
+                  <Text type="secondary">正在加载原文…</Text>
                 </div>
               ) : (
                 <Empty description="当前结果未携带可展示原文；请使用新版本重新审查该文档。" />

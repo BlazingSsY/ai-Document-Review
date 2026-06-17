@@ -92,5 +92,19 @@ export function getUnifiedReviewStats() {
  * client-side.
  */
 export function getReviewDetailAnyPipeline(taskId: string) {
-  return request.get<ApiResponse<ReviewTask>>(`/reviews/by-id/${taskId}`);
+  // light=true 让后端剥离 originalSources / chunkResults 两个大字段，首屏只拿矩阵 +
+  // 概要，秒出。原文/溯源由 getReviewSourcesAnyPipeline 在渲染后后台补齐。
+  return request.get<ApiResponse<ReviewTask>>(`/reviews/by-id/${taskId}`, {
+    params: { light: true },
+  });
+}
+
+/** 详情页按需拉取的「溯源原文」负载，对应后端 /reviews/by-id/{taskId}/sources。 */
+export interface ReviewSources {
+  originalSources?: Array<Record<string, unknown>>;
+  chunkResults?: Array<Record<string, unknown>>;
+}
+
+export function getReviewSourcesAnyPipeline(taskId: string) {
+  return request.get<ApiResponse<ReviewSources>>(`/reviews/by-id/${taskId}/sources`);
 }

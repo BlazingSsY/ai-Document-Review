@@ -97,22 +97,51 @@ public class UnifiedReviewController {
      */
     @GetMapping("/by-id/{taskId}")
     public ApiResponse<ReviewTaskDTO> getTaskAnyPipeline(@PathVariable String taskId,
+                                                          @RequestParam(defaultValue = "false") boolean light,
                                                           Authentication authentication) {
         Long userId = (Long) authentication.getPrincipal();
         try {
-            ReviewTaskDTO chunkTask = reviewService.getTask(taskId, userId);
+            ReviewTaskDTO chunkTask = light
+                    ? reviewService.getTaskLight(taskId, userId)
+                    : reviewService.getTask(taskId, userId);
             return ApiResponse.success(chunkTask);
         } catch (IllegalArgumentException chunkErr) {
             // 不在 chunk 表 — 尝试 RAG。
         }
         try {
-            ReviewTaskDTO ragTask = ragReviewService.getTask(taskId, userId);
+            ReviewTaskDTO ragTask = light
+                    ? ragReviewService.getTaskLight(taskId, userId)
+                    : ragReviewService.getTask(taskId, userId);
             return ApiResponse.success(ragTask);
         } catch (IllegalArgumentException ragErr) {
             return ApiResponse.notFound("Task not found in any pipeline: " + taskId);
         } catch (Exception e) {
             log.error("Failed to fetch RAG task fallback", e);
             return ApiResponse.error("Failed to fetch task: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 跨管线的「溯源原文」按需接口：详情页首屏用 {@code by-id?light=true} 拿到矩阵后，
+     * 再后台拉这里补齐 {@code originalSources} / {@code chunkResults}。分发逻辑同 by-id：
+     * 先 chunk 后 RAG。
+     */
+    @GetMapping("/by-id/{taskId}/sources")
+    public ApiResponse<Map<String, Object>> getTaskSourcesAnyPipeline(@PathVariable String taskId,
+                                                                       Authentication authentication) {
+        Long userId = (Long) authentication.getPrincipal();
+        try {
+            return ApiResponse.success(reviewService.getSources(taskId, userId));
+        } catch (IllegalArgumentException chunkErr) {
+            // 不在 chunk 表 — 尝试 RAG。
+        }
+        try {
+            return ApiResponse.success(ragReviewService.getSources(taskId, userId));
+        } catch (IllegalArgumentException ragErr) {
+            return ApiResponse.notFound("Task not found in any pipeline: " + taskId);
+        } catch (Exception e) {
+            log.error("Failed to fetch task sources fallback", e);
+            return ApiResponse.error("Failed to fetch sources: " + e.getMessage());
         }
     }
 

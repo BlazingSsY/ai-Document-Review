@@ -2,6 +2,8 @@ services:
   postgres:
     image: pgvector/pgvector:0.8.2-pg16
     container_name: ai-review-db
+    restart: unless-stopped
+    mem_limit: 1g
     environment:
       POSTGRES_DB: ai_review
       POSTGRES_USER: postgres
@@ -24,10 +26,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: ai-review-backend
+    restart: unless-stopped
+    mem_limit: 2g
     stop_grace_period: 10s
     ports:
       - "8080:8080"
     environment:
+      # Let the JVM size its heap from the container's mem_limit (container-aware on JDK 17).
+      JAVA_OPTS: "-XX:MaxRAMPercentage=75.0"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ai_review
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres123
@@ -60,8 +66,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: ai-review-frontend
+    restart: unless-stopped
+    mem_limit: 256m
     ports:
-      - "3000:80"
+      - "3030:80"
     depends_on:
       backend:
         condition: service_healthy

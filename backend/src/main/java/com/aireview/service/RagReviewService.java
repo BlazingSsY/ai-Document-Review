@@ -170,6 +170,31 @@ public class RagReviewService {
         return toDTO(task, true);
     }
 
+    /**
+     * Lightweight detail for fast first paint: the check matrix (with rule metadata)
+     * and summary scalars, WITHOUT the heavy {@code originalSources} /
+     * {@code chunkResults}. The frontend pulls those lazily via {@link #getSources}.
+     */
+    public ReviewTaskDTO getTaskLight(String taskId, Long userId) {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        return toLightDetailDTO(task);
+    }
+
+    /**
+     * The heavy source-tracing payload split out of the detail response:
+     * {@code originalSources} (rebuilt from the document) plus the raw
+     * {@code chunkResults}. Fetched on demand by the workspace page.
+     */
+    public Map<String, Object> getSources(String taskId, Long userId) {
+        RagReviewTask task = requireOwnedTask(taskId, userId);
+        Map<String, Object> sources = new LinkedHashMap<>();
+        sources.put("originalSources", buildOriginalDocumentSources(task));
+        Map<String, Object> aiResult = task.getAiResult();
+        sources.put("chunkResults", aiResult == null
+                ? new ArrayList<>() : aiResult.getOrDefault("chunkResults", new ArrayList<>()));
+        return sources;
+    }
+
     public PageResponse<ReviewTaskDTO> listTasks(Long userId, int page, int size, String status) {
         Page<RagReviewTask> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<RagReviewTask> query = new LambdaQueryWrapper<>();
@@ -445,6 +470,43 @@ public class RagReviewService {
                 enriched.put("sourceTextMode", "structured_json_markdown_review_html_display");
             }
         }
+        return enriched;
+    }
+
+    /** Detail DTO without the heavy source payload (see {@link #enrichAiResultLight}). */
+    private ReviewTaskDTO toLightDetailDTO(RagReviewTask task) {
+        ReviewTaskDTO dto = new ReviewTaskDTO();
+        dto.setId(task.getId());
+        dto.setUserId(task.getUserId());
+        dto.setFileName(task.getFileName());
+        dto.setScenarioId(task.getScenarioId());
+        dto.setSelectedModel(task.getSelectedModel());
+        dto.setStatus(task.getStatus());
+        dto.setAiResult(enrichAiResultLight(task));
+        dto.setCreatedAt(task.getCreatedAt());
+        dto.setUpdatedAt(task.getUpdatedAt());
+        dto.setFailReason(task.getFailReason());
+        dto.setProblemCount(task.getProblemCount());
+        dto.setReviewMode("RAG");
+        return dto;
+    }
+
+    /**
+     * Like {@link #enrichAiResult} (detail mode) but strips the heavy
+     * {@code originalSources} / {@code chunkResults}. The check matrix still gets
+     * its rule metadata and problem summary so the first paint is fully usable.
+     */
+    private Map<String, Object> enrichAiResultLight(RagReviewTask task) {
+        if (task.getAiResult() == null) return null;
+        Map<String, Object> enriched = new LinkedHashMap<>(task.getAiResult());
+        List<Map<String, Object>> checks = copyCheckResults(enriched.get("allCheckResults"));
+        if (!checks.isEmpty()) {
+            enrichCheckMetadata(task.getScenarioId(), checks);
+            enriched.put("allCheckResults", checks);
+            applyProblemSummary(enriched, checks);
+        }
+        enriched.remove("originalSources");
+        enriched.remove("chunkResults");
         return enriched;
     }
 

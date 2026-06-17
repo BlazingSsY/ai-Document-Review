@@ -176,6 +176,44 @@ public class ReviewService {
     }
 
     /**
+     * Lightweight detail for fast first paint: the check matrix (with rule metadata)
+     * and all summary scalars, but WITHOUT the heavy {@code originalSources} /
+     * {@code chunkResults}. The frontend pulls those lazily via {@link #getSources}.
+     */
+    public ReviewTaskDTO getTaskLight(String taskId, Long userId) {
+        ReviewTask task = reviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only view your own tasks");
+        }
+        return toLightDetailDTO(task);
+    }
+
+    /**
+     * The heavy source-tracing payload split out of the detail response:
+     * {@code originalSources} (rebuilt from the document only if not already cached)
+     * plus the raw {@code chunkResults}. Fetched on demand by the workspace page.
+     */
+    public Map<String, Object> getSources(String taskId, Long userId) {
+        ReviewTask task = reviewTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only view your own tasks");
+        }
+        Map<String, Object> sources = new LinkedHashMap<>();
+        Map<String, Object> aiResult = task.getAiResult();
+        Object cached = aiResult == null ? null : aiResult.get("originalSources");
+        sources.put("originalSources", cached != null ? cached : buildOriginalSources(task));
+        sources.put("chunkResults", aiResult == null
+                ? new ArrayList<>() : aiResult.getOrDefault("chunkResults", new ArrayList<>()));
+        return sources;
+    }
+
+    /**
      * List review tasks for a user with pagination and optional status filter.
      */
     public PageResponse<ReviewTaskDTO> listTasks(Long userId, int page, int size, String status) {
@@ -2175,6 +2213,21 @@ public class ReviewService {
         return enriched;
     }
 
+    /**
+     * Like {@link #enrichAiResultWithOriginalSources} but strips the heavy
+     * {@code originalSources} / {@code chunkResults} keys. The check matrix still
+     * gets its rule metadata so the first paint is fully usable.
+     */
+    private Map<String, Object> enrichAiResultLight(ReviewTask task) {
+        Map<String, Object> aiResult = task.getAiResult();
+        if (aiResult == null) return null;
+        Map<String, Object> enriched = new LinkedHashMap<>(aiResult);
+        enrichCheckMetadata(task.getScenarioId(), enriched);
+        enriched.remove("originalSources");
+        enriched.remove("chunkResults");
+        return enriched;
+    }
+
     @SuppressWarnings("unchecked")
     private void enrichCheckMetadata(Long scenarioId, Map<String, Object> aiResult) {
         Object rawChecks = aiResult.get("allCheckResults");
@@ -2312,6 +2365,24 @@ public class ReviewService {
         dto.setSelectedModel(task.getSelectedModel());
         dto.setStatus(task.getStatus());
         dto.setAiResult(includeOriginalSources ? enrichAiResultWithOriginalSources(task) : task.getAiResult());
+        dto.setCreatedAt(task.getCreatedAt());
+        dto.setUpdatedAt(task.getUpdatedAt());
+        dto.setFailReason(task.getFailReason());
+        dto.setProblemCount(task.getProblemCount());
+        dto.setReviewMode("CHUNK");
+        return dto;
+    }
+
+    /** Detail DTO without the heavy source payload (see {@link #enrichAiResultLight}). */
+    private ReviewTaskDTO toLightDetailDTO(ReviewTask task) {
+        ReviewTaskDTO dto = new ReviewTaskDTO();
+        dto.setId(task.getId());
+        dto.setUserId(task.getUserId());
+        dto.setFileName(task.getFileName());
+        dto.setScenarioId(task.getScenarioId());
+        dto.setSelectedModel(task.getSelectedModel());
+        dto.setStatus(task.getStatus());
+        dto.setAiResult(enrichAiResultLight(task));
         dto.setCreatedAt(task.getCreatedAt());
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
