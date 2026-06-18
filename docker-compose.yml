@@ -65,6 +65,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # 子路径部署：APP_BASE=/office-app/ docker compose build frontend；默认根路径 /。
+        APP_BASE: ${APP_BASE:-/}
     container_name: ai-review-frontend
     restart: unless-stopped
     mem_limit: 256m

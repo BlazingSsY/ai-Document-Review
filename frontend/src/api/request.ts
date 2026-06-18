@@ -7,8 +7,11 @@ export interface ApiResponse<T = unknown> {
   data: T;
 }
 
+// 子路径部署：所有接口/跳转都带上 Vite BASE_URL 前缀（根路径时为 /，挂载时如 /office-app/）。
+const BASE = import.meta.env.BASE_URL; // 始终以 / 结尾
+
 const request = axios.create({
-  baseURL: '/api/v1',
+  baseURL: `${BASE}api/v1`,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -45,7 +48,7 @@ async function performRefresh(): Promise<string> {
     throw new Error('No refresh token available');
   }
   const res = await axios.post<ApiResponse<{ accessToken: string; refreshToken: string }>>(
-    '/api/v1/auth/refresh',
+    `${BASE}api/v1/auth/refresh`,
     { refreshToken: rt },
     { headers: { 'Content-Type': 'application/json' }, timeout: 15000 },
   );
@@ -72,9 +75,10 @@ function clearAuthAndRedirect() {
   localStorage.removeItem('token');
   localStorage.removeItem('refreshToken');
   localStorage.removeItem('user');
-  // 避免在登录页本身又跳一次
-  if (!window.location.pathname.startsWith('/login')) {
-    window.location.href = '/login';
+  // 避免在登录页本身又跳一次（带上子路径前缀）
+  const loginPath = `${BASE}login`;
+  if (!window.location.pathname.startsWith(loginPath)) {
+    window.location.href = loginPath;
   }
 }
 

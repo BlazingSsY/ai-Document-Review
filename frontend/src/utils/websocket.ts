@@ -35,7 +35,9 @@ class TaskWebSocket {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const url = `${protocol}//${host}/ws/task-progress?token=${token}`;
+    // 子路径部署：WS 也带上 Vite BASE_URL 前缀（根路径为 /，挂载时如 /office-app/）。
+    const base = import.meta.env.BASE_URL;
+    const url = `${protocol}//${host}${base}ws/task-progress?token=${token}`;
 
     this.ws = new WebSocket(url);
 
