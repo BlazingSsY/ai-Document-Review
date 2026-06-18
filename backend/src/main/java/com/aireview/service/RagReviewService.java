@@ -176,7 +176,14 @@ public class RagReviewService {
      * {@code chunkResults}. The frontend pulls those lazily via {@link #getSources}.
      */
     public ReviewTaskDTO getTaskLight(String taskId, Long userId) {
-        RagReviewTask task = requireOwnedTask(taskId, userId);
+        // SQL 层投影掉 originalSources/chunkResults，不读取/反序列化整条大 ai_result。
+        RagReviewTask task = ragReviewTaskMapper.selectLightById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only access your own tasks");
+        }
         return toLightDetailDTO(task);
     }
 
@@ -186,12 +193,20 @@ public class RagReviewService {
      * {@code chunkResults}. Fetched on demand by the workspace page.
      */
     public Map<String, Object> getSources(String taskId, Long userId) {
-        RagReviewTask task = requireOwnedTask(taskId, userId);
+        // SQL 层只取 chunkResults（originalSources 由文件重建，仅需 file_path），不反序列化其它内容。
+        RagReviewTask task = ragReviewTaskMapper.selectSourcesById(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("You can only access your own tasks");
+        }
         Map<String, Object> sources = new LinkedHashMap<>();
         sources.put("originalSources", buildOriginalDocumentSources(task));
         Map<String, Object> aiResult = task.getAiResult();
-        sources.put("chunkResults", aiResult == null
-                ? new ArrayList<>() : aiResult.getOrDefault("chunkResults", new ArrayList<>()));
+        // jsonb_build_object 总会带上 key（值可能为 null），故用显式判空而非 getOrDefault。
+        Object chunkResults = aiResult == null ? null : aiResult.get("chunkResults");
+        sources.put("chunkResults", chunkResults != null ? chunkResults : new ArrayList<>());
         return sources;
     }
 

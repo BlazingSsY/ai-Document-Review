@@ -341,9 +341,11 @@ export function useReviewWorkspace() {
     setActiveSourceIndex(0);
   }, [activeIssueIndex]);
 
+  // 仅在切换任务 / 重新审查（导航到新 taskId）时重置选中项；
+  // 后台补原文、失败切片重审等 in-place 更新 aiResult 时不打断用户已选的检查项。
   useEffect(() => {
     setActiveIssueIndex(0);
-  }, [taskId, task?.aiResult]);
+  }, [taskId]);
 
   const status = normalizeStatus(task?.status || '');
   const issues = extractIssues(task?.aiResult || null);

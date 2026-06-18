@@ -138,7 +138,7 @@
 .finding-card {
   display: block;
   width: 100%;
-  margin: 0 0 10px;
+  margin: 0;
   padding: 10px 12px;
   cursor: pointer;
   text-align: left;

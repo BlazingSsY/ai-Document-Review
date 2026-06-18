@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import {
   Button,
   Card,
@@ -334,8 +335,8 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
         <Tag>{workspace.reviewItems.length} 条</Tag>
       </div>
 
-      <div className="findings-list">
-        {workspace.reviewItems.length === 0 ? (
+      {workspace.reviewItems.length === 0 ? (
+        <div className="findings-list">
           <div className="empty-panel">
             {workspace.isProcessing ? (
               <>
@@ -348,21 +349,29 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
               <Empty description="暂无审查结果" />
             )}
           </div>
-        ) : (
-          workspace.reviewItems.map((item, index) => (
-            <FindingCard
-              key={index}
-              active={index === workspace.activeIndex}
-              hasCheckMatrix={workspace.hasCheckMatrix}
-              index={index}
-              item={item}
-              manualSaving={workspace.manualSaving}
-              onInlineDecision={workspace.handleInlineManualDecision}
-              onSelect={workspace.selectIssue}
-            />
-          ))
-        )}
-      </div>
+        </div>
+      ) : (
+        // 虚拟滚动：只渲染可视区的卡片，避免数百个检查项一次性挂载（含 AntD Select）拖慢首屏。
+        <Virtuoso
+          className="findings-list"
+          data={workspace.reviewItems}
+          computeItemKey={(index) => index}
+          increaseViewportBy={300}
+          itemContent={(index, item) => (
+            <div style={{ paddingBottom: 10 }}>
+              <FindingCard
+                active={index === workspace.activeIndex}
+                hasCheckMatrix={workspace.hasCheckMatrix}
+                index={index}
+                item={item}
+                manualSaving={workspace.manualSaving}
+                onInlineDecision={workspace.handleInlineManualDecision}
+                onSelect={workspace.selectIssue}
+              />
+            </div>
+          )}
+        />
+      )}
     </div>
   );
 }

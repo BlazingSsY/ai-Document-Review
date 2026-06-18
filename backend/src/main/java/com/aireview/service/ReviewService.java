@@ -181,7 +181,8 @@ public class ReviewService {
      * {@code chunkResults}. The frontend pulls those lazily via {@link #getSources}.
      */
     public ReviewTaskDTO getTaskLight(String taskId, Long userId) {
-        ReviewTask task = reviewTaskMapper.selectById(taskId);
+        // SQL 层投影掉 originalSources/chunkResults，不读取/反序列化整条大 ai_result。
+        ReviewTask task = reviewTaskMapper.selectLightById(taskId);
         if (task == null) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
@@ -197,7 +198,8 @@ public class ReviewService {
      * plus the raw {@code chunkResults}. Fetched on demand by the workspace page.
      */
     public Map<String, Object> getSources(String taskId, Long userId) {
-        ReviewTask task = reviewTaskMapper.selectById(taskId);
+        // SQL 层只取 originalSources/chunkResults 两个大字段，其它内容不反序列化。
+        ReviewTask task = reviewTaskMapper.selectSourcesById(taskId);
         if (task == null) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
@@ -206,10 +208,11 @@ public class ReviewService {
         }
         Map<String, Object> sources = new LinkedHashMap<>();
         Map<String, Object> aiResult = task.getAiResult();
+        // jsonb_build_object 总会带上 key（值可能为 null），故用显式判空而非 getOrDefault。
         Object cached = aiResult == null ? null : aiResult.get("originalSources");
         sources.put("originalSources", cached != null ? cached : buildOriginalSources(task));
-        sources.put("chunkResults", aiResult == null
-                ? new ArrayList<>() : aiResult.getOrDefault("chunkResults", new ArrayList<>()));
+        Object chunkResults = aiResult == null ? null : aiResult.get("chunkResults");
+        sources.put("chunkResults", chunkResults != null ? chunkResults : new ArrayList<>());
         return sources;
     }
 
