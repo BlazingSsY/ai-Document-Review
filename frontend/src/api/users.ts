@@ -17,7 +17,7 @@ export function updateUserRole(userId: number, role: string) {
   return request.put<ApiResponse<null>>(`/admin/users/${userId}/role`, { role });
 }
 
-export type AssignmentMode = 'CHUNK' | 'RAG';
+export type AssignmentMode = 'CHUNK' | 'RAG' | 'SAR';
 
 export function assignLibraries(
   userId: number,

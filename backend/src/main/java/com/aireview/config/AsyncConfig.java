@@ -34,6 +34,9 @@ public class AsyncConfig {
     @Value("${review.rag.check-concurrency:4}")
     private int ragCheckConcurrency;
 
+    @Value("${review.sar.check-concurrency:4}")
+    private int sarCheckConcurrency;
+
     @Bean(name = "reviewTaskExecutor")
     public Executor reviewTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -80,22 +83,49 @@ public class AsyncConfig {
     }
 
     /**
-     * Dedicated executor for independent RAG checklist items. Keeping this pool
-     * separate prevents slow chat-model calls from occupying upload/task threads.
+     * RAG 检查项 / 复核的并发线程池。容量按 "单任务检查并发 × 最大并行任务数" 配置，
+     * 与 {@link #chunkReviewExecutor()} 同样的理由：多个 RAG 任务同时跑时，每个任务又会向
+     * 这个池子提交 N 个检查项；若池子只有固定 4 线程（旧实现），所有任务的检查项 + 复核调用
+     * 会全局抢这 4 个线程，导致单任务被其它任务饿死、整体奇慢。
+     *
+     * <p>单任务的真实并发由 {@code RagReviewService} 里的 per-task {@link java.util.concurrent.Semaphore}
+     * 在父线程上 acquire 约束（不在 worker 里 park），所以每个进池的 runnable 都是马上有活干，
+     * 不会把线程白白卡在等许可上。
      */
     @Bean(name = "ragCheckExecutor")
     public TaskExecutor ragCheckExecutor() {
         int concurrency = Math.max(1, ragCheckConcurrency);
+        int core = Math.max(concurrency * maxPoolSize, concurrency);
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(concurrency);
-        executor.setMaxPoolSize(concurrency);
-        executor.setQueueCapacity(1000);
+        executor.setCorePoolSize(core);
+        executor.setMaxPoolSize(core);
+        executor.setQueueCapacity(0);
         executor.setThreadNamePrefix("rag-check-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(false);
         executor.setAwaitTerminationSeconds(5);
         executor.initialize();
-        log.info("RAG check thread pool initialized: core=max={}, queue=1000", concurrency);
+        log.info("RAG check thread pool initialized: core=max={}, queue=0 "
+                + "(checkConcurrency={} × maxTasks={})", core, concurrency, maxPoolSize);
+        return executor;
+    }
+
+    /** SAR（结构化精准审查）路由/分组/复核的并发线程池。与 ragCheckExecutor 同构、物理隔离。 */
+    @Bean(name = "sarCheckExecutor")
+    public TaskExecutor sarCheckExecutor() {
+        int concurrency = Math.max(1, sarCheckConcurrency);
+        int core = Math.max(concurrency * maxPoolSize, concurrency);
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(core);
+        executor.setMaxPoolSize(core);
+        executor.setQueueCapacity(0);
+        executor.setThreadNamePrefix("sar-check-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setAwaitTerminationSeconds(5);
+        executor.initialize();
+        log.info("SAR check thread pool initialized: core=max={}, queue=0 "
+                + "(checkConcurrency={} × maxTasks={})", core, concurrency, maxPoolSize);
         return executor;
     }
 }

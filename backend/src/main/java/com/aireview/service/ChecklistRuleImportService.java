@@ -39,9 +39,16 @@ import java.util.regex.Pattern;
 public class ChecklistRuleImportService {
 
     private final RagRuleService ragRuleService;
+    private final SarRuleService sarRuleService;
     private final DataFormatter formatter = new DataFormatter();
 
     public ChecklistImportResultDTO importQtpChecklist(MultipartFile file, Long creatorId, Long libraryId) throws Exception {
+        return importQtpChecklist(file, creatorId, libraryId, "RAG");
+    }
+
+    /** 检查单导入到指定管线（RAG / SAR）。两条管线都用原子检查项，故共用同一套 Excel 解析。 */
+    public ChecklistImportResultDTO importQtpChecklist(MultipartFile file, Long creatorId,
+                                                       Long libraryId, String mode) throws Exception {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Checklist file is required");
         }
@@ -61,8 +68,9 @@ public class ChecklistRuleImportService {
         String canonicalJson = JSON.toJSONString(pack,
                 JSONWriter.Feature.PrettyFormat, JSONWriter.Feature.WriteMapNullValue);
         String generatedName = stripExtension(originalFilename) + ".rules.json";
-        List<RuleDTO> imported = ragRuleService.importRuleContent(
-                generatedName, canonicalJson, creatorId, libraryId, true);
+        List<RuleDTO> imported = "SAR".equalsIgnoreCase(mode)
+                ? sarRuleService.importRuleContent(generatedName, canonicalJson, creatorId, libraryId, true)
+                : ragRuleService.importRuleContent(generatedName, canonicalJson, creatorId, libraryId, true);
 
         ChecklistImportResultDTO dto = new ChecklistImportResultDTO();
         dto.setSourceFile(originalFilename);

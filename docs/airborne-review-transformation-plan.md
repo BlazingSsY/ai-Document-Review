@@ -1,5 +1,14 @@
 # 机载文档审核方案改造计划
 
+> **实现现状更新（重要）**：本文是最初的分阶段改造计划。文中设计的"原子检查项 + 证据检索 + 证据约束判定 + 复核审计"链路**已经落地，但被拆分为一条独立的「智能召回审查（RAG）」管线**，与原「全文逐章审查（CHUNK）」物理隔离。与本计划的主要差异：
+> - **数据落点**：原子检查项、证据块、管线/明细/调用日志都在 `rag_*` 表（`rag_rules` / `rag_rule_checks` / `rag_document_blocks` / `rag_review_pipelines` / `rag_review_findings` / `rag_ai_call_logs`）；本文提到的 `rule_checks` / `document_blocks` 等已变为 CHUNK 侧的空壳遗留表。拆分决策见 [RAG_SPLIT_CHOICES.md](../RAG_SPLIT_CHOICES.md)。
+> - **执行入口**：RAG 审查由 `RagReviewService` 实现；检索为 pgvector 向量召回 + rerank，再按章节分组评估，详见 [RAG_RECALL_TUNING.md](../RAG_RECALL_TUNING.md)。
+> - **检查单导入**：接口已迁到 **`POST /api/v1/rag/rules/import-checklist`**（不再是 `/api/v1/rules/...`）。
+> - **判定级别**：最终收敛为**三级 `Pass / Fail / Review`**，而非本文多处写的"五级（Pass/Partial/Fail/N/A/Review）"——Partial、N/A 已并入 Review；输出无 severity 字段。
+> - **采样**：每次调用单采样（不再多采样合并）。
+>
+> 下文保留原计划与各阶段实现记录作为演进背景；凡与上述现状冲突处，以本框为准。
+
 ## 1. 改造目标
 
 当前系统已经具备规则库、审查场景、Word 解析、章节切片、批量调用大模型、WebSocket 进度和 Excel 导出能力。机载文档审核项目要求在此基础上升级为：
@@ -81,12 +90,12 @@
 
 当前实现状态：
 
-- 已新增后端接口 `POST /api/v1/rules/import-checklist`。
+- 后端接口现为 `POST /api/v1/rag/rules/import-checklist`（RAG 管线下，由 `RagRuleController` + `ChecklistRuleImportService` 提供；早期在 `/api/v1/rules/...`，随 RAG/CHUNK 拆分迁移）。
 - 请求格式为 `multipart/form-data`：
   - `file`: `.xlsx` 或 `.xls` 检查单；
   - `libraryId`: 可选，导入到指定规则库。
 - 接口权限：`SUPERVISOR` / `ADMIN`。
-- 接口会读取 Excel、生成标准 Rule JSON，并复用规则上传链路写入 `rules` 和 `rule_checks`。
+- 接口会读取 Excel、生成标准 Rule JSON，并复用规则上传链路写入 `rag_rules` 和 `rag_rule_checks`。
 - 返回内容包含源文件名、生成的规则文件名、规则编码、规则数量、原子检查项数量、生成的 canonical JSON 和已入库规则。
 
 第一版 Excel 解析边界：
@@ -243,6 +252,8 @@
 后续第四阶段继续实现 `EvidenceRetrievalService`，按规则检查项从 `embedding` 模型生成向量召回候选证据，再用 `reranker` 模型对证据候选排序。
 
 ## 7. 阶段 5 五级判定引擎
+
+> 现状：判定已收敛为**三级 `Pass / Fail / Review`**（Partial、N/A 并入 Review），且每次调用**单采样**（下文"多采样合并"逻辑已下线）。本节保留为演进记录。
 
 本次完成检查项判定矩阵的第一版闭环：
 

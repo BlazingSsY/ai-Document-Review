@@ -30,6 +30,9 @@ function App() {
         {/* 智能召回审查（RAG pipeline） */}
         <Route path="rag/scenarios" element={<ScenarioListPage reviewMode="RAG" />} />
         <Route path="rag/rules" element={<RuleListPage reviewMode="RAG" />} />
+        {/* 结构化精准审查（SAR pipeline） */}
+        <Route path="sar/scenarios" element={<ScenarioListPage reviewMode="SAR" />} />
+        <Route path="sar/rules" element={<RuleListPage reviewMode="SAR" />} />
         {/* 旧 URL 兼容：默认转到全文逐章侧。 */}
         <Route path="scenarios" element={<Navigate to="/chunk/scenarios" replace />} />
         <Route path="rules" element={<Navigate to="/chunk/rules" replace />} />

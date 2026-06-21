@@ -233,6 +233,9 @@ function FindingCard({
   const sourceChunkNo = numericField(item, ['sourceChunk', 'chunk']);
   const missingItems = Array.isArray(item.missing_items) ? item.missing_items : [];
   const statusClass = statusValue.replace(/[^A-Za-z0-9_-]/g, '-');
+  // RAG：一个检查项展开成多条违规时的序号，以及两阶段复核结论。
+  const verifyStatus = textField(item, ['verifyStatus']);
+  const violationCount = numericField(item, ['violationCount']) ?? 0;
 
   return (
     <div
@@ -257,6 +260,11 @@ function FindingCard({
           {!hasCheckMatrix && ruleCode && <Tag color="blue">{ruleCode}</Tag>}
           {!hasCheckMatrix && checkCode && <Tag color="cyan">{checkCode}</Tag>}
           {manualStatus && <Tag color={checkStatusColor(manualStatus)}>人工：{CHECK_STATUS_LABELS[manualStatus] || manualStatus}</Tag>}
+          {violationCount > 1 && (
+            <Tag color="volcano">违规 {(Number(item.violationIndex) || 0) + 1}/{violationCount}</Tag>
+          )}
+          {verifyStatus === 'CONFIRMED' && <Tag color="red">复核确认</Tag>}
+          {verifyStatus === 'UNCERTAIN' && <Tag color="gold">复核待定</Tag>}
           {!hasCheckMatrix && sourceChunkNo && <Tag color="purple">切片 {sourceChunkNo}</Tag>}
         </Space>
         <div

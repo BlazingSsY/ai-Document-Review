@@ -363,6 +363,24 @@ public final class ReviewExportUtil {
      */
     public static Map<String, Object> findCheckResult(List<Map<String, Object>> checks,
                                                        String checkCode, Integer sourceChunk) {
+        return findCheckResult(checks, null, checkCode, sourceChunk);
+    }
+
+    /**
+     * Locate a finding row. When {@code findingId} is supplied (RAG: one row per violation),
+     * match on it exactly — this is the only reliable key once a check expands into multiple
+     * rows that share the same check_code. Otherwise fall back to check_code (+ sourceChunk),
+     * the chunk-side behaviour.
+     */
+    public static Map<String, Object> findCheckResult(List<Map<String, Object>> checks,
+                                                       String findingId,
+                                                       String checkCode, Integer sourceChunk) {
+        if (findingId != null && !findingId.isBlank()) {
+            for (Map<String, Object> check : checks) {
+                if (findingId.equals(strField(check, "finding_id"))) return check;
+            }
+            // fingerprint missing on legacy rows — fall through to code-based match
+        }
         for (Map<String, Object> check : checks) {
             String code = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
             if (!checkCode.equals(code)) continue;
@@ -382,6 +400,7 @@ public final class ReviewExportUtil {
     public static void syncChunkCheckResult(Map<String, Object> aiResult, Map<String, Object> updated) {
         Object chunkResultsObj = aiResult.get("chunkResults");
         if (!(chunkResultsObj instanceof List<?> chunks)) return;
+        String findingId = strField(updated, "finding_id");
         String checkCode = firstNonBlank(strField(updated, "check_code"), strField(updated, "checkCode"));
         Object sourceChunk = updated.get("sourceChunk");
         for (Object chunkObj : chunks) {
@@ -398,6 +417,14 @@ public final class ReviewExportUtil {
             for (Object item : checkList) {
                 if (!(item instanceof Map<?, ?>)) continue;
                 Map<String, Object> check = (Map<String, Object>) item;
+                // 优先用 finding_id 精确命中（一个检查项展开成多行时唯一可靠的键）。
+                if (!findingId.isBlank()) {
+                    if (findingId.equals(strField(check, "finding_id"))) {
+                        check.putAll(updated);
+                        return;
+                    }
+                    continue;
+                }
                 String candidate = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
                 if (checkCode.equals(candidate)) {
                     check.putAll(updated);

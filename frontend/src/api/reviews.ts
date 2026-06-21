@@ -1,7 +1,7 @@
 import request, { ApiResponse } from './request';
 import { PaginatedResult } from './rules';
 
-export type ReviewMode = 'CHUNK' | 'RAG';
+export type ReviewMode = 'CHUNK' | 'RAG' | 'SAR';
 
 export interface ReviewTask {
   id: string;
@@ -16,6 +16,8 @@ export interface ReviewTask {
   failReason?: string;
   /** Cached scalar problem count for the list (backend avoids shipping full aiResult). */
   problemCount?: number | null;
+  /** 进行中任务的最近进度（0~100），来自后端内存进度表；硬刷新后用它立即显示进度条。 */
+  progress?: number | null;
   /** 任务所属管线。后端在 DTO 序列化时填入；前端按此值分流后续 API 调用。 */
   reviewMode?: ReviewMode;
 }
@@ -72,6 +74,8 @@ export function exportReviewExcel(taskId: string) {
 
 export interface ManualCheckDecisionParams {
   checkCode: string;
+  /** RAG 一检查项可展开多条违规，传 finding_id 精确定位；chunk 侧可省略。 */
+  findingId?: string;
   sourceChunk?: number;
   finalStatus: string;
   accepted?: boolean;

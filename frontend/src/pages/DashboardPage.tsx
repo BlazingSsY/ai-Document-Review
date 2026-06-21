@@ -30,6 +30,7 @@ import {
   DeleteOutlined,
   DeploymentUnitOutlined,
   BookOutlined,
+  AimOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { ReviewTask, ReviewMode } from '../api/reviews';
@@ -42,6 +43,7 @@ import {
 import { STATUS_LABELS, STATUS_COLORS, PAGE_SIZE } from '../utils/constants';
 import FileUploader from '../components/FileUploader';
 import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
+import useLogStore from '../store/logStore';
 
 const { Title, Text } = Typography;
 
@@ -56,6 +58,7 @@ const EMPTY_STATS: UnifiedStats = {
   byMode: {
     CHUNK: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
     RAG: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
+    SAR: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
   },
 };
 
@@ -106,6 +109,13 @@ function DashboardPage() {
   // without having to open the workspace.
   const [taskProgress, setTaskProgress] = useState<Record<string, number>>({});
 
+  // 用已知进度回填进度条；已有的实时值优先（prev 覆盖 seeded），避免把更新的进度盖回旧值。
+  const seedProgress = (seeded: Record<string, number>) => {
+    if (Object.keys(seeded).length > 0) {
+      setTaskProgress((prev) => ({ ...seeded, ...prev }));
+    }
+  };
+
   const fetchTasks = async () => {
     setLoading(true);
     try {
@@ -116,8 +126,15 @@ function DashboardPage() {
         status: statusFilter,
       });
       const data = res.data.data;
-      setTasks(data.records || []);
+      const records = data.records || [];
+      setTasks(records);
       setTotal(data.total);
+      // 硬刷新场景：内存里的 logStore 已被清空，靠后端返回的 progress 立即回填进度条。
+      const seeded: Record<string, number> = {};
+      for (const t of records) {
+        if (typeof t.progress === 'number') seeded[t.id] = t.progress;
+      }
+      seedProgress(seeded);
     } catch {
       // handled by interceptor
     } finally {
@@ -167,6 +184,24 @@ function DashboardPage() {
     };
   }, []);
 
+  // 从常驻的 logStore 回填每个任务的最近一次进度。
+  // taskProgress 是组件本地 state：从详情页返回时本组件被卸载又重挂，state 归零，
+  // 导致进度条要干等下一条 WS 帧（间隔可达数秒）才重新出现。logStore 跨页面常驻、
+  // 一直在收进度帧，挂载时读它一次就能让进度条立即显示；后续 WS 帧照常单调推进。
+  useEffect(() => {
+    const logsByTask = useLogStore.getState().logsByTask;
+    const seeded: Record<string, number> = {};
+    for (const [tid, entries] of Object.entries(logsByTask)) {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (typeof entries[i].progress === 'number') {
+          seeded[tid] = entries[i].progress as number;
+          break;
+        }
+      }
+    }
+    seedProgress(seeded);
+  }, []);
+
   useEffect(() => {
     fetchTasks();
   }, [page, statusFilter, modeFilter]);
@@ -191,7 +226,8 @@ function DashboardPage() {
           scenarioApi.getScenarioList({ page: 1, pageSize: 1000 }),
           getEnabledModels('chat'),
         ];
-        if (draftMode === 'RAG') {
+        const needsEmbedding = draftMode === 'RAG' || draftMode === 'SAR';
+        if (needsEmbedding) {
           fetches.push(getEnabledModels('embedding'));
         }
         const results = await Promise.all(fetches);
@@ -199,7 +235,7 @@ function DashboardPage() {
         const modelRes = results[1] as Awaited<ReturnType<typeof getEnabledModels>>;
         setScenarios(scenRes.data.data.records);
         setModels(modelRes.data.data);
-        if (draftMode === 'RAG') {
+        if (needsEmbedding) {
           const embedRes = results[2] as Awaited<ReturnType<typeof getEnabledModels>>;
           setEmbeddingModelCount(embedRes.data.data.length);
         }
@@ -215,8 +251,8 @@ function DashboardPage() {
     if (!selectedFile) { message.warning('请先上传文件'); return; }
     if (!scenarioId) { message.warning('请选择审查场景'); return; }
     if (!selectedModel) { message.warning('请选择 AI 模型'); return; }
-    if (draftMode === 'RAG' && embeddingModelCount === 0) {
-      message.error('RAG 审查需要至少启用一个 embedding 模型，请先到「模型管理」配置');
+    if ((draftMode === 'RAG' || draftMode === 'SAR') && embeddingModelCount === 0) {
+      message.error(`${PIPELINE_LABEL[draftMode]}需要至少启用一个 embedding 模型，请先到「模型管理」配置`);
       return;
     }
 
@@ -470,6 +506,7 @@ function DashboardPage() {
                 { label: '全部审查方式', value: 'ALL' },
                 { label: '智能召回审查', value: 'RAG' },
                 { label: '全文逐章审查', value: 'CHUNK' },
+                { label: '结构化精准审查', value: 'SAR' },
               ]}
             />
             <Select
@@ -506,7 +543,7 @@ function DashboardPage() {
       </Card>
 
       <Row gutter={16} style={{ marginTop: 16 }}>
-        <Col xs={12}>
+        <Col xs={8}>
           <Card
             hoverable
             onClick={() => navigate('/rag/rules')}
@@ -517,7 +554,7 @@ function DashboardPage() {
             <div style={{ color: '#8c8c8c', fontSize: 13 }}>原子检查项 + 向量召回管线</div>
           </Card>
         </Col>
-        <Col xs={12}>
+        <Col xs={8}>
           <Card
             hoverable
             onClick={() => navigate('/chunk/rules')}
@@ -526,6 +563,17 @@ function DashboardPage() {
             <BookOutlined style={{ fontSize: 32, color: '#1677ff', marginBottom: 8 }} />
             <div style={{ fontWeight: 500 }}>全文逐章审查 · 规则与场景</div>
             <div style={{ color: '#8c8c8c', fontSize: 13 }}>按章节切片 + 批处理审查管线</div>
+          </Card>
+        </Col>
+        <Col xs={8}>
+          <Card
+            hoverable
+            onClick={() => navigate('/sar/rules')}
+            style={{ textAlign: 'center', cursor: 'pointer' }}
+          >
+            <AimOutlined style={{ fontSize: 32, color: '#389e0d', marginBottom: 8 }} />
+            <div style={{ fontWeight: 500 }}>结构化精准审查 · 规则与场景</div>
+            <div style={{ color: '#8c8c8c', fontSize: 13 }}>结构路由 + 区域取证 + 一致性</div>
           </Card>
         </Col>
       </Row>
@@ -561,6 +609,10 @@ function DashboardPage() {
               key: 'CHUNK',
               label: <span><BookOutlined /> 全文逐章审查</span>,
             },
+            {
+              key: 'SAR',
+              label: <span><AimOutlined /> 结构化精准审查</span>,
+            },
           ]}
         />
         {!draftMode && (
@@ -568,17 +620,17 @@ function DashboardPage() {
             type="info"
             showIcon
             message="请先在上方选择审查方式"
-            description="智能召回审查（向量检索 + 原子检查）和 全文逐章审查（按章节切片 + 批处理）使用不同的规则库与场景，互不可见。"
+            description="智能召回审查（向量检索）、全文逐章审查（按章节切片）、结构化精准审查（结构路由 + 区域取证 + 一致性）三条管线使用各自独立的规则库与场景，互不可见。"
           />
         )}
 
-        {draftMode && draftMode === 'RAG' && embeddingModelCount === 0 && (
+        {draftMode && (draftMode === 'RAG' || draftMode === 'SAR') && embeddingModelCount === 0 && (
           <Alert
             type="warning"
             showIcon
             style={{ marginBottom: 16 }}
             message="尚未启用 embedding 模型"
-            description="智能召回审查需要至少一个启用的 embedding 模型；请到「模型管理」配置。reranker 模型可选，若未配置则按召回分数顺序使用。"
+            description={`${PIPELINE_LABEL[draftMode]}需要至少一个启用的 embedding 模型；请到「模型管理」配置。reranker 模型可选，若未配置则按召回分数顺序使用。`}
           />
         )}
 

@@ -89,6 +89,10 @@ export function useReviewWorkspace() {
       const res = await getReviewDetailAnyPipeline(taskId);
       const t = res.data.data;
       setTask(t);
+      // 硬刷新场景：用后端返回的最近进度立即点亮进度条，不必干等下一条 WS 帧。
+      if (typeof t.progress === 'number' && t.status?.toUpperCase() === 'PROCESSING') {
+        setWsProgress((prev) => Math.max(prev, t.progress as number));
+      }
       if (t.aiResult && !t.aiResult.originalSources) {
         void fetchSources(taskId);
       }
@@ -249,6 +253,7 @@ export function useReviewWorkspace() {
       const values = await manualForm.validateFields();
       const res = await reviewApi.updateCheckDecision(taskId, {
         checkCode,
+        findingId: textField(manualTarget, ['finding_id', 'findingId']) || undefined,
         sourceChunk: numericField(manualTarget, ['sourceChunk', 'chunk']),
         finalStatus: values.finalStatus,
         accepted: values.accepted === undefined ? undefined : values.accepted === 'true',
@@ -278,6 +283,7 @@ export function useReviewWorkspace() {
     try {
       const res = await reviewApi.updateCheckDecision(taskId, {
         checkCode,
+        findingId: textField(item, ['finding_id', 'findingId']) || undefined,
         sourceChunk: numericField(item, ['sourceChunk', 'chunk']),
         finalStatus: decision,
         comment: decision === 'Review' ? '改判' : '',

@@ -518,6 +518,212 @@ CREATE INDEX IF NOT EXISTS idx_rag_review_audit_logs_task ON rag_review_audit_lo
 CREATE INDEX IF NOT EXISTS idx_rag_user_library_assignment_user ON rag_user_library_assignment(user_id);
 
 -- =========================================================================
+-- SAR（结构化精准审查）管线表 —— 与 RAG/CHUNK 物理隔离的第三套审查方案。
+-- 结构与 rag_* 对称；全新空库，无历史迁移块。
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS sar_rule_libraries (
+    id              BIGSERIAL       PRIMARY KEY,
+    name            VARCHAR(255)    NOT NULL,
+    description     TEXT,
+    creator_id      BIGINT          NOT NULL REFERENCES users(id),
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sar_rules (
+    id              BIGSERIAL       PRIMARY KEY,
+    rule_name       VARCHAR(255)    NOT NULL,
+    file_type       VARCHAR(20)     NOT NULL,
+    content         TEXT            NOT NULL,
+    creator_id      BIGINT          NOT NULL REFERENCES users(id),
+    library_id      BIGINT          REFERENCES sar_rule_libraries(id) ON DELETE CASCADE,
+    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    is_valid        BOOLEAN         NOT NULL DEFAULT TRUE,
+    rule_code       VARCHAR(100),
+    rule_type       VARCHAR(40),
+    document_type   VARCHAR(100),
+    sections        JSONB,
+    keywords        JSONB,
+    description     TEXT,
+    source_file     VARCHAR(255)
+);
+
+CREATE TABLE IF NOT EXISTS sar_rule_checks (
+    id                  BIGSERIAL       PRIMARY KEY,
+    rule_id             BIGINT          NOT NULL REFERENCES sar_rules(id) ON DELETE CASCADE,
+    check_code          VARCHAR(160)    NOT NULL,
+    check_type          VARCHAR(32)     NOT NULL DEFAULT 'presence',
+    question            TEXT            NOT NULL,
+    pass_criteria       TEXT            NOT NULL,
+    category            VARCHAR(64),
+    evidence_required   BOOLEAN         NOT NULL DEFAULT TRUE,
+    display_order       INTEGER         NOT NULL DEFAULT 0,
+    is_active           BOOLEAN         NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    UNIQUE (rule_id, check_code)
+);
+CREATE INDEX IF NOT EXISTS idx_sar_rule_checks_rule ON sar_rule_checks(rule_id);
+
+CREATE TABLE IF NOT EXISTS sar_rule_check_examples (
+    id              BIGSERIAL       PRIMARY KEY,
+    check_id        BIGINT          NOT NULL REFERENCES sar_rule_checks(id) ON DELETE CASCADE,
+    polarity        VARCHAR(8)      NOT NULL,
+    example_text    TEXT            NOT NULL,
+    explanation     TEXT,
+    display_order   INTEGER         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sar_rule_check_examples_check ON sar_rule_check_examples(check_id);
+
+CREATE TABLE IF NOT EXISTS sar_scenarios (
+    id              BIGSERIAL       PRIMARY KEY,
+    name            VARCHAR(255)    NOT NULL,
+    description     TEXT,
+    creator_id      BIGINT          NOT NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS sar_scenario_rule_mapping (
+    scenario_id     BIGINT          NOT NULL REFERENCES sar_scenarios(id) ON DELETE CASCADE,
+    rule_id         BIGINT          NOT NULL REFERENCES sar_rules(id) ON DELETE CASCADE,
+    PRIMARY KEY (scenario_id, rule_id)
+);
+
+CREATE TABLE IF NOT EXISTS sar_scenario_library_mapping (
+    scenario_id     BIGINT          NOT NULL REFERENCES sar_scenarios(id) ON DELETE CASCADE,
+    library_id      BIGINT          NOT NULL REFERENCES sar_rule_libraries(id) ON DELETE CASCADE,
+    PRIMARY KEY (scenario_id, library_id)
+);
+
+CREATE TABLE IF NOT EXISTS sar_user_library_assignment (
+    user_id         BIGINT          NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    library_id      BIGINT          NOT NULL REFERENCES sar_rule_libraries(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, library_id)
+);
+
+CREATE TABLE IF NOT EXISTS sar_review_tasks (
+    id              VARCHAR(36)     PRIMARY KEY,
+    user_id         BIGINT          NOT NULL REFERENCES users(id),
+    file_name       VARCHAR(500)    NOT NULL,
+    file_path       VARCHAR(1000)   NOT NULL,
+    scenario_id     BIGINT          REFERENCES sar_scenarios(id),
+    selected_model  VARCHAR(100)    NOT NULL,
+    status          VARCHAR(50)     NOT NULL DEFAULT 'PENDING',
+    ai_result       JSONB,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    fail_reason     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sar_review_audit_logs (
+    id              BIGSERIAL       PRIMARY KEY,
+    task_id         VARCHAR(36)     NOT NULL REFERENCES sar_review_tasks(id) ON DELETE CASCADE,
+    user_id         BIGINT          NOT NULL REFERENCES users(id),
+    action          VARCHAR(80)     NOT NULL,
+    target_type     VARCHAR(80)     NOT NULL,
+    target_id       VARCHAR(255)    NOT NULL,
+    before_value    JSONB,
+    after_value     JSONB,
+    comment         TEXT,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sar_document_blocks (
+    id                  BIGSERIAL       PRIMARY KEY,
+    task_id             VARCHAR(36)     NOT NULL REFERENCES sar_review_tasks(id) ON DELETE CASCADE,
+    block_id            VARCHAR(80)     NOT NULL,
+    block_type          VARCHAR(40)     NOT NULL DEFAULT 'paragraph',
+    chapter_index       INTEGER         NOT NULL DEFAULT 0,
+    block_index         INTEGER         NOT NULL DEFAULT 0,
+    section_path        TEXT,
+    start_node_id       VARCHAR(80),
+    end_node_id         VARCHAR(80),
+    text_content        TEXT            NOT NULL,
+    text_hash           VARCHAR(80)     NOT NULL,
+    embedding_model     VARCHAR(100),
+    embedding           VECTOR,
+    embedding_dimension INTEGER,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    UNIQUE (task_id, block_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sar_document_blocks_task ON sar_document_blocks(task_id);
+CREATE INDEX IF NOT EXISTS idx_sar_document_blocks_task_chapter
+    ON sar_document_blocks(task_id, chapter_index, block_index);
+CREATE INDEX IF NOT EXISTS idx_sar_document_blocks_vector_filter
+    ON sar_document_blocks(task_id, embedding_model, embedding_dimension)
+    WHERE embedding IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS sar_review_pipelines (
+    id                      BIGSERIAL       PRIMARY KEY,
+    task_id                 VARCHAR(36)     NOT NULL UNIQUE REFERENCES sar_review_tasks(id) ON DELETE CASCADE,
+    total_chunks            INTEGER         NOT NULL DEFAULT 0,
+    total_rule_invocations  INTEGER         NOT NULL DEFAULT 0,
+    executed_invocations    INTEGER         NOT NULL DEFAULT 0,
+    inconclusive_invocations INTEGER        NOT NULL DEFAULT 0,
+    stage1_findings         INTEGER         NOT NULL DEFAULT 0,
+    stage2_confirmed        INTEGER         NOT NULL DEFAULT 0,
+    stage2_rejected         INTEGER         NOT NULL DEFAULT 0,
+    status                  VARCHAR(16)     NOT NULL DEFAULT 'PLANNED',
+    started_at              TIMESTAMP,
+    finished_at             TIMESTAMP,
+    created_at              TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sar_review_pipelines_task ON sar_review_pipelines(task_id);
+
+CREATE TABLE IF NOT EXISTS sar_review_findings (
+    id                  BIGSERIAL       PRIMARY KEY,
+    pipeline_id         BIGINT          NOT NULL REFERENCES sar_review_pipelines(id) ON DELETE CASCADE,
+    chunk_index         INTEGER         NOT NULL,
+    chunk_label         TEXT,
+    rule_id             BIGINT          NOT NULL,
+    rule_code           VARCHAR(160)    NOT NULL,
+    check_id            BIGINT          NOT NULL,
+    check_code          VARCHAR(160)    NOT NULL,
+    category            VARCHAR(64),
+    description         TEXT            NOT NULL,
+    suggestion          TEXT,
+    evidence_span       TEXT            NOT NULL,
+    normalized_span     TEXT            NOT NULL,
+    occurrences         JSONB,
+    stage1_confidence   DOUBLE PRECISION,
+    stage2_status       VARCHAR(16)     NOT NULL DEFAULT 'N/A',
+    stage2_reason       TEXT,
+    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
+    UNIQUE (pipeline_id, check_code, normalized_span)
+);
+CREATE INDEX IF NOT EXISTS idx_sar_review_findings_pipeline ON sar_review_findings(pipeline_id);
+
+CREATE TABLE IF NOT EXISTS sar_ai_call_logs (
+    id              BIGSERIAL       PRIMARY KEY,
+    pipeline_id     BIGINT          REFERENCES sar_review_pipelines(id) ON DELETE CASCADE,
+    stage           VARCHAR(16)     NOT NULL,
+    chunk_index     INTEGER,
+    rule_id         BIGINT,
+    check_id        BIGINT,
+    model_key       VARCHAR(128)    NOT NULL,
+    attempt         INTEGER         NOT NULL DEFAULT 1,
+    request_body    JSONB           NOT NULL,
+    response_body   JSONB,
+    parsed_output   JSONB,
+    schema_valid    BOOLEAN,
+    http_status     INTEGER,
+    duration_ms     INTEGER,
+    error_message   TEXT,
+    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sar_ai_call_logs_pipeline ON sar_ai_call_logs(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_sar_ai_call_logs_stage ON sar_ai_call_logs(stage);
+
+CREATE INDEX IF NOT EXISTS idx_sar_rules_creator ON sar_rules(creator_id);
+CREATE INDEX IF NOT EXISTS idx_sar_rules_library ON sar_rules(library_id);
+CREATE INDEX IF NOT EXISTS idx_sar_scenarios_creator ON sar_scenarios(creator_id);
+CREATE INDEX IF NOT EXISTS idx_sar_review_tasks_user ON sar_review_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_sar_review_tasks_status ON sar_review_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_sar_review_audit_logs_task ON sar_review_audit_logs(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sar_user_library_assignment_user ON sar_user_library_assignment(user_id);
+
+-- =========================================================================
 -- RAG SPLIT MIGRATION
 --
 -- 一次性把"原本走 RAG 管线的历史数据"从共享旧表搬到 rag_* 表，同时保留

@@ -13,10 +13,13 @@ import type { ReviewMode, ReviewTask } from './reviews';
 
 import * as chunkScenarios from './scenarios';
 import * as ragScenarios from './ragScenarios';
+import * as sarScenarios from './sarScenarios';
 import * as chunkRules from './rules';
 import * as ragRules from './ragRules';
+import * as sarRules from './sarRules';
 import * as chunkReviews from './reviews';
 import * as ragReviews from './ragReviews';
+import * as sarReviews from './sarReviews';
 
 export type { ReviewMode } from './reviews';
 
@@ -24,12 +27,14 @@ export type { ReviewMode } from './reviews';
 export const PIPELINE_LABEL: Record<ReviewMode, string> = {
   CHUNK: '全文逐章审查',
   RAG: '智能召回审查',
+  SAR: '结构化精准审查',
 };
 
 /** UI 上为每条管线分配一个稳定的色彩，前端的 Tag / 列表色条共享。 */
 export const PIPELINE_COLOR: Record<ReviewMode, string> = {
   CHUNK: 'blue',
   RAG: 'purple',
+  SAR: 'green',
 };
 
 export type ScenarioApi = typeof chunkScenarios;
@@ -37,15 +42,21 @@ export type RuleApi = typeof chunkRules;
 export type ReviewApi = typeof chunkReviews;
 
 export function getScenarioApi(mode: ReviewMode): ScenarioApi {
-  return mode === 'RAG' ? (ragScenarios as unknown as ScenarioApi) : chunkScenarios;
+  if (mode === 'RAG') return ragScenarios as unknown as ScenarioApi;
+  if (mode === 'SAR') return sarScenarios as unknown as ScenarioApi;
+  return chunkScenarios;
 }
 
 export function getRuleApi(mode: ReviewMode): RuleApi {
-  return mode === 'RAG' ? (ragRules as unknown as RuleApi) : chunkRules;
+  if (mode === 'RAG') return ragRules as unknown as RuleApi;
+  if (mode === 'SAR') return sarRules as unknown as RuleApi;
+  return chunkRules;
 }
 
 export function getReviewApi(mode: ReviewMode): ReviewApi {
-  return mode === 'RAG' ? (ragReviews as unknown as ReviewApi) : chunkReviews;
+  if (mode === 'RAG') return ragReviews as unknown as ReviewApi;
+  if (mode === 'SAR') return sarReviews as unknown as ReviewApi;
+  return chunkReviews;
 }
 
 // ---- Unified workbench endpoints ----

@@ -5,8 +5,10 @@ import com.aireview.dto.PageResponse;
 import com.aireview.dto.UserDTO;
 import com.aireview.entity.User;
 import com.aireview.entity.RagUserRuleAssignment;
+import com.aireview.entity.SarUserRuleAssignment;
 import com.aireview.entity.UserRuleAssignment;
 import com.aireview.repository.RagUserRuleAssignmentMapper;
+import com.aireview.repository.SarUserRuleAssignmentMapper;
 import com.aireview.repository.UserMapper;
 import com.aireview.repository.UserRuleAssignmentMapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -27,6 +29,7 @@ public class UserService {
     private final UserMapper userMapper;
     private final UserRuleAssignmentMapper userRuleAssignmentMapper;
     private final RagUserRuleAssignmentMapper ragUserRuleAssignmentMapper;
+    private final SarUserRuleAssignmentMapper sarUserRuleAssignmentMapper;
     private final PasswordEncoder passwordEncoder;
 
     public UserDTO getUserById(Long id) {
@@ -115,6 +118,7 @@ public class UserService {
         }
         userRuleAssignmentMapper.deleteByUserId(targetUserId);
         ragUserRuleAssignmentMapper.deleteByUserId(targetUserId);
+        sarUserRuleAssignmentMapper.deleteByUserId(targetUserId);
         userMapper.deleteById(targetUserId);
         log.info("User {} deleted by operator {}", targetUserId, operatorId);
     }
@@ -139,11 +143,16 @@ public class UserService {
         if (user == null) {
             throw new IllegalArgumentException("用户不存在");
         }
-        boolean rag = "RAG".equalsIgnoreCase(mode);
-        if (rag) {
+        String m = mode == null ? "CHUNK" : mode.trim().toUpperCase();
+        if ("RAG".equals(m)) {
             ragUserRuleAssignmentMapper.deleteByUserId(userId);
             for (Long libId : libraryIds) {
                 ragUserRuleAssignmentMapper.insert(new RagUserRuleAssignment(userId, libId));
+            }
+        } else if ("SAR".equals(m)) {
+            sarUserRuleAssignmentMapper.deleteByUserId(userId);
+            for (Long libId : libraryIds) {
+                sarUserRuleAssignmentMapper.insert(new SarUserRuleAssignment(userId, libId));
             }
         } else {
             userRuleAssignmentMapper.deleteByUserId(userId);
@@ -151,14 +160,14 @@ public class UserService {
                 userRuleAssignmentMapper.insert(new UserRuleAssignment(userId, libId));
             }
         }
-        log.info("Assigned {} {} rule libraries to user {}",
-                libraryIds.size(), rag ? "RAG" : "CHUNK", userId);
+        log.info("Assigned {} {} rule libraries to user {}", libraryIds.size(), m, userId);
     }
 
     public List<Long> getAssignedLibraryIdsByMode(Long userId, String mode) {
-        return "RAG".equalsIgnoreCase(mode)
-                ? ragUserRuleAssignmentMapper.findLibraryIdsByUserId(userId)
-                : userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
+        String m = mode == null ? "CHUNK" : mode.trim().toUpperCase();
+        if ("RAG".equals(m)) return ragUserRuleAssignmentMapper.findLibraryIdsByUserId(userId);
+        if ("SAR".equals(m)) return sarUserRuleAssignmentMapper.findLibraryIdsByUserId(userId);
+        return userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
     }
 
     private UserDTO toDTO(User user) {

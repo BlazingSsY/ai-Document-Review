@@ -165,6 +165,81 @@ public final class ReviewResultSchema {
         return root;
     }
 
+    /**
+     * RAG 分组评估 schema（按章节聚合、一次调用评估多个检查项）。
+     *
+     * <p>一次调用把"本组共享的证据原文 + 多个检查项"一起送给模型，模型对每个 check_code
+     * 各返回一条结果。这样同一段原文只发一次、N 个检查项共用，相比"每检查项一次调用"大幅
+     * 降低 token。后端按 check_code 回填；模型漏返回的 check_code 走补审轮兜底。
+     */
+    public static JSONObject ragGroupSchema() {
+        JSONObject findingProps = new JSONObject();
+        findingProps.put("location", strProp("违规所在位置：章节路径或可在原文中定位的线索。"));
+        findingProps.put("evidence", strProp("支持该违规判定的原文摘录，必须逐字引用证据块中的文字。"));
+        findingProps.put("description", strProp("该处违规的具体说明。"));
+        findingProps.put("suggestion", strProp("针对该处的整改建议。"));
+        JSONObject findingSchema = new JSONObject();
+        findingSchema.put("type", "object");
+        findingSchema.put("required", JSON.parseArray(JSON.toJSONString(List.of(
+                "location", "evidence", "description", "suggestion"))));
+        findingSchema.put("properties", findingProps);
+        findingSchema.put("additionalProperties", false);
+        JSONObject findingsArr = new JSONObject();
+        findingsArr.put("type", "array");
+        findingsArr.put("items", findingSchema);
+
+        JSONObject resultProps = new JSONObject();
+        resultProps.put("check_code", strProp("检查项编号，必须与输入中给出的 check_code 完全一致。"));
+        resultProps.put("status", enumProp(CHECK_STATUS_ENUM,
+                "三级判定：Pass（能引用到满足要求的原文）、Fail（存在违规或要求内容缺失）、"
+                        + "Review（证据自相矛盾或确实无法判断）。"));
+        resultProps.put("reason", strProp("总体判定理由（中文）。"));
+        resultProps.put("confidence", enumProp(List.of("high", "medium", "low", "needs_review"),
+                "置信度。证据不足、冲突或不确定时填 needs_review。"));
+        resultProps.put("findings", findingsArr);
+        JSONObject resultSchema = new JSONObject();
+        resultSchema.put("type", "object");
+        resultSchema.put("required", JSON.parseArray(JSON.toJSONString(List.of(
+                "check_code", "status", "reason", "findings"))));
+        resultSchema.put("properties", resultProps);
+        resultSchema.put("additionalProperties", false);
+
+        JSONObject resultsArr = new JSONObject();
+        resultsArr.put("type", "array");
+        resultsArr.put("items", resultSchema);
+        resultsArr.put("minItems", 1);
+        resultsArr.put("description", "对输入里每一个 check_code 各返回一条；不得遗漏、不得新增。");
+
+        JSONObject root = new JSONObject();
+        root.put("type", "object");
+        root.put("required", JSON.parseArray(JSON.toJSONString(List.of("results"))));
+        JSONObject rootProps = new JSONObject();
+        rootProps.put("results", resultsArr);
+        root.put("properties", rootProps);
+        root.put("additionalProperties", false);
+        return root;
+    }
+
+    /**
+     * 二阶段复核 schema：对一条候选违规独立复判，只回 verdict + 理由，绝不改写原 finding。
+     */
+    public static JSONObject ragVerifySchema() {
+        JSONObject props = new JSONObject();
+        props.put("verdict", enumProp(List.of("CONFIRMED", "UNCERTAIN"),
+                "CONFIRMED=确实违规；UNCERTAIN=证据不足/可能误报（召回优先：不下 Pass 结论，保留人工复核）。"));
+        props.put("reason", strProp("复核理由（中文），说明确认或存疑的依据。"));
+
+        JSONObject root = new JSONObject();
+        root.put("type", "object");
+        root.put("required", JSON.parseArray(JSON.toJSONString(List.of("verdict", "reason"))));
+        root.put("properties", props);
+        root.put("additionalProperties", false);
+        return root;
+    }
+
+    public static final String RAG_GROUP_SCHEMA_NAME = "rag_group_result";
+    public static final String RAG_VERIFY_SCHEMA_NAME = "rag_verify_result";
+
     private static JSONObject strProp(String description) {
         JSONObject p = new JSONObject();
         p.put("type", "string");

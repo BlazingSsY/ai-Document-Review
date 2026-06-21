@@ -1,5 +1,7 @@
 # RAG / CHUNK 双管线拆分 — 实现说明与决策记录
 
+> **后续更新**：本次 RAG/CHUNK 拆分之后，又新增了第三套并列管线 **结构化精准审查（SAR）**，与 `rag_*` 结构对称、物理隔离（表前缀 `sar_`、路由 `/api/v1/sar`、`reviewMode=SAR`），沿用本文同一套隔离范式（独立规则库/规则/场景/任务表 + 前端 Tab/侧边栏第三入口 + `UnifiedReviewController` 三表合并 + `UserService` 按 mode 分配）。SAR 引擎（三路路由 + 区域取证 + 清单缺失 + 自适应复核 + 跨章一致性）与调参见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。下文内容仍描述 RAG/CHUNK 两条管线。
+
 本次重构把后端原本通过 `review.rag.enabled` 配置项二选一的两条审查管线，改造为前端二选一、后端物理隔离的并列模式。本文档记录 Stage 3 → Stage 6 实施过程中我（Claude）替你做的所有判断，以及做出该判断的理由。请重点 review **"我替你拍板的事项"** 一节，发现不符合预期的可在原代码上直接调整或反馈给我重做。
 
 > 用户决策（已在前几轮对话明确确认）：
@@ -161,6 +163,7 @@ frontend/src/api/
 /api/v1/reviews/all                   合并列表（query: mode=ALL|CHUNK|RAG, status=...）
 /api/v1/reviews/stats/all             合并统计（含 byMode 子对象）
 /api/v1/reviews/by-id/{taskId}        管线未知时的任务详情查询（先查 CHUNK 表，找不到回退 RAG）
+/api/v1/reviews/by-id/{taskId}/sources 管线未知时的原文/来源懒加载（同样双表试查）
 ```
 
 ---
@@ -272,7 +275,7 @@ frontend/src/api/
 - **管线性能对比报表**：同上。
 - **跨用户的 RAG 库批量赋权**：UserManagementPage 只支持一次给一个用户分配；想批量需要新接口。
 - **`output/` 下历史 JSON 文件不区分管线**：依然按 `审查结果_<file>_<model>_<ts>.json` 命名；想区分可在 `saveAiResultToFile` 前缀加 `RAG_` 或 `CHUNK_`。
-- **RagReviewService 1200+ 行**：把 task CRUD 与 pipeline 写在同一个类里是有意为之（贴合 chunk 侧 `ReviewService` 2674 行的现有风格）；想抽 `RagReviewTaskService` 完全可以、但不属于本次目标。
+- **RagReviewService（现约 1770 行）**：把 task CRUD 与 pipeline 写在同一个类里是有意为之（贴合 chunk 侧 `ReviewService` 现约 2430 行的风格）；想抽 `RagReviewTaskService` 完全可以、但不属于本次目标。注：RAG 检索/评估管线在本次拆分后又做过一次"按章节分组评估"的降本改造，当前算法与参数以 [RAG_RECALL_TUNING.md](RAG_RECALL_TUNING.md) 为准。
 - **WebSocket 任务进度的管线归属**：`taskWebSocket` 按 task_id 广播，UUID 全局唯一，无需改动。但前端日志面板（`useLogStore`）的日志条目里没有管线标签，如果以后要做"按管线过滤日志"还需要新加字段。
 
 ---

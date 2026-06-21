@@ -5,6 +5,7 @@ import com.aireview.dto.PageResponse;
 import com.aireview.dto.ReviewTaskDTO;
 import com.aireview.service.RagReviewService;
 import com.aireview.service.ReviewService;
+import com.aireview.service.SarReviewService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
@@ -42,6 +43,7 @@ public class UnifiedReviewController {
 
     private final ReviewService reviewService;
     private final RagReviewService ragReviewService;
+    private final SarReviewService sarReviewService;
 
     /**
      * 合并两条管线的最近任务，按 createdAt desc 排序，再做内存分页。
@@ -59,11 +61,14 @@ public class UnifiedReviewController {
             Long userId = (Long) authentication.getPrincipal();
             String normalizedMode = mode == null ? "ALL" : mode.trim().toUpperCase();
             List<ReviewTaskDTO> merged = new ArrayList<>();
-            if (!"RAG".equals(normalizedMode)) {
+            if ("ALL".equals(normalizedMode) || "CHUNK".equals(normalizedMode)) {
                 merged.addAll(reviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
             }
-            if (!"CHUNK".equals(normalizedMode)) {
+            if ("ALL".equals(normalizedMode) || "RAG".equals(normalizedMode)) {
                 merged.addAll(ragReviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
+            }
+            if ("ALL".equals(normalizedMode) || "SAR".equals(normalizedMode)) {
+                merged.addAll(sarReviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
             }
             if (status != null && !status.isBlank()) {
                 String s = status.toUpperCase();
@@ -114,9 +119,20 @@ public class UnifiedReviewController {
                     : ragReviewService.getTask(taskId, userId);
             return ApiResponse.success(ragTask);
         } catch (IllegalArgumentException ragErr) {
-            return ApiResponse.notFound("Task not found in any pipeline: " + taskId);
+            // 不在 RAG 表 — 尝试 SAR。
         } catch (Exception e) {
             log.error("Failed to fetch RAG task fallback", e);
+            return ApiResponse.error("Failed to fetch task: " + e.getMessage());
+        }
+        try {
+            ReviewTaskDTO sarTask = light
+                    ? sarReviewService.getTaskLight(taskId, userId)
+                    : sarReviewService.getTask(taskId, userId);
+            return ApiResponse.success(sarTask);
+        } catch (IllegalArgumentException sarErr) {
+            return ApiResponse.notFound("Task not found in any pipeline: " + taskId);
+        } catch (Exception e) {
+            log.error("Failed to fetch SAR task fallback", e);
             return ApiResponse.error("Failed to fetch task: " + e.getMessage());
         }
     }
@@ -138,9 +154,17 @@ public class UnifiedReviewController {
         try {
             return ApiResponse.success(ragReviewService.getSources(taskId, userId));
         } catch (IllegalArgumentException ragErr) {
-            return ApiResponse.notFound("Task not found in any pipeline: " + taskId);
+            // 不在 RAG 表 — 尝试 SAR。
         } catch (Exception e) {
             log.error("Failed to fetch task sources fallback", e);
+            return ApiResponse.error("Failed to fetch sources: " + e.getMessage());
+        }
+        try {
+            return ApiResponse.success(sarReviewService.getSources(taskId, userId));
+        } catch (IllegalArgumentException sarErr) {
+            return ApiResponse.notFound("Task not found in any pipeline: " + taskId);
+        } catch (Exception e) {
+            log.error("Failed to fetch SAR task sources fallback", e);
             return ApiResponse.error("Failed to fetch sources: " + e.getMessage());
         }
     }
@@ -151,13 +175,15 @@ public class UnifiedReviewController {
             Long userId = (Long) authentication.getPrincipal();
             Map<String, Object> chunk = reviewService.getStats(userId);
             Map<String, Object> rag = ragReviewService.getStats(userId);
+            Map<String, Object> sar = sarReviewService.getStats(userId);
             Map<String, Object> total = new HashMap<>();
             for (String key : List.of("total", "completed", "processing", "failed", "todayCount")) {
-                total.put(key, asLong(chunk.get(key)) + asLong(rag.get(key)));
+                total.put(key, asLong(chunk.get(key)) + asLong(rag.get(key)) + asLong(sar.get(key)));
             }
             Map<String, Object> byMode = new HashMap<>();
             byMode.put("CHUNK", chunk);
             byMode.put("RAG", rag);
+            byMode.put("SAR", sar);
             total.put("byMode", byMode);
             return ApiResponse.success(total);
         } catch (Exception e) {

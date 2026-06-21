@@ -94,8 +94,44 @@ review:
     failed-check-retry-attempts: 1
     block-max-chars: 1800
     embedding-batch-size: 24
-    recall-top-k: 20
-    rerank-top-n: 6
+    # 成本/召回平衡调参（仅嵌入 + pgvector 检索，不耗 chat token）：
+    #   recall-top-k        向量召回候选数（可适当大）
+    #   evidence-max-blocks rerank 后送入分组评估的证据块上限（每检查项）
+    recall-top-k: 30
+    evidence-max-blocks: 10
+    # 分组评估（按章节聚合检查项、一次调用评估多项）—— 把"每检查项一次调用、原文重发 N 遍"
+    # 降到"每章节一次调用、原文发一遍"，是 RAG 降 token 的核心。
+    #   max-checks-per-call  一次调用最多评估多少个检查项（越大越省，受 max_tokens 约束）
+    #   max-evidence-per-call 一次调用共享的证据块上限（去重后按召回分取前 N）
+    max-checks-per-call: 8
+    max-evidence-per-call: 16
+    # 两阶段复核：对每条非 Pass 违规再各发一次 AI 复判，仅给"已确认/待定"标签，
+    # 对召回毫无帮助，却会让 AI 调用数翻数倍（N 条问题 = N 次额外调用）。
+    # 默认关闭以控制成本；确需精度标注时再手动开。
+    verify:
+      enabled: false
+    vector-index:
+      enabled: true
+      hnsw-ef-search: 100
+      binary-candidate-multiplier: 4
+  # SAR（结构化精准审查）管线参数 —— 与 RAG/CHUNK 物理隔离的第三套方案。
+  # 引擎：三路并联路由(结构+词法+语义) → 区域级取证 → 清单式缺失检测 → 自适应复核 → 跨章一致性。
+  sar:
+    check-concurrency: 4
+    failed-check-retry-attempts: 1
+    block-max-chars: 1800
+    embedding-batch-size: 24
+    recall-top-k: 30                  # 语义路由的向量召回候选数
+    evidence-max-blocks: 10           # 三路皆未命中时的回退取证块数
+    max-checks-per-call: 8            # 同区域检查项分组的箱容量
+    max-evidence-per-call: 16         # 单次分组调用的证据块上限
+    region-max-blocks: 14             # 区域级取证：命中区域送入模型的整段块数上限
+    route-confidence-threshold: 0.45  # 低于此路由置信度 → 降级 needs_review、优先复核
+    verify:
+      enabled: false                 # 自适应复核总开关（默认关；开启≈每条不确定违规多一次调用）
+      adaptive: true                 # 仅复核低置信/定位不确定项（而非全量）
+    consistency:
+      enabled: true                  # 跨章一致性核对（抽取关键实体、查跨章节矛盾）
     vector-index:
       enabled: true
       hnsw-ef-search: 100

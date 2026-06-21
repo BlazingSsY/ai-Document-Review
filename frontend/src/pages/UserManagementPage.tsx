@@ -13,6 +13,7 @@ import {
 import type { RuleLibrary } from '../api/rules';
 import { getAllRuleLibraries as getChunkLibraries } from '../api/rules';
 import { getAllRuleLibraries as getRagLibraries } from '../api/ragRules';
+import { getAllRuleLibraries as getSarLibraries } from '../api/sarRules';
 import { PIPELINE_LABEL } from '../api/pipelineApi';
 
 const { Title, Text } = Typography;
@@ -76,7 +77,8 @@ function UserManagementPage() {
   const loadAssignmentsFor = async (userId: number, mode: AssignmentMode) => {
     setLoadingLibs(true);
     try {
-      const fetchLibs = mode === 'RAG' ? getRagLibraries : getChunkLibraries;
+      const fetchLibs = mode === 'RAG' ? getRagLibraries
+        : mode === 'SAR' ? getSarLibraries : getChunkLibraries;
       const [libsRes, assignedRes] = await Promise.all([
         fetchLibs(),
         getUserAssignedLibraries(userId, mode),
@@ -225,6 +227,7 @@ function UserManagementPage() {
           <Radio.Group value={assignMode} onChange={(e) => handleSwitchAssignMode(e.target.value)}>
             <Radio.Button value="RAG">智能召回审查</Radio.Button>
             <Radio.Button value="CHUNK">全文逐章审查</Radio.Button>
+            <Radio.Button value="SAR">结构化精准审查</Radio.Button>
           </Radio.Group>
           <Alert
             type="info"

@@ -14,6 +14,7 @@ import {
   ProfileOutlined,
   DeploymentUnitOutlined,
   BookOutlined,
+  AimOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import useAuthStore from '../store/authStore';
@@ -107,6 +108,15 @@ function AppLayout() {
         { key: '/chunk/rules', icon: <ProfileOutlined />, label: '审查规则' },
       ],
     },
+    {
+      key: 'sar-section',
+      icon: <AimOutlined />,
+      label: '结构化精准审查',
+      children: [
+        { key: '/sar/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
+        { key: '/sar/rules', icon: <ProfileOutlined />, label: '审查规则' },
+      ],
+    },
     { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
     ...(isSupervisor ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }] : []),
   ];
@@ -135,8 +145,10 @@ function AppLayout() {
     : path.startsWith('/rag/rules') ? '/rag/rules'
     : path.startsWith('/chunk/scenarios') ? '/chunk/scenarios'
     : path.startsWith('/chunk/rules') ? '/chunk/rules'
+    : path.startsWith('/sar/scenarios') ? '/sar/scenarios'
+    : path.startsWith('/sar/rules') ? '/sar/rules'
     : '/' + path.split('/')[1];
-  const openKeys = ['rag-section', 'chunk-section'];
+  const openKeys = ['rag-section', 'chunk-section', 'sar-section'];
   const roleTag = ROLE_TAG[role] || ROLE_TAG.user;
 
   return (

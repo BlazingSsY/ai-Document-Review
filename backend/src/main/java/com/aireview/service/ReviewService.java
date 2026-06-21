@@ -302,7 +302,8 @@ public class ReviewService {
         List<Map<String, Object>> allCheckResults = aiResult.get("allCheckResults") instanceof List<?> list
                 ? (List<Map<String, Object>>) (List<?>) list
                 : new ArrayList<>();
-        Map<String, Object> target = findCheckResult(allCheckResults, request.getCheckCode(), request.getSourceChunk());
+        Map<String, Object> target = ReviewExportUtil.findCheckResult(
+                allCheckResults, request.getFindingId(), request.getCheckCode(), request.getSourceChunk());
         if (target == null) {
             throw new IllegalArgumentException("Check result not found: " + request.getCheckCode());
         }
@@ -315,8 +316,8 @@ public class ReviewService {
         target.put("manualReviewerId", userId);
         target.put("manualReviewedAt", LocalDateTime.now().toString());
 
-        syncChunkCheckResult(aiResult, target);
-        aiResult.put("manualReviewSummary", buildManualReviewSummary(allCheckResults));
+        ReviewExportUtil.syncChunkCheckResult(aiResult, target);
+        aiResult.put("manualReviewSummary", ReviewExportUtil.buildManualReviewSummary(allCheckResults));
         task.setAiResult(aiResult);
         task.setProblemCount(ReviewExportUtil.computeProblemCount(aiResult));
         task.setUpdatedAt(LocalDateTime.now());
@@ -2127,73 +2128,6 @@ public class ReviewService {
         return task;
     }
 
-    private Map<String, Object> findCheckResult(List<Map<String, Object>> checks,
-                                                String checkCode,
-                                                Integer sourceChunk) {
-        for (Map<String, Object> check : checks) {
-            String code = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
-            if (!checkCode.equals(code)) continue;
-            if (sourceChunk == null) return check;
-            Object chunk = check.get("sourceChunk");
-            if (chunk instanceof Number n && n.intValue() == sourceChunk) return check;
-            if (chunk != null && String.valueOf(sourceChunk).equals(chunk.toString())) return check;
-        }
-        return null;
-    }
-
-    @SuppressWarnings("unchecked")
-    private void syncChunkCheckResult(Map<String, Object> aiResult, Map<String, Object> updated) {
-        Object chunkResultsObj = aiResult.get("chunkResults");
-        if (!(chunkResultsObj instanceof List<?> chunks)) return;
-        String checkCode = firstNonBlank(strField(updated, "check_code"), strField(updated, "checkCode"));
-        Object sourceChunk = updated.get("sourceChunk");
-        for (Object chunkObj : chunks) {
-            if (!(chunkObj instanceof Map<?, ?>)) continue;
-            Map<String, Object> chunk = (Map<String, Object>) chunkObj;
-            if (sourceChunk != null && !Objects.equals(String.valueOf(sourceChunk), String.valueOf(chunk.get("chunk")))) {
-                continue;
-            }
-            Object resultObj = chunk.get("result");
-            if (!(resultObj instanceof Map<?, ?>)) continue;
-            Map<String, Object> result = (Map<String, Object>) resultObj;
-            Object checksObj = result.get("check_results");
-            if (!(checksObj instanceof List<?> checkList)) continue;
-            for (Object item : checkList) {
-                if (!(item instanceof Map<?, ?>)) continue;
-                Map<String, Object> check = (Map<String, Object>) item;
-                String candidate = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
-                if (checkCode.equals(candidate)) {
-                    check.putAll(updated);
-                    return;
-                }
-            }
-        }
-    }
-
-    private Map<String, Object> buildManualReviewSummary(List<Map<String, Object>> checks) {
-        Map<String, Object> summary = new LinkedHashMap<>();
-        int reviewed = 0;
-        int accepted = 0;
-        Map<String, Integer> finalStatusCounts = new LinkedHashMap<>();
-        for (String s : ReviewResultSchema.CHECK_STATUS_ENUM) finalStatusCounts.put(s, 0);
-        for (Map<String, Object> check : checks) {
-            String manualStatus = strField(check, "manualStatus");
-            if (!manualStatus.isBlank()) {
-                reviewed++;
-                finalStatusCounts.merge(normalizeCheckStatus(manualStatus), 1, Integer::sum);
-            }
-            if (Boolean.TRUE.equals(check.get("manualAccepted"))) {
-                accepted++;
-            }
-        }
-        summary.put("reviewed", reviewed);
-        summary.put("accepted", accepted);
-        summary.put("pending", Math.max(0, checks.size() - reviewed));
-        summary.put("finalStatusCounts", finalStatusCounts);
-        summary.put("updatedAt", LocalDateTime.now().toString());
-        return summary;
-    }
-
     private void updateTaskStatus(ReviewTask task, String status, String failReason) {
         task.setStatus(status);
         task.setFailReason(failReason);
@@ -2372,6 +2306,7 @@ public class ReviewService {
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
         dto.setProblemCount(task.getProblemCount());
+        dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
         return dto;
     }
@@ -2390,6 +2325,7 @@ public class ReviewService {
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
         dto.setProblemCount(task.getProblemCount());
+        dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
         return dto;
     }
@@ -2424,6 +2360,7 @@ public class ReviewService {
         dto.setUpdatedAt(task.getUpdatedAt());
         dto.setFailReason(task.getFailReason());
         dto.setProblemCount(task.getProblemCount());
+        dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
         return dto;
     }
