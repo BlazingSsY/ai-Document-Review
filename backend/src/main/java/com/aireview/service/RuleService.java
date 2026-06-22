@@ -2,11 +2,15 @@ package com.aireview.service;
 
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.RuleCheckDTO;
+import com.aireview.dto.RuleContentUpdateRequest;
 import com.aireview.dto.RuleDTO;
 import com.aireview.dto.RuleMetadataUpdateRequest;
+import com.aireview.dto.RuleUploadConflictDTO;
 import com.aireview.entity.Rule;
 import com.aireview.entity.RuleCheck;
+import com.aireview.entity.RuleFolder;
 import com.aireview.repository.RuleCheckMapper;
+import com.aireview.repository.RuleFolderMapper;
 import com.aireview.repository.RuleMapper;
 import com.aireview.util.MultiRuleParser;
 import com.aireview.util.RuleMetadata;
@@ -27,7 +31,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -36,6 +42,7 @@ public class RuleService {
 
     private final RuleMapper ruleMapper;
     private final RuleCheckMapper ruleCheckMapper;
+    private final RuleFolderMapper ruleFolderMapper;
     private final com.aireview.repository.UserRuleAssignmentMapper userRuleAssignmentMapper;
 
     @Value("${file.rules-dir}")
@@ -54,18 +61,39 @@ public class RuleService {
      * {@link #uploadRule(MultipartFile, Long, Long)} for the single-rule legacy signature.
      */
     public List<RuleDTO> uploadRuleAll(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
+        return uploadRuleAll(file, creatorId, libraryId, null);
+    }
+
+    public List<RuleDTO> uploadRuleAll(MultipartFile file, Long creatorId, Long libraryId, Long folderId) throws IOException {
+        return uploadRuleAll(file, creatorId, libraryId, folderId, false);
+    }
+
+    public List<RuleDTO> uploadRuleAll(MultipartFile file, Long creatorId, Long libraryId,
+                                       Long folderId, boolean replaceExisting) throws IOException {
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null) {
             throw new IllegalArgumentException("File name is required");
         }
 
         String content = new String(file.getBytes(), StandardCharsets.UTF_8);
-        return importRuleContent(originalFilename, content, creatorId, libraryId, true);
+        return importRuleContent(originalFilename, content, creatorId, libraryId, folderId, true, replaceExisting);
     }
 
     public List<RuleDTO> importRuleContent(String originalFilename, String content,
                                            Long creatorId, Long libraryId,
                                            boolean persistSourceFile) throws IOException {
+        return importRuleContent(originalFilename, content, creatorId, libraryId, null, persistSourceFile);
+    }
+
+    public List<RuleDTO> importRuleContent(String originalFilename, String content,
+                                           Long creatorId, Long libraryId, Long folderId,
+                                           boolean persistSourceFile) throws IOException {
+        return importRuleContent(originalFilename, content, creatorId, libraryId, folderId, persistSourceFile, false);
+    }
+
+    public List<RuleDTO> importRuleContent(String originalFilename, String content,
+                                           Long creatorId, Long libraryId, Long folderId,
+                                           boolean persistSourceFile, boolean replaceExisting) throws IOException {
         if (originalFilename == null || originalFilename.isBlank()) {
             throw new IllegalArgumentException("File name is required");
         }
@@ -91,6 +119,7 @@ public class RuleService {
 
         // Split into one-or-more parsed rules.
         List<MultiRuleParser.ParsedRule> parsed = MultiRuleParser.parse(originalFilename, fileType, content);
+        handleUploadConflicts(originalFilename, libraryId, folderId, replaceExisting);
         List<RuleDTO> out = new ArrayList<>();
         for (MultiRuleParser.ParsedRule pr : parsed) {
             Rule rule = new Rule();
@@ -99,6 +128,7 @@ public class RuleService {
             rule.setContent(pr.getContent());
             rule.setCreatorId(creatorId);
             rule.setLibraryId(libraryId);
+            rule.setFolderId(folderId);
             rule.setUpdatedAt(LocalDateTime.now());
             rule.setIsValid(true);
             rule.setSourceFile(originalFilename);
@@ -120,6 +150,48 @@ public class RuleService {
         return out;
     }
 
+    public List<RuleUploadConflictDTO> findUploadConflicts(String sourceFile, Long libraryId, Long folderId) {
+        if (sourceFile == null || sourceFile.isBlank()) return List.of();
+        LambdaQueryWrapper<Rule> query = new LambdaQueryWrapper<>();
+        query.eq(Rule::getSourceFile, sourceFile)
+                .select(Rule::getId, Rule::getRuleName, Rule::getRuleCode, Rule::getSourceFile,
+                        Rule::getLibraryId, Rule::getFolderId, Rule::getUpdatedAt)
+                .orderByAsc(Rule::getId);
+        if (libraryId == null) {
+            query.isNull(Rule::getLibraryId);
+        } else {
+            query.eq(Rule::getLibraryId, libraryId);
+        }
+        if (folderId == null) {
+            query.isNull(Rule::getFolderId);
+        } else {
+            query.eq(Rule::getFolderId, folderId);
+        }
+        return ruleMapper.selectList(query).stream()
+                .map(rule -> new RuleUploadConflictDTO(
+                        rule.getId(),
+                        rule.getRuleName(),
+                        rule.getRuleCode(),
+                        rule.getSourceFile(),
+                        rule.getLibraryId(),
+                        rule.getFolderId(),
+                        rule.getUpdatedAt()))
+                .toList();
+    }
+
+    private void handleUploadConflicts(String sourceFile, Long libraryId, Long folderId, boolean replaceExisting) {
+        List<RuleUploadConflictDTO> conflicts = findUploadConflicts(sourceFile, libraryId, folderId);
+        if (conflicts.isEmpty()) return;
+        if (!replaceExisting) {
+            throw new IllegalArgumentException("规则文件已存在，请选择保留已有规则或用新文件替换");
+        }
+        for (RuleUploadConflictDTO conflict : conflicts) {
+            ruleMapper.deleteById(conflict.getId());
+        }
+        log.info("Replaced {} existing rule(s) from sourceFile={} libraryId={} folderId={}",
+                conflicts.size(), sourceFile, libraryId, folderId);
+    }
+
     private void persistChecks(Long ruleId, List<MultiRuleParser.ParsedCheck> checks) {
         if (ruleId == null || checks == null || checks.isEmpty()) return;
         for (MultiRuleParser.ParsedCheck parsed : checks) {
@@ -139,7 +211,7 @@ public class RuleService {
 
     /** Back-compatible single-rule upload used by callers that don't yet expect multi-rule responses. */
     public RuleDTO uploadRule(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
-        List<RuleDTO> all = uploadRuleAll(file, creatorId, libraryId);
+        List<RuleDTO> all = uploadRuleAll(file, creatorId, libraryId, null);
         return all.isEmpty() ? null : all.get(0);
     }
 
@@ -153,6 +225,15 @@ public class RuleService {
      * user: see only assigned rules.
      */
     public PageResponse<RuleDTO> listRules(int page, int size, Long userId, String role, Long libraryId) {
+        return listRules(page, size, userId, role, libraryId, null, false);
+    }
+
+    /**
+     * @param folderId      仅返回该文件夹下的规则（为 null 时不按文件夹过滤，除非 uncategorized=true）
+     * @param uncategorized 为 true 时只返回未分类规则（folder_id IS NULL），优先级高于 folderId
+     */
+    public PageResponse<RuleDTO> listRules(int page, int size, Long userId, String role,
+                                           Long libraryId, Long folderId, boolean uncategorized) {
         Page<Rule> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<Rule> query = new LambdaQueryWrapper<>();
 
@@ -166,12 +247,18 @@ public class RuleService {
         if (libraryId != null) {
             query.eq(Rule::getLibraryId, libraryId);
         }
+        if (uncategorized) {
+            query.isNull(Rule::getFolderId);
+        } else if (folderId != null) {
+            query.eq(Rule::getFolderId, folderId);
+        }
         query.select(
                 Rule::getId,
                 Rule::getRuleName,
                 Rule::getFileType,
                 Rule::getCreatorId,
                 Rule::getLibraryId,
+                Rule::getFolderId,
                 Rule::getUpdatedAt,
                 Rule::getIsValid,
                 Rule::getRuleCode,
@@ -227,7 +314,21 @@ public class RuleService {
     public List<Rule> getRulesByScenarioId(Long scenarioId) {
         List<Long> ids = ruleMapper.findIdsByScenarioId(scenarioId);
         if (ids == null || ids.isEmpty()) return new ArrayList<>();
-        return ruleMapper.selectBatchIds(ids);
+        List<Rule> rules = ruleMapper.selectBatchIds(ids);
+        // 停用文件夹中的规则在审查时整组排除；未分类（folder_id 为 null）恒保留。
+        Set<Long> disabled = disabledFolderIds();
+        if (disabled.isEmpty()) return rules;
+        return rules.stream()
+                .filter(r -> r.getFolderId() == null || !disabled.contains(r.getFolderId()))
+                .collect(Collectors.toList());
+    }
+
+    private Set<Long> disabledFolderIds() {
+        LambdaQueryWrapper<RuleFolder> q = new LambdaQueryWrapper<>();
+        q.eq(RuleFolder::getEnabled, false).select(RuleFolder::getId);
+        return ruleFolderMapper.selectList(q).stream()
+                .map(RuleFolder::getId)
+                .collect(Collectors.toSet());
     }
 
     /**
@@ -254,6 +355,48 @@ public class RuleService {
         return toDTO(rule);
     }
 
+    /**
+     * 编辑规则内容：正文（content）与原子检查项（rule_checks）。content 为 null 不改；
+     * checks 为 null 不改，非 null（含空列表）整体替换该规则的检查项。
+     */
+    public RuleDTO updateContent(Long id, RuleContentUpdateRequest req) {
+        Rule rule = ruleMapper.selectById(id);
+        if (rule == null) {
+            throw new IllegalArgumentException("Rule not found: " + id);
+        }
+        if (req.getContent() != null) {
+            rule.setContent(req.getContent());
+        }
+        rule.setUpdatedAt(LocalDateTime.now());
+        ruleMapper.updateById(rule);
+
+        if (req.getChecks() != null) {
+            ruleCheckMapper.delete(new LambdaQueryWrapper<RuleCheck>().eq(RuleCheck::getRuleId, id));
+            int order = 1;
+            for (RuleCheckDTO c : req.getChecks()) {
+                RuleCheck check = new RuleCheck();
+                check.setRuleId(id);
+                String code = blankToNull(c.getCheckCode());
+                check.setCheckCode(code != null ? code
+                        : (rule.getRuleCode() != null && !rule.getRuleCode().isBlank() ? rule.getRuleCode() : "R")
+                          + "-C" + String.format("%03d", order));
+                String type = blankToNull(c.getCheckType());
+                check.setCheckType(type != null ? type : "presence");
+                check.setQuestion(c.getQuestion());
+                check.setPassCriteria(c.getPassCriteria());
+                check.setCategory(blankToNull(c.getCategory()));
+                check.setEvidenceRequired(c.getEvidenceRequired() == null ? Boolean.TRUE : c.getEvidenceRequired());
+                check.setDisplayOrder(c.getDisplayOrder() != null ? c.getDisplayOrder() : order);
+                check.setIsActive(true);
+                ruleCheckMapper.insert(check);
+                order++;
+            }
+        }
+        log.info("Rule {} content updated (checks: {})", id,
+                req.getChecks() == null ? "unchanged" : req.getChecks().size());
+        return toDTO(rule);
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.trim();
     }
@@ -265,6 +408,7 @@ public class RuleService {
         dto.setFileType(rule.getFileType());
         dto.setCreatorId(rule.getCreatorId());
         dto.setLibraryId(rule.getLibraryId());
+        dto.setFolderId(rule.getFolderId());
         dto.setUpdatedAt(rule.getUpdatedAt());
         dto.setIsValid(rule.getIsValid());
         dto.setDescription(rule.getDescription());

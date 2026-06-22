@@ -2,6 +2,7 @@ package com.aireview.controller;
 
 import com.aireview.dto.ApiResponse;
 import com.aireview.dto.PageResponse;
+import com.aireview.dto.RuleFolderDTO;
 import com.aireview.dto.RuleLibraryDTO;
 import com.aireview.service.SarRuleLibraryService;
 import com.aireview.util.SecurityUtils;
@@ -96,6 +97,68 @@ public class SarRuleLibraryController {
         } catch (Exception e) {
             log.error("Failed to list all SAR rule libraries", e);
             return ApiResponse.error("获取规则库列表失败: " + e.getMessage());
+        }
+    }
+
+    // ===================== 二级文件夹 =====================
+
+    @GetMapping("/{libraryId}/folders")
+    public ApiResponse<List<RuleFolderDTO>> listFolders(@PathVariable Long libraryId) {
+        try {
+            return ApiResponse.success(sarRuleLibraryService.listFolders(libraryId));
+        } catch (Exception e) {
+            log.error("Failed to list SAR rule folders", e);
+            return ApiResponse.error("获取文件夹列表失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/{libraryId}/folders")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<RuleFolderDTO> createFolder(@PathVariable Long libraryId,
+                                                   @RequestBody Map<String, String> body,
+                                                   Authentication authentication) {
+        try {
+            String name = body.get("name");
+            if (name == null || name.isBlank()) {
+                return ApiResponse.badRequest("文件夹名称不能为空");
+            }
+            Long userId = SecurityUtils.getUserId(authentication);
+            return ApiResponse.success("文件夹创建成功",
+                    sarRuleLibraryService.createFolder(libraryId, name.trim(), userId));
+        } catch (Exception e) {
+            log.error("Failed to create SAR rule folder", e);
+            return ApiResponse.error("创建文件夹失败: " + e.getMessage());
+        }
+    }
+
+    @PutMapping("/folders/{folderId}")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<RuleFolderDTO> updateFolder(@PathVariable Long folderId,
+                                                   @RequestBody Map<String, Object> body) {
+        try {
+            String name = body.get("name") == null ? null : String.valueOf(body.get("name"));
+            Boolean enabled = body.get("enabled") == null ? null : Boolean.valueOf(String.valueOf(body.get("enabled")));
+            return ApiResponse.success("文件夹已更新",
+                    sarRuleLibraryService.updateFolder(folderId, name, enabled));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to update SAR rule folder", e);
+            return ApiResponse.error("更新文件夹失败: " + e.getMessage());
+        }
+    }
+
+    @DeleteMapping("/folders/{folderId}")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<Void> deleteFolder(@PathVariable Long folderId) {
+        try {
+            sarRuleLibraryService.deleteFolder(folderId);
+            return ApiResponse.success("文件夹已删除（其规则已移至未分类）", null);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to delete SAR rule folder", e);
+            return ApiResponse.error("删除文件夹失败: " + e.getMessage());
         }
     }
 }

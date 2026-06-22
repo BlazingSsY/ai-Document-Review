@@ -256,7 +256,7 @@ function FindingCard({
             <Tag color={checkStatusColor(statusValue)}>{CHECK_STATUS_LABELS[statusValue] || statusValue || '待复核'}</Tag>
           )}
           {category && <Tag>{category}</Tag>}
-          {hasCheckMatrix && rule && <Tag color="blue">{rule}</Tag>}
+          {hasCheckMatrix && rule && <Tag color="blue">{ruleCode ? `${ruleCode} ${rule}` : rule}</Tag>}
           {!hasCheckMatrix && ruleCode && <Tag color="blue">{ruleCode}</Tag>}
           {!hasCheckMatrix && checkCode && <Tag color="cyan">{checkCode}</Tag>}
           {manualStatus && <Tag color={checkStatusColor(manualStatus)}>人工：{CHECK_STATUS_LABELS[manualStatus] || manualStatus}</Tag>}

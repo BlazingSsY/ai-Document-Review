@@ -24,6 +24,9 @@ public class Rule {
 
     private Long libraryId;
 
+    /** 所属二级文件夹（可空 = 未分类）。 */
+    private Long folderId;
+
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
 

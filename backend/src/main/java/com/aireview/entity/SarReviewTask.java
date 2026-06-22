@@ -40,6 +40,9 @@ public class SarReviewTask {
     /** Scalar problem count cached on completion/manual-review so the task list never reads ai_result. */
     private Integer problemCount;
 
+    /** 是否对本次审查启用全文质量检查（基础文字质量审查）。默认 true。SAR 管线当前不执行全文质量检查，此字段保留以统一接口。 */
+    private Boolean qualityCheckEnabled;
+
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_PROCESSING = "PROCESSING";
     public static final String STATUS_COMPLETED = "COMPLETED";

@@ -38,17 +38,18 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class ChecklistRuleImportService {
 
-    private final RagRuleService ragRuleService;
     private final SarRuleService sarRuleService;
     private final DataFormatter formatter = new DataFormatter();
 
-    public ChecklistImportResultDTO importQtpChecklist(MultipartFile file, Long creatorId, Long libraryId) throws Exception {
-        return importQtpChecklist(file, creatorId, libraryId, "RAG");
+    /** 检查单导入到 SAR 管线（结构化精准审查使用原子检查项）。{@code mode} 参数已不再分支，保留以兼容调用方。 */
+    public ChecklistImportResultDTO importQtpChecklist(MultipartFile file, Long creatorId,
+                                                       Long libraryId, Long folderId, String mode) throws Exception {
+        return importQtpChecklist(file, creatorId, libraryId, folderId, mode, false);
     }
 
-    /** 检查单导入到指定管线（RAG / SAR）。两条管线都用原子检查项，故共用同一套 Excel 解析。 */
     public ChecklistImportResultDTO importQtpChecklist(MultipartFile file, Long creatorId,
-                                                       Long libraryId, String mode) throws Exception {
+                                                       Long libraryId, Long folderId, String mode,
+                                                       boolean replaceExisting) throws Exception {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Checklist file is required");
         }
@@ -67,10 +68,9 @@ public class ChecklistRuleImportService {
         }
         String canonicalJson = JSON.toJSONString(pack,
                 JSONWriter.Feature.PrettyFormat, JSONWriter.Feature.WriteMapNullValue);
-        String generatedName = stripExtension(originalFilename) + ".rules.json";
-        List<RuleDTO> imported = "SAR".equalsIgnoreCase(mode)
-                ? sarRuleService.importRuleContent(generatedName, canonicalJson, creatorId, libraryId, true)
-                : ragRuleService.importRuleContent(generatedName, canonicalJson, creatorId, libraryId, true);
+        String generatedName = generatedRuleFileName(originalFilename);
+        List<RuleDTO> imported = sarRuleService.importRuleContent(
+                generatedName, canonicalJson, creatorId, libraryId, folderId, true, replaceExisting);
 
         ChecklistImportResultDTO dto = new ChecklistImportResultDTO();
         dto.setSourceFile(originalFilename);
@@ -83,6 +83,13 @@ public class ChecklistRuleImportService {
         dto.setCanonicalJson(canonicalJson);
         dto.setImportedRules(imported);
         return dto;
+    }
+
+    public String generatedRuleFileName(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "";
+        }
+        return stripExtension(originalFilename) + ".rules.json";
     }
 
     private JSONObject buildCanonicalRulePack(String originalFilename, Workbook workbook) {

@@ -12,7 +12,6 @@ import {
 } from '../api/users';
 import type { RuleLibrary } from '../api/rules';
 import { getAllRuleLibraries as getChunkLibraries } from '../api/rules';
-import { getAllRuleLibraries as getRagLibraries } from '../api/ragRules';
 import { getAllRuleLibraries as getSarLibraries } from '../api/sarRules';
 import { PIPELINE_LABEL } from '../api/pipelineApi';
 
@@ -34,7 +33,7 @@ function UserManagementPage() {
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
   const [assignUserName, setAssignUserName] = useState('');
-  const [assignMode, setAssignMode] = useState<AssignmentMode>('RAG');
+  const [assignMode, setAssignMode] = useState<AssignmentMode>('CHUNK');
   const [allLibraries, setAllLibraries] = useState<RuleLibrary[]>([]);
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<number[]>([]);
   const [assigning, setAssigning] = useState(false);
@@ -77,8 +76,7 @@ function UserManagementPage() {
   const loadAssignmentsFor = async (userId: number, mode: AssignmentMode) => {
     setLoadingLibs(true);
     try {
-      const fetchLibs = mode === 'RAG' ? getRagLibraries
-        : mode === 'SAR' ? getSarLibraries : getChunkLibraries;
+      const fetchLibs = mode === 'SAR' ? getSarLibraries : getChunkLibraries;
       const [libsRes, assignedRes] = await Promise.all([
         fetchLibs(),
         getUserAssignedLibraries(userId, mode),
@@ -92,8 +90,8 @@ function UserManagementPage() {
   const openAssignModal = async (user: UserInfo) => {
     setAssignUserId(user.id);
     setAssignUserName(user.name || user.email);
-    setAssignMode('RAG');
-    await loadAssignmentsFor(user.id, 'RAG');
+    setAssignMode('CHUNK');
+    await loadAssignmentsFor(user.id, 'CHUNK');
     setAssignModalOpen(true);
   };
 
@@ -225,7 +223,6 @@ function UserManagementPage() {
         confirmLoading={assigning} okText={`保存到「${PIPELINE_LABEL[assignMode]}」`} cancelText="关闭" width={520}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Radio.Group value={assignMode} onChange={(e) => handleSwitchAssignMode(e.target.value)}>
-            <Radio.Button value="RAG">智能召回审查</Radio.Button>
             <Radio.Button value="CHUNK">全文逐章审查</Radio.Button>
             <Radio.Button value="SAR">结构化精准审查</Radio.Button>
           </Radio.Group>

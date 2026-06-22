@@ -35,10 +35,11 @@ public class ReviewController {
             @RequestParam("file") MultipartFile file,
             @RequestParam("scenarioId") Long scenarioId,
             @RequestParam("selectedModel") String selectedModel,
+            @RequestParam(value = "qualityCheckEnabled", required = false, defaultValue = "true") boolean qualityCheckEnabled,
             Authentication authentication) {
         try {
             Long userId = (Long) authentication.getPrincipal();
-            ReviewTaskDTO task = reviewService.submitReview(file, scenarioId, selectedModel, userId);
+            ReviewTaskDTO task = reviewService.submitReview(file, scenarioId, selectedModel, userId, qualityCheckEnabled);
             return ApiResponse.success("Review task submitted", task);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());

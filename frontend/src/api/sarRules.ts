@@ -1,14 +1,15 @@
 import request, { ApiResponse } from './request';
 import type {
   Rule, RuleLibrary, RuleListParams, RuleMetadataUpdate, ChecklistImportResult,
-  PaginatedResult,
+  PaginatedResult, RuleUploadConflict,
 } from './rules';
 
 // Types are shape-identical to chunk side.
 export type {
   Rule, RuleLibrary, RuleListParams, RuleMetadataUpdate, ChecklistImportResult,
-  PaginatedResult, RuleCheck,
+  PaginatedResult, RuleCheck, RuleFolder, RuleContentUpdate, RuleUploadConflict,
 } from './rules';
+import type { RuleFolder, RuleContentUpdate } from './rules';
 
 const RULES_BASE = '/sar/rules';
 const LIBRARIES_BASE = '/sar/rule-libraries';
@@ -36,8 +37,21 @@ export function importChecklist(formData: FormData) {
   });
 }
 
+export function getUploadConflicts(params: {
+  fileName: string;
+  libraryId?: number;
+  folderId?: number;
+  checklist?: boolean;
+}) {
+  return request.get<ApiResponse<RuleUploadConflict[]>>(`${RULES_BASE}/upload-conflicts`, { params });
+}
+
 export function updateRuleMetadata(id: number, payload: RuleMetadataUpdate) {
   return request.put<ApiResponse<Rule>>(`${RULES_BASE}/${id}/metadata`, payload);
+}
+
+export function updateRuleContent(id: number, payload: RuleContentUpdate) {
+  return request.put<ApiResponse<Rule>>(`${RULES_BASE}/${id}/content`, payload);
 }
 
 export function deleteRule(id: number) {
@@ -65,4 +79,21 @@ export function updateRuleLibrary(id: number, params: { name: string; descriptio
 
 export function deleteRuleLibrary(id: number) {
   return request.delete<ApiResponse<null>>(`${LIBRARIES_BASE}/${id}`);
+}
+
+// Rule Folder (二级文件夹) APIs
+export function getFolderList(libraryId: number) {
+  return request.get<ApiResponse<RuleFolder[]>>(`${LIBRARIES_BASE}/${libraryId}/folders`);
+}
+
+export function createFolder(libraryId: number, name: string) {
+  return request.post<ApiResponse<RuleFolder>>(`${LIBRARIES_BASE}/${libraryId}/folders`, { name });
+}
+
+export function updateFolder(folderId: number, payload: { name?: string; enabled?: boolean }) {
+  return request.put<ApiResponse<RuleFolder>>(`${LIBRARIES_BASE}/folders/${folderId}`, payload);
+}
+
+export function deleteFolder(folderId: number) {
+  return request.delete<ApiResponse<null>>(`${LIBRARIES_BASE}/folders/${folderId}`);
 }

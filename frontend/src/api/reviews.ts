@@ -1,7 +1,7 @@
 import request, { ApiResponse } from './request';
 import { PaginatedResult } from './rules';
 
-export type ReviewMode = 'CHUNK' | 'RAG' | 'SAR';
+export type ReviewMode = 'CHUNK' | 'SAR';
 
 export interface ReviewTask {
   id: string;

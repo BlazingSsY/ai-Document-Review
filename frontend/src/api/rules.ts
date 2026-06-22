@@ -7,6 +7,7 @@ export interface Rule {
   content?: string;
   creatorId: number;
   libraryId?: number;
+  folderId?: number;
   updatedAt: string;
   isValid: boolean;
 
@@ -45,6 +46,16 @@ export interface ChecklistImportResult {
   importedRules: Rule[];
 }
 
+export interface RuleUploadConflict {
+  id: number;
+  ruleName: string;
+  ruleCode?: string;
+  sourceFile: string;
+  libraryId?: number;
+  folderId?: number;
+  updatedAt?: string;
+}
+
 export interface RuleMetadataUpdate {
   ruleName?: string;
   ruleCode?: string;
@@ -53,6 +64,12 @@ export interface RuleMetadataUpdate {
   sections?: string[];
   keywords?: string[];
   description?: string;
+}
+
+/** 规则内容编辑负载：content 为空不改正文；checks 为非空数组（含空数组）时整体替换检查项。 */
+export interface RuleContentUpdate {
+  content?: string;
+  checks?: Partial<RuleCheck>[];
 }
 
 export interface RuleLibrary {
@@ -68,7 +85,21 @@ export interface RuleListParams {
   page: number;
   pageSize: number;
   libraryId?: number;
+  folderId?: number;
+  /** 只取未分类规则（folder_id 为空）。优先级高于 folderId。 */
+  uncategorized?: boolean;
   keyword?: string;
+}
+
+/** 规则二级文件夹（规则库下的分组，可整组启用/停用）。 */
+export interface RuleFolder {
+  id: number;
+  libraryId: number;
+  name: string;
+  enabled: boolean;
+  ruleCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PaginatedResult<T> {
@@ -103,8 +134,21 @@ export function importChecklist(formData: FormData) {
   });
 }
 
+export function getUploadConflicts(params: {
+  fileName: string;
+  libraryId?: number;
+  folderId?: number;
+  checklist?: boolean;
+}) {
+  return request.get<ApiResponse<RuleUploadConflict[]>>('/rules/upload-conflicts', { params });
+}
+
 export function updateRuleMetadata(id: number, payload: RuleMetadataUpdate) {
   return request.put<ApiResponse<Rule>>(`/rules/${id}/metadata`, payload);
+}
+
+export function updateRuleContent(id: number, payload: RuleContentUpdate) {
+  return request.put<ApiResponse<Rule>>(`/rules/${id}/content`, payload);
 }
 
 export function deleteRule(id: number) {
@@ -133,4 +177,21 @@ export function updateRuleLibrary(id: number, params: { name: string; descriptio
 
 export function deleteRuleLibrary(id: number) {
   return request.delete<ApiResponse<null>>(`/rule-libraries/${id}`);
+}
+
+// Rule Folder (二级文件夹) APIs
+export function getFolderList(libraryId: number) {
+  return request.get<ApiResponse<RuleFolder[]>>(`/rule-libraries/${libraryId}/folders`);
+}
+
+export function createFolder(libraryId: number, name: string) {
+  return request.post<ApiResponse<RuleFolder>>(`/rule-libraries/${libraryId}/folders`, { name });
+}
+
+export function updateFolder(folderId: number, payload: { name?: string; enabled?: boolean }) {
+  return request.put<ApiResponse<RuleFolder>>(`/rule-libraries/folders/${folderId}`, payload);
+}
+
+export function deleteFolder(folderId: number) {
+  return request.delete<ApiResponse<null>>(`/rule-libraries/folders/${folderId}`);
 }

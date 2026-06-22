@@ -1,0 +1,508 @@
+{
+  "_metadata": {
+    "project_name": "试验大纲智能审查系统",
+    "version": "2.0.0",
+    "scope": "通用",
+    "description": "通用规则（适用于全文档的 G-* 规则；G-1 试验承试单位为专章规则）。由 prompts_2026.5.14.json 改造拆分而来，内容与 rules_structured.json 一致。"
+  },
+  "version": "1.0",
+  "source_type": "converted_from_legacy_prompts",
+  "source_file": "prompts_2026.5.14.json",
+  "rules": [
+    {
+      "rule_code": "G-1-test_unit",
+      "name": "试验承试单位与试验地址完整性",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "专用于文档『试验承试单位』章节：核查该章节中每项试验是否均明确对应的承试单位与试验地址。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "试验承试单位",
+          "承试单位",
+          "试验单位",
+          "试验地址",
+          "试验场所"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "G-1-C001",
+          "check_type": "presence",
+          "question": "『试验承试单位』章节中，每一项试验是否均明确对应的【承试单位】？",
+          "pass_criteria": "该章节内每项试验均给出承试单位即 Pass；存在未填写的试验项目则 Fail（单元格为 /、-、—、无、N/A 等明确不适用的除外）。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-1-C002",
+          "check_type": "presence",
+          "question": "『试验承试单位』章节中，每一项试验是否均明确对应的【试验地址】？",
+          "pass_criteria": "该章节内每项试验均给出试验地址即 Pass；存在未填写的试验项目则 Fail（明确不适用的除外）。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "G-2-Project_omissions",
+      "name": "试验项目完整性（DO-160G 必检科目）",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验大纲是否覆盖 DO-160G 规定的必检试验项目，识别项目缺漏。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-2-C001",
+          "check_type": "presence",
+          "question": "是否包含『地面低温耐受和低温短时工作』试验项目（DO-160G 4.5.1条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-2-C002",
+          "check_type": "presence",
+          "question": "是否包含『低温工作』试验项目（DO-160G 4.5.2条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "G-2-C003",
+          "check_type": "presence",
+          "question": "是否包含『地面高温耐受和高温短时工作』试验项目（DO-160G 4.5.3条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 3
+        },
+        {
+          "check_code": "G-2-C004",
+          "check_type": "presence",
+          "question": "是否包含『高温工作』试验项目（DO-160G 4.5.4条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 4
+        },
+        {
+          "check_code": "G-2-C005",
+          "check_type": "presence",
+          "question": "是否包含『高度』试验项目（DO-160G 4.6.1条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 5
+        },
+        {
+          "check_code": "G-2-C006",
+          "check_type": "presence",
+          "question": "是否包含『减压』试验项目（DO-160G 4.6.2条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 6
+        },
+        {
+          "check_code": "G-2-C007",
+          "check_type": "presence",
+          "question": "是否包含『过压』试验项目（DO-160G 4.6.3条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 7
+        },
+        {
+          "check_code": "G-2-C008",
+          "check_type": "presence",
+          "question": "是否包含『温度变化』试验项目（DO-160G 5.3.1条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 8
+        },
+        {
+          "check_code": "G-2-C009",
+          "check_type": "presence",
+          "question": "是否包含『湿热』试验项目（DO-160G 6.3.1条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 9
+        },
+        {
+          "check_code": "G-2-C010",
+          "check_type": "presence",
+          "question": "是否包含『工作冲击』试验项目（DO-160G 7.2条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 10
+        },
+        {
+          "check_code": "G-2-C011",
+          "check_type": "presence",
+          "question": "是否包含『坠撞安全冲击』试验项目（DO-160G 7.3.1条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 11
+        },
+        {
+          "check_code": "G-2-C012",
+          "check_type": "presence",
+          "question": "是否包含『坠撞安全持续载荷』试验项目（DO-160G 7.3.3条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 12
+        },
+        {
+          "check_code": "G-2-C013",
+          "check_type": "presence",
+          "question": "是否包含『标准振动』试验项目（DO-160G 8.5条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 13
+        },
+        {
+          "check_code": "G-2-C014",
+          "check_type": "presence",
+          "question": "是否包含『强化振动』试验项目（DO-160G 8.7条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 14
+        },
+        {
+          "check_code": "G-2-C015",
+          "check_type": "presence",
+          "question": "是否包含『短时高量值振动』试验项目（DO-160G 8.6条）？",
+          "pass_criteria": "大纲明确列出该项即 Pass；缺失则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 15
+        }
+      ]
+    },
+    {
+      "rule_code": "G-3-functional_check",
+      "name": "试验前功能性能检查",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否存在试验前对试验件的功能性能检查/QPAT检查或等效描述（一般位于试验程序）。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-3-C001",
+          "check_type": "presence",
+          "question": "是否包含试验前对试验件进行功能性能检查、QPAT检查或等效描述？",
+          "pass_criteria": "有相关描述即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "G-4-Pretest_preparation",
+      "name": "试验前准备检查完整性",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验大纲是否包含完整、明确的试验前准备检查。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-4-C001",
+          "check_type": "presence",
+          "question": "是否包含完整、明确的试验前准备检查（明确检查项目、检查标准、检查方法）？",
+          "pass_criteria": "试验前准备检查完整且标准明确即 Pass；未提及或仅笼统描述则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "G-5-mode",
+      "name": "受试设备功能/工作模式检查",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验大纲是否明确受试设备的功能/工作模式。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-5-C001",
+          "check_type": "presence",
+          "question": "是否明确受试设备的功能/工作模式？",
+          "pass_criteria": "明确给出工作模式即 Pass；未提及则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "G-16-pic_sheet",
+      "name": "图号、表号引用一致性",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查全文图号、表号的编号、引用、顺序一致性与完整性。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-16-C001",
+          "check_type": "consistency",
+          "question": "图号、表号是否全文唯一不重复、编号格式统一？",
+          "pass_criteria": "编号唯一且格式统一即 Pass；存在重复编号或格式不统一则 Fail。",
+          "category": "格式",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-16-C002",
+          "check_type": "consistency",
+          "question": "正文引用的图号/表号是否真实存在，且引用编号与图表实际编号一致、表述统一（无图1/图一混用）？",
+          "pass_criteria": "引用均真实且编号表述一致即 Pass；引用不存在的编号或表述混乱则 Fail。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "G-16-C003",
+          "check_type": "consistency",
+          "question": "图表编号是否按出现顺序递增、不跳号、不倒序？",
+          "pass_criteria": "顺序合理即 Pass；跳号或倒序则 Fail。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 3
+        },
+        {
+          "check_code": "G-16-C004",
+          "check_type": "presence",
+          "question": "是否所有图表均被正文引用（无未被引用的图表）？",
+          "pass_criteria": "图表均被引用即 Pass；存在未被引用的图表则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 4
+        }
+      ]
+    },
+    {
+      "rule_code": "G-9-EUT_supplier",
+      "name": "EUT供应商件号完整性与一致性",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查受试设备 EUT 供应商件号是否完整提供、全文一致。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-9-C001",
+          "check_type": "presence",
+          "question": "受试设备的 EUT 供应商件号是否完整提供、标注清晰可识别？",
+          "pass_criteria": "件号完整且清晰即 Pass；缺失或模糊无法识别则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-9-C002",
+          "check_type": "consistency",
+          "question": "同一 EUT/同一部件的供应商件号是否全文（含附件）表述完全一致？",
+          "pass_criteria": "全文一致即 Pass；存在不同表述则 Fail。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "G-10-Test equipment and certificates",
+      "name": "试验测试设备参数及校准证书",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验测试设备的核心参数完整性、参数一致性及校准证书有效性。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-10-C001",
+          "check_type": "presence",
+          "question": "试验测试设备的核心技术参数是否完整、无关键参数缺失？",
+          "pass_criteria": "核心参数齐全即 Pass；关键参数缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-10-C002",
+          "check_type": "consistency",
+          "question": "同一设备的参数是否全文表述统一、无冲突？",
+          "pass_criteria": "全文一致即 Pass；参数表述冲突则 Fail。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "G-10-C003",
+          "check_type": "presence",
+          "question": "校准证书是否真实、在有效期内，且证书设备信息（名称/型号/序列号/件号）与文档设备一致、关键信息无缺失？",
+          "pass_criteria": "证书有效且信息一致即 Pass；过期、信息缺失或与文档不一致则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 3
+        }
+      ]
+    },
+    {
+      "rule_code": "G-11-auxiliary_facilities",
+      "name": "辅助设施信息完整性与一致性",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验所需辅助设施的核心信息完整性与全文一致性。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-11-C001",
+          "check_type": "presence",
+          "question": "试验所需的每件辅助设备，其名称、型号规格、核心参数是否完整标注？",
+          "pass_criteria": "核心信息齐全即 Pass；缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-11-C002",
+          "check_type": "consistency",
+          "question": "同一辅助设施的名称/参数/型号是否全文表述统一、无冲突？",
+          "pass_criteria": "全文一致即 Pass；表述冲突则 Fail。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "G-12-Analogy/similarity_analysis",
+      "name": "类比/相似性分析报告",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查采用类比/相似性分析的试验科目是否提供完整、一致的分析报告（不涉及则前置条件不成立）。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-12-C001",
+          "check_type": "presence",
+          "question": "涉及类比/相似性分析的试验科目，是否均提供对应分析报告且核心内容完整（类比/相似对象、分析过程、数据支撑、分析结论）？",
+          "pass_criteria": "不涉及类比/相似性分析则前置条件不成立判 Review；涉及且报告完整判 Pass；涉及但报告缺失或核心内容缺失判 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-12-C002",
+          "check_type": "consistency",
+          "question": "分析报告的核心信息（科目名称、类比/相似对象、分析结论）是否全文（含附件、支撑材料）一致？",
+          "pass_criteria": "全文一致判 Pass；不一致判 Fail；不涉及判 Review。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "G-14-Cyclic/Different Surface Testing",
+      "name": "循环/不同面试验",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查涉及循环/不同面试验时是否在试验程序中明确循环时机并全文一致（不涉及则前置条件不成立）。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-14-C001",
+          "check_type": "presence",
+          "question": "涉及循环/不同面试验时，是否在试验程序中明确试验循环时机等相关内容？",
+          "pass_criteria": "不涉及则前置条件不成立判 Review；涉及且程序中已明确判 Pass；涉及但未明确判 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-14-C002",
+          "check_type": "consistency",
+          "question": "循环/不同面试验的相关描述是否全文一致？",
+          "pass_criteria": "全文一致判 Pass；不一致判 Fail；不涉及判 Review。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "G-15-Test_conditions",
+      "name": "试验条件完整性与一致性",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查各试验科目是否在对应小节明确试验条件，且全文表述一致。",
+      "applies_to": {
+        "sections": [],
+        "keywords": []
+      },
+      "checks": [
+        {
+          "check_code": "G-15-C001",
+          "check_type": "presence",
+          "question": "每个试验科目是否在对应小节明确其试验条件、无缺失？",
+          "pass_criteria": "各科目试验条件均明确判 Pass；存在未明确的科目判 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-15-C002",
+          "check_type": "consistency",
+          "question": "试验条件信息是否全文表述统一、无冲突？",
+          "pass_criteria": "全文一致判 Pass；表述冲突判 Fail。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,362 @@
+{
+  "_metadata": {
+    "project_name": "试验大纲智能审查系统",
+    "version": "2.0.0",
+    "scope": "通用",
+    "description": "由《试验大纲关注要素.xlsx》转化的审查规则，结构与 rules_structured.json 一致。两组关注点：A 组=试验程序前面章节通用关注点（22 项），B 组=试验程序章节通用关注点（9 项）。",
+    "conversion_notes": [
+      "每个关注点转为一条规则；『确定有无』类转为 presence 原子检查；带『对比/一致』要求的追加一条 consistency 检查；试验顺序按 DO-160G 转为 standard 符合性检查。",
+      "keywords 一律留空（[]）：这些为通用关注点，出现位置描述模糊（全文/一般位于…），无可靠单一路由词，故不臆填；原『出现位置』信息折入各 check 的 question 括注中。",
+      "对文档类型条件项（如轴向图仅非电磁类、电搭接/连接器仅电磁类）：不适用时判 Review，不判 Fail。"
+    ]
+  },
+  "version": "1.0",
+  "source_type": "converted_from_focus_elements_xlsx",
+  "source_file": "试验大纲关注要素.xlsx",
+  "rules": [
+    {
+      "rule_code": "FE-A-01",
+      "name": "文件名称",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查封面是否给出文件名称。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-01-C001", "check_type": "presence", "question": "封面是否给出文件名称？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-02",
+      "name": "编号/版本",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查封面是否给出文件编号/版本。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-02-C001", "check_type": "presence", "question": "封面是否给出文件编号/版本？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-03",
+      "name": "试验目的",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出试验目的（一般位于第1章）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-03-C001", "check_type": "presence", "question": "是否给出试验目的（一般位于第1章）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-04",
+      "name": "范围",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出范围（一般位于第2章），并与后续试验项进行对比。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-04-C001", "check_type": "presence", "question": "是否给出范围说明（一般位于第2章）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 },
+        { "check_code": "FE-A-04-C002", "check_type": "consistency", "question": "范围说明是否与后续试验项目一致（无矛盾、无遗漏）？", "pass_criteria": "与后续试验项一致即 Pass；存在矛盾或遗漏则 Fail。", "category": "逻辑一致性", "evidence_required": true, "display_order": 2 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-05",
+      "name": "依据文件",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出依据文件（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-05-C001", "check_type": "presence", "question": "是否给出依据文件（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-06",
+      "name": "受试设备/产品功能描述",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出受试设备/产品功能描述（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-06-C001", "check_type": "presence", "question": "是否给出受试设备/产品的功能描述（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-07",
+      "name": "受试设备构型信息",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出受试设备/产品构型信息（软硬件件号、软件版本等，一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-07-C001", "check_type": "presence", "question": "是否给出受试设备/产品构型信息（软硬件件号、软件版本等，一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-08",
+      "name": "受试设备示意图/外形图",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出受试设备示意图/外形图（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-08-C001", "check_type": "presence", "question": "是否给出受试设备示意图/外形图（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-09",
+      "name": "受试设备轴向示意图",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出受试设备轴向示意图（一般位于非电磁类文件中）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-09-C001", "check_type": "presence", "question": "是否给出受试设备轴向示意图（一般位于非电磁类文件中）？", "pass_criteria": "非电磁类试验大纲给出即 Pass、缺失则 Fail；若本文件为电磁类（不涉及轴向）则不适用判 Review。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-10",
+      "name": "受试设备交联关系图/文字描述",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出受试设备交联关系图或文字描述（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-10-C001", "check_type": "presence", "question": "是否给出受试设备交联关系图或文字描述（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-11",
+      "name": "受试设备连接器及电缆构型信息",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出受试设备连接器及电缆构型信息（一般位于电磁类文件中）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-11-C001", "check_type": "presence", "question": "是否给出受试设备连接器及电缆构型信息（一般位于电磁类文件中）？", "pass_criteria": "电磁类试验大纲给出即 Pass、缺失则 Fail；若本文件为非电磁类（不涉及）则不适用判 Review。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-12",
+      "name": "受试设备工作状态/工作模式描述",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出受试设备工作状态/工作模式描述（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-12-C001", "check_type": "presence", "question": "是否给出受试设备工作状态/工作模式描述（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-13",
+      "name": "陪试设备/辅助设备介绍",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出陪试设备/辅助设备介绍（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-13-C001", "check_type": "presence", "question": "是否给出陪试设备/辅助设备介绍（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无陪试/辅助设备则不适用判 Review；声明有但未介绍则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-14",
+      "name": "试验项目概述/描述",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出试验项目概述/描述（含试验类别），并与前后试验项进行对比。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-14-C001", "check_type": "presence", "question": "是否给出试验项目概述/描述并说明试验类别（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 },
+        { "check_code": "FE-A-14-C002", "check_type": "consistency", "question": "试验项目概述是否与前后试验项一致（项目、类别无矛盾、无遗漏）？", "pass_criteria": "前后一致即 Pass；存在矛盾或遗漏则 Fail。", "category": "逻辑一致性", "evidence_required": true, "display_order": 2 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-15",
+      "name": "试验顺序描述（DO-160G）",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否描述试验顺序且符合 DO-160G 的顺序要求。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-15-C001", "check_type": "presence", "question": "是否给出试验顺序描述（一般位于试验程序前面章节）？", "pass_criteria": "明确给出试验顺序即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 },
+        { "check_code": "FE-A-15-C002", "check_type": "consistency", "question": "试验顺序是否符合 DO-160G 要求：盐雾在霉菌后；砂尘在霉菌、盐雾和湿热后；爆炸大气不在任何其他试验之前；可燃性不在任何其他试验之前（其余顺序不作要求）？", "pass_criteria": "顺序满足上述约束即 Pass；违反任一约束则 Fail。", "category": "标准符合性", "evidence_required": true, "display_order": 2 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-16",
+      "name": "通用条件描述",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出通用条件描述（环境条件、允差、夹具要求等，一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-16-C001", "check_type": "presence", "question": "是否给出通用条件描述（环境条件、允差、夹具要求等，一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-17",
+      "name": "试验地点/试验承试单位描述",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出试验地点/试验承试单位描述（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-17-C001", "check_type": "presence", "question": "是否给出试验地点/试验承试单位描述（一般位于试验程序前面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-18",
+      "name": "试验人员资质要求",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出对试验操作人员的资质要求（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-18-C001", "check_type": "presence", "question": "是否给出对试验操作人员的资质要求（一般位于试验程序前面章节）？", "pass_criteria": "有对试验操作人员的资质要求即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-19",
+      "name": "试验前ATP检查",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出试验前已完成 ATP 的描述（一般位于试验程序前面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-19-C001", "check_type": "presence", "question": "是否给出试验前已完成 ATP 检查的描述（一般位于试验程序前面章节）？", "pass_criteria": "有试验前已完成 ATP 的此类描述即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-20",
+      "name": "试验异常情况处理/方案",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出试验异常情况处理/方案（一般位于试验程序后面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-20-C001", "check_type": "presence", "question": "是否给出试验异常情况的处理/方案（一般位于试验程序后面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-21",
+      "name": "试验中止和恢复的处理/方案",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出试验中止和恢复的处理/方案（一般位于试验程序后面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-21-C001", "check_type": "presence", "question": "是否给出试验中止和恢复的处理/方案（一般位于试验程序后面章节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-A-22",
+      "name": "规定试验报告内容",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否规定了试验报告内容（一般位于试验程序后面章节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-A-22-C001", "check_type": "presence", "question": "是否规定了试验报告应包含的内容（一般位于试验程序后面章节）？", "pass_criteria": "明确规定即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-01",
+      "name": "试验目的（试验程序章节）",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序章节是否给出试验目的（一般位于试验程序第1小节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-01-C001", "check_type": "presence", "question": "试验程序章节是否给出试验目的（一般位于试验程序第1小节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-02",
+      "name": "试验条件（试验程序章节）",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序章节是否给出试验条件（一般位于试验程序第2小节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-02-C001", "check_type": "presence", "question": "试验程序章节是否给出试验条件（一般位于试验程序第2小节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-03",
+      "name": "受试设备/陪试设备要求",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序章节是否给出受试设备/陪试设备要求（可引用前序章节或单独描述）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-03-C001", "check_type": "presence", "question": "是否给出受试设备/陪试设备要求（可引用前序章节或单独描述）？", "pass_criteria": "单独描述或明确引用前序章节均判 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-04",
+      "name": "测试设备、用途、精度及校准周期",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序章节是否给出测试设备的名称、用途、精度及校准周期/有效期（一般位于试验程序前序小节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-04-C001", "check_type": "presence", "question": "是否给出测试设备及其用途、精度、校准周期/有效期（一般位于试验程序前序小节）？", "pass_criteria": "上述要素均给出即 Pass；关键要素缺失则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-05",
+      "name": "试验连接图/布置图",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序章节是否给出试验连接图/布置图（一般位于试验程序前序小节）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-05-C001", "check_type": "presence", "question": "是否给出试验连接图/布置图（一般位于试验程序前序小节）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-06",
+      "name": "电搭接要求",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查是否给出电搭接要求（一般位于电磁类试验项目中）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-06-C001", "check_type": "presence", "question": "是否给出电搭接要求（一般位于电磁类试验项目中）？", "pass_criteria": "电磁类试验项目给出即 Pass、缺失则 Fail；若本试验项目非电磁类（不涉及电搭接）则不适用判 Review。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-07",
+      "name": "试验前后功能性能检查",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序小节是否给出试验前后功能性能/QPAT检查描述（用于检查试验件）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-07-C001", "check_type": "presence", "question": "是否给出试验前后功能性能/QPAT 检查描述（用于检查试验件，一般位于试验程序小节）？", "pass_criteria": "有此类描述即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-08",
+      "name": "试验前准备",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序小节是否给出试验前准备描述（试验装置布置、安装等）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-08-C001", "check_type": "presence", "question": "是否给出关于试验装置布置、安装等试验前准备的描述（一般位于试验程序小节）？", "pass_criteria": "有此类描述即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    },
+    {
+      "rule_code": "FE-B-09",
+      "name": "试验判据",
+      "rule_type": "global",
+      "document_type": "试验大纲",
+      "description": "核查试验程序章节是否给出试验判据（一般位于试验程序后）。",
+      "applies_to": { "sections": [], "keywords": [] },
+      "checks": [
+        { "check_code": "FE-B-09-C001", "check_type": "presence", "question": "是否给出试验判据（一般位于试验程序后）？", "pass_criteria": "明确给出即 Pass；无则 Fail。", "category": "完整性", "evidence_required": true, "display_order": 1 }
+      ]
+    }
+  ]
+}

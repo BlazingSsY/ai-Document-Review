@@ -18,6 +18,8 @@ import {
   Alert,
   message,
   Popconfirm,
+  Switch,
+  Tooltip,
 } from 'antd';
 import {
   FileTextOutlined,
@@ -28,7 +30,6 @@ import {
   StopOutlined,
   RedoOutlined,
   DeleteOutlined,
-  DeploymentUnitOutlined,
   BookOutlined,
   AimOutlined,
 } from '@ant-design/icons';
@@ -57,7 +58,6 @@ const EMPTY_STATS: UnifiedStats = {
   todayCount: 0,
   byMode: {
     CHUNK: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
-    RAG: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
     SAR: { total: 0, completed: 0, processing: 0, failed: 0, todayCount: 0 },
   },
 };
@@ -98,6 +98,7 @@ function DashboardPage() {
   const [models, setModels] = useState<AIModel[]>([]);
   const [scenarioId, setScenarioId] = useState<number | undefined>();
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
+  const [qualityCheckEnabled, setQualityCheckEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [embeddingModelCount, setEmbeddingModelCount] = useState<number | null>(null);
 
@@ -226,7 +227,7 @@ function DashboardPage() {
           scenarioApi.getScenarioList({ page: 1, pageSize: 1000 }),
           getEnabledModels('chat'),
         ];
-        const needsEmbedding = draftMode === 'RAG' || draftMode === 'SAR';
+        const needsEmbedding = draftMode === 'SAR';
         if (needsEmbedding) {
           fetches.push(getEnabledModels('embedding'));
         }
@@ -251,7 +252,7 @@ function DashboardPage() {
     if (!selectedFile) { message.warning('请先上传文件'); return; }
     if (!scenarioId) { message.warning('请选择审查场景'); return; }
     if (!selectedModel) { message.warning('请选择 AI 模型'); return; }
-    if ((draftMode === 'RAG' || draftMode === 'SAR') && embeddingModelCount === 0) {
+    if ((draftMode === 'SAR') && embeddingModelCount === 0) {
       message.error(`${PIPELINE_LABEL[draftMode]}需要至少启用一个 embedding 模型，请先到「模型管理」配置`);
       return;
     }
@@ -262,6 +263,7 @@ function DashboardPage() {
       formData.append('file', selectedFile);
       formData.append('scenarioId', String(scenarioId));
       formData.append('selectedModel', selectedModel);
+      formData.append('qualityCheckEnabled', String(qualityCheckEnabled));
       const reviewApi = getReviewApi(draftMode);
       await reviewApi.submitReview(formData);
       message.success(`审查任务已提交（${PIPELINE_LABEL[draftMode]}）`);
@@ -504,7 +506,6 @@ function DashboardPage() {
               onChange={(v) => { setModeFilter(v); setPage(1); }}
               options={[
                 { label: '全部审查方式', value: 'ALL' },
-                { label: '智能召回审查', value: 'RAG' },
                 { label: '全文逐章审查', value: 'CHUNK' },
                 { label: '结构化精准审查', value: 'SAR' },
               ]}
@@ -543,18 +544,7 @@ function DashboardPage() {
       </Card>
 
       <Row gutter={16} style={{ marginTop: 16 }}>
-        <Col xs={8}>
-          <Card
-            hoverable
-            onClick={() => navigate('/rag/rules')}
-            style={{ textAlign: 'center', cursor: 'pointer' }}
-          >
-            <DeploymentUnitOutlined style={{ fontSize: 32, color: '#722ed1', marginBottom: 8 }} />
-            <div style={{ fontWeight: 500 }}>智能召回审查 · 规则与场景</div>
-            <div style={{ color: '#8c8c8c', fontSize: 13 }}>原子检查项 + 向量召回管线</div>
-          </Card>
-        </Col>
-        <Col xs={8}>
+        <Col xs={12}>
           <Card
             hoverable
             onClick={() => navigate('/chunk/rules')}
@@ -565,7 +555,7 @@ function DashboardPage() {
             <div style={{ color: '#8c8c8c', fontSize: 13 }}>按章节切片 + 批处理审查管线</div>
           </Card>
         </Col>
-        <Col xs={8}>
+        <Col xs={12}>
           <Card
             hoverable
             onClick={() => navigate('/sar/rules')}
@@ -602,10 +592,6 @@ function DashboardPage() {
           }}
           items={[
             {
-              key: 'RAG',
-              label: <span><DeploymentUnitOutlined /> 智能召回审查</span>,
-            },
-            {
               key: 'CHUNK',
               label: <span><BookOutlined /> 全文逐章审查</span>,
             },
@@ -620,11 +606,11 @@ function DashboardPage() {
             type="info"
             showIcon
             message="请先在上方选择审查方式"
-            description="智能召回审查（向量检索）、全文逐章审查（按章节切片）、结构化精准审查（结构路由 + 区域取证 + 一致性）三条管线使用各自独立的规则库与场景，互不可见。"
+            description="全文逐章审查（按章节切片）、结构化精准审查（结构路由 + 区域取证 + 一致性）两条管线使用各自独立的规则库与场景，互不可见。"
           />
         )}
 
-        {draftMode && (draftMode === 'RAG' || draftMode === 'SAR') && embeddingModelCount === 0 && (
+        {draftMode && (draftMode === 'SAR') && embeddingModelCount === 0 && (
           <Alert
             type="warning"
             showIcon
@@ -688,6 +674,25 @@ function DashboardPage() {
                     value: m.name,
                   }))}
                 />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <Space size={6}>
+                    全文质量检查
+                    <Tooltip title="对全文每个章节执行基础文字质量审查：错别字/漏字/多字、语序不当/语病、章节内术语一致性。关闭后，全文逐章审查将跳过仅有基础质量、未命中业务规则的章节，速度更快、更省 token；但不再做全文文字质量检查。（当前仅全文逐章审查执行该检查）">
+                      <span style={{ color: '#1677ff', cursor: 'help', fontSize: 12 }}>说明</span>
+                    </Tooltip>
+                  </Space>
+                }
+              >
+                <Space>
+                  <Switch checked={qualityCheckEnabled} onChange={setQualityCheckEnabled} />
+                  <Typography.Text type="secondary">
+                    {qualityCheckEnabled
+                      ? '已启用：逐章执行错别字/语病/术语一致性等文字质量审查'
+                      : '已关闭：跳过纯文字质量章节，仅跑命中的业务规则（更快）'}
+                  </Typography.Text>
+                </Space>
               </Form.Item>
             </Form>
             <div style={{ textAlign: 'center' }}>

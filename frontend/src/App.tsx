@@ -27,9 +27,6 @@ function App() {
         {/* 全文逐章审查（chunk pipeline） */}
         <Route path="chunk/scenarios" element={<ScenarioListPage reviewMode="CHUNK" />} />
         <Route path="chunk/rules" element={<RuleListPage reviewMode="CHUNK" />} />
-        {/* 智能召回审查（RAG pipeline） */}
-        <Route path="rag/scenarios" element={<ScenarioListPage reviewMode="RAG" />} />
-        <Route path="rag/rules" element={<RuleListPage reviewMode="RAG" />} />
         {/* 结构化精准审查（SAR pipeline） */}
         <Route path="sar/scenarios" element={<ScenarioListPage reviewMode="SAR" />} />
         <Route path="sar/rules" element={<RuleListPage reviewMode="SAR" />} />

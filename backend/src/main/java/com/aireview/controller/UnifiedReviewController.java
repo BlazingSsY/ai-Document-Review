@@ -3,7 +3,6 @@ package com.aireview.controller;
 import com.aireview.dto.ApiResponse;
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.ReviewTaskDTO;
-import com.aireview.service.RagReviewService;
 import com.aireview.service.ReviewService;
 import com.aireview.service.SarReviewService;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +41,6 @@ public class UnifiedReviewController {
     private static final int PER_PIPELINE_FETCH = 200;
 
     private final ReviewService reviewService;
-    private final RagReviewService ragReviewService;
     private final SarReviewService sarReviewService;
 
     /**
@@ -63,9 +61,6 @@ public class UnifiedReviewController {
             List<ReviewTaskDTO> merged = new ArrayList<>();
             if ("ALL".equals(normalizedMode) || "CHUNK".equals(normalizedMode)) {
                 merged.addAll(reviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
-            }
-            if ("ALL".equals(normalizedMode) || "RAG".equals(normalizedMode)) {
-                merged.addAll(ragReviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
             }
             if ("ALL".equals(normalizedMode) || "SAR".equals(normalizedMode)) {
                 merged.addAll(sarReviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
@@ -111,18 +106,7 @@ public class UnifiedReviewController {
                     : reviewService.getTask(taskId, userId);
             return ApiResponse.success(chunkTask);
         } catch (IllegalArgumentException chunkErr) {
-            // 不在 chunk 表 — 尝试 RAG。
-        }
-        try {
-            ReviewTaskDTO ragTask = light
-                    ? ragReviewService.getTaskLight(taskId, userId)
-                    : ragReviewService.getTask(taskId, userId);
-            return ApiResponse.success(ragTask);
-        } catch (IllegalArgumentException ragErr) {
-            // 不在 RAG 表 — 尝试 SAR。
-        } catch (Exception e) {
-            log.error("Failed to fetch RAG task fallback", e);
-            return ApiResponse.error("Failed to fetch task: " + e.getMessage());
+            // 不在 chunk 表 — 尝试 SAR。
         }
         try {
             ReviewTaskDTO sarTask = light
@@ -149,15 +133,7 @@ public class UnifiedReviewController {
         try {
             return ApiResponse.success(reviewService.getSources(taskId, userId));
         } catch (IllegalArgumentException chunkErr) {
-            // 不在 chunk 表 — 尝试 RAG。
-        }
-        try {
-            return ApiResponse.success(ragReviewService.getSources(taskId, userId));
-        } catch (IllegalArgumentException ragErr) {
-            // 不在 RAG 表 — 尝试 SAR。
-        } catch (Exception e) {
-            log.error("Failed to fetch task sources fallback", e);
-            return ApiResponse.error("Failed to fetch sources: " + e.getMessage());
+            // 不在 chunk 表 — 尝试 SAR。
         }
         try {
             return ApiResponse.success(sarReviewService.getSources(taskId, userId));
@@ -174,15 +150,13 @@ public class UnifiedReviewController {
         try {
             Long userId = (Long) authentication.getPrincipal();
             Map<String, Object> chunk = reviewService.getStats(userId);
-            Map<String, Object> rag = ragReviewService.getStats(userId);
             Map<String, Object> sar = sarReviewService.getStats(userId);
             Map<String, Object> total = new HashMap<>();
             for (String key : List.of("total", "completed", "processing", "failed", "todayCount")) {
-                total.put(key, asLong(chunk.get(key)) + asLong(rag.get(key)) + asLong(sar.get(key)));
+                total.put(key, asLong(chunk.get(key)) + asLong(sar.get(key)));
             }
             Map<String, Object> byMode = new HashMap<>();
             byMode.put("CHUNK", chunk);
-            byMode.put("RAG", rag);
             byMode.put("SAR", sar);
             total.put("byMode", byMode);
             return ApiResponse.success(total);

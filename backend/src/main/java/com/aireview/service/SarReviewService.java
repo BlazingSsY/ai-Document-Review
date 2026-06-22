@@ -167,6 +167,12 @@ public class SarReviewService {
      */
     public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
                                       String selectedModel, Long userId) throws IOException {
+        return submitReview(file, scenarioId, selectedModel, userId, true);
+    }
+
+    public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
+                                      String selectedModel, Long userId,
+                                      boolean qualityCheckEnabled) throws IOException {
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
             throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
@@ -184,6 +190,7 @@ public class SarReviewService {
         task.setFilePath(savedPath.toString());
         task.setScenarioId(scenarioId);
         task.setSelectedModel(selectedModel);
+        task.setQualityCheckEnabled(qualityCheckEnabled);
         task.setStatus(SarReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());

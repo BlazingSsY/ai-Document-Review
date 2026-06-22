@@ -116,7 +116,14 @@ public class RuleDispatcher {
     public static DispatchResult dispatchForChunk(String chapterTitle,
                                                   String chapterBody,
                                                   List<PreparedRule> prepared) {
-        return dispatchForChunk(chapterTitle, chapterBody, prepared, 0);
+        return dispatchForChunk(chapterTitle, chapterBody, prepared, 0, false);
+    }
+
+    public static DispatchResult dispatchForChunk(String chapterTitle,
+                                                  String chapterBody,
+                                                  List<PreparedRule> prepared,
+                                                  int basicOnlyMaxChapter) {
+        return dispatchForChunk(chapterTitle, chapterBody, prepared, basicOnlyMaxChapter, false);
     }
 
     /**
@@ -124,10 +131,15 @@ public class RuleDispatcher {
      * between 1 and {@code basicOnlyMaxChapter} do not receive configured business
      * rules. The caller supplies the built-in text-quality rule for those chapters.
      */
+    /**
+     * @param isTestItemChapter 当前章节是否被识别为"试验项目章节"（由试验概述 7.1 动态匹配）。
+     *                          rule_type=test_item 的规则仅在该值为 true 时作用于本章。
+     */
     public static DispatchResult dispatchForChunk(String chapterTitle,
                                                   String chapterBody,
                                                   List<PreparedRule> prepared,
-                                                  int basicOnlyMaxChapter) {
+                                                  int basicOnlyMaxChapter,
+                                                  boolean isTestItemChapter) {
         List<PreparedRule> applied = new ArrayList<>();
         List<String> appliedNames = new ArrayList<>();
         List<Map<String, Object>> traces = new ArrayList<>();
@@ -156,7 +168,13 @@ public class RuleDispatcher {
                 continue;
             }
 
-            if (meta != null && meta.isSectionSpecific()) {
+            if (meta != null && meta.isTestItem()) {
+                // 试验项目章节规则：只作用于被识别为"试验项目章节"的章；非试验项目章一律跳过。
+                if (!isTestItemChapter) {
+                    continue;
+                }
+                reason = "test_item_chapter";
+            } else if (meta != null && meta.isSectionSpecific()) {
                 // Specific rules require an H1 match to be included.
                 matchedKeywords.addAll(findMatches(titleHay, meta.getKeywords()));
                 matchedSections.addAll(findSectionMatches(chapterTitle, meta.getSections()));

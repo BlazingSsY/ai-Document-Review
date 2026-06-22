@@ -2,8 +2,10 @@ package com.aireview.controller;
 
 import com.aireview.dto.ApiResponse;
 import com.aireview.dto.PageResponse;
+import com.aireview.dto.RuleContentUpdateRequest;
 import com.aireview.dto.RuleDTO;
 import com.aireview.dto.RuleMetadataUpdateRequest;
+import com.aireview.dto.RuleUploadConflictDTO;
 import com.aireview.service.RuleService;
 import com.aireview.util.SecurityUtils;
 
@@ -33,10 +35,12 @@ public class RuleController {
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<List<RuleDTO>> uploadRule(@RequestParam("file") MultipartFile file,
                                                  @RequestParam(required = false) Long libraryId,
+                                                 @RequestParam(required = false) Long folderId,
+                                                 @RequestParam(defaultValue = "false") boolean replaceExisting,
                                                  Authentication authentication) {
         try {
             Long userId = SecurityUtils.getUserId(authentication);
-            List<RuleDTO> rules = ruleService.uploadRuleAll(file, userId, libraryId);
+            List<RuleDTO> rules = ruleService.uploadRuleAll(file, userId, libraryId, folderId, replaceExisting);
             String msg = rules.size() == 1
                     ? "规则上传成功"
                     : "规则上传成功，共解析 " + rules.size() + " 条规则";
@@ -46,6 +50,19 @@ public class RuleController {
         } catch (Exception e) {
             log.error("Rule upload failed", e);
             return ApiResponse.error("规则上传失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/upload-conflicts")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<List<RuleUploadConflictDTO>> uploadConflicts(@RequestParam("fileName") String fileName,
+                                                                    @RequestParam(required = false) Long libraryId,
+                                                                    @RequestParam(required = false) Long folderId) {
+        try {
+            return ApiResponse.success(ruleService.findUploadConflicts(fileName, libraryId, folderId));
+        } catch (Exception e) {
+            log.error("Failed to check rule upload conflicts", e);
+            return ApiResponse.error("检查规则冲突失败: " + e.getMessage());
         }
     }
 
@@ -64,16 +81,33 @@ public class RuleController {
         }
     }
 
+    @PutMapping("/{id}/content")
+    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
+    public ApiResponse<RuleDTO> updateContent(@PathVariable Long id,
+                                              @RequestBody RuleContentUpdateRequest req) {
+        try {
+            RuleDTO updated = ruleService.updateContent(id, req);
+            return ApiResponse.success("规则内容已更新", updated);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to update rule content id={}", id, e);
+            return ApiResponse.error("更新失败: " + e.getMessage());
+        }
+    }
+
     @GetMapping
     public ApiResponse<PageResponse<RuleDTO>> listRules(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) Long libraryId,
+            @RequestParam(required = false) Long folderId,
+            @RequestParam(required = false, defaultValue = "false") boolean uncategorized,
             Authentication authentication) {
         try {
             Long userId = SecurityUtils.getUserId(authentication);
             String role = SecurityUtils.getRoleFromAuthentication(authentication);
-            PageResponse<RuleDTO> result = ruleService.listRules(page, size, userId, role, libraryId);
+            PageResponse<RuleDTO> result = ruleService.listRules(page, size, userId, role, libraryId, folderId, uncategorized);
             return ApiResponse.success(result);
         } catch (Exception e) {
             log.error("Failed to list rules", e);

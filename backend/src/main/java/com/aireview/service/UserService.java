@@ -4,10 +4,8 @@ import com.aireview.dto.ChangePasswordRequest;
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.UserDTO;
 import com.aireview.entity.User;
-import com.aireview.entity.RagUserRuleAssignment;
 import com.aireview.entity.SarUserRuleAssignment;
 import com.aireview.entity.UserRuleAssignment;
-import com.aireview.repository.RagUserRuleAssignmentMapper;
 import com.aireview.repository.SarUserRuleAssignmentMapper;
 import com.aireview.repository.UserMapper;
 import com.aireview.repository.UserRuleAssignmentMapper;
@@ -28,7 +26,6 @@ public class UserService {
 
     private final UserMapper userMapper;
     private final UserRuleAssignmentMapper userRuleAssignmentMapper;
-    private final RagUserRuleAssignmentMapper ragUserRuleAssignmentMapper;
     private final SarUserRuleAssignmentMapper sarUserRuleAssignmentMapper;
     private final PasswordEncoder passwordEncoder;
 
@@ -117,7 +114,6 @@ public class UserService {
             throw new IllegalArgumentException("不能删除项目主管");
         }
         userRuleAssignmentMapper.deleteByUserId(targetUserId);
-        ragUserRuleAssignmentMapper.deleteByUserId(targetUserId);
         sarUserRuleAssignmentMapper.deleteByUserId(targetUserId);
         userMapper.deleteById(targetUserId);
         log.info("User {} deleted by operator {}", targetUserId, operatorId);
@@ -144,12 +140,7 @@ public class UserService {
             throw new IllegalArgumentException("用户不存在");
         }
         String m = mode == null ? "CHUNK" : mode.trim().toUpperCase();
-        if ("RAG".equals(m)) {
-            ragUserRuleAssignmentMapper.deleteByUserId(userId);
-            for (Long libId : libraryIds) {
-                ragUserRuleAssignmentMapper.insert(new RagUserRuleAssignment(userId, libId));
-            }
-        } else if ("SAR".equals(m)) {
+        if ("SAR".equals(m)) {
             sarUserRuleAssignmentMapper.deleteByUserId(userId);
             for (Long libId : libraryIds) {
                 sarUserRuleAssignmentMapper.insert(new SarUserRuleAssignment(userId, libId));
@@ -165,7 +156,6 @@ public class UserService {
 
     public List<Long> getAssignedLibraryIdsByMode(Long userId, String mode) {
         String m = mode == null ? "CHUNK" : mode.trim().toUpperCase();
-        if ("RAG".equals(m)) return ragUserRuleAssignmentMapper.findLibraryIdsByUserId(userId);
         if ("SAR".equals(m)) return sarUserRuleAssignmentMapper.findLibraryIdsByUserId(userId);
         return userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
     }

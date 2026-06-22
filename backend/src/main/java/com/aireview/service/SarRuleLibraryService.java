@@ -1,9 +1,12 @@
 package com.aireview.service;
 
 import com.aireview.dto.PageResponse;
+import com.aireview.dto.RuleFolderDTO;
 import com.aireview.dto.RuleLibraryDTO;
 import com.aireview.entity.SarRule;
+import com.aireview.entity.SarRuleFolder;
 import com.aireview.entity.SarRuleLibrary;
+import com.aireview.repository.SarRuleFolderMapper;
 import com.aireview.repository.SarRuleLibraryMapper;
 import com.aireview.repository.SarRuleMapper;
 import com.aireview.repository.SarUserRuleAssignmentMapper;
@@ -27,6 +30,7 @@ public class SarRuleLibraryService {
 
     private final SarRuleLibraryMapper sarRuleLibraryMapper;
     private final SarRuleMapper sarRuleMapper;
+    private final SarRuleFolderMapper sarRuleFolderMapper;
     private final SarUserRuleAssignmentMapper sarUserRuleAssignmentMapper;
 
     public RuleLibraryDTO createLibrary(String name, String description, Long creatorId) {
@@ -97,6 +101,68 @@ public class SarRuleLibraryService {
         countQuery.eq(SarRule::getLibraryId, lib.getId());
         dto.setRuleCount(Math.toIntExact(sarRuleMapper.selectCount(countQuery)));
 
+        return dto;
+    }
+
+    // ===================== 二级文件夹 =====================
+
+    public List<RuleFolderDTO> listFolders(Long libraryId) {
+        LambdaQueryWrapper<SarRuleFolder> query = new LambdaQueryWrapper<>();
+        query.eq(SarRuleFolder::getLibraryId, libraryId)
+                .orderByAsc(SarRuleFolder::getId);
+        return sarRuleFolderMapper.selectList(query).stream().map(this::toFolderDTO).toList();
+    }
+
+    public RuleFolderDTO createFolder(Long libraryId, String name, Long creatorId) {
+        SarRuleFolder folder = new SarRuleFolder();
+        folder.setLibraryId(libraryId);
+        folder.setName(name);
+        folder.setEnabled(true);
+        folder.setCreatorId(creatorId);
+        folder.setCreatedAt(LocalDateTime.now());
+        folder.setUpdatedAt(LocalDateTime.now());
+        sarRuleFolderMapper.insert(folder);
+        log.info("SAR rule folder created: {} in library {}", name, libraryId);
+        return toFolderDTO(folder);
+    }
+
+    public RuleFolderDTO updateFolder(Long folderId, String name, Boolean enabled) {
+        SarRuleFolder folder = sarRuleFolderMapper.selectById(folderId);
+        if (folder == null) {
+            throw new IllegalArgumentException("SAR 文件夹不存在");
+        }
+        if (name != null && !name.isBlank()) folder.setName(name.trim());
+        if (enabled != null) folder.setEnabled(enabled);
+        folder.setUpdatedAt(LocalDateTime.now());
+        sarRuleFolderMapper.updateById(folder);
+        return toFolderDTO(folder);
+    }
+
+    /** 删除文件夹：连同其中所有规则一并删除（rule_checks 由外键级联清除），不保留未分类。 */
+    public void deleteFolder(Long folderId) {
+        SarRuleFolder folder = sarRuleFolderMapper.selectById(folderId);
+        if (folder == null) {
+            throw new IllegalArgumentException("SAR 文件夹不存在");
+        }
+        LambdaQueryWrapper<SarRule> dq = new LambdaQueryWrapper<>();
+        dq.eq(SarRule::getFolderId, folderId);
+        int removed = sarRuleMapper.delete(dq);
+        sarRuleFolderMapper.deleteById(folderId);
+        log.info("SAR rule folder deleted: {} (and {} rule(s) within it)", folderId, removed);
+    }
+
+    private RuleFolderDTO toFolderDTO(SarRuleFolder folder) {
+        RuleFolderDTO dto = new RuleFolderDTO();
+        dto.setId(folder.getId());
+        dto.setLibraryId(folder.getLibraryId());
+        dto.setName(folder.getName());
+        dto.setEnabled(folder.getEnabled());
+        dto.setCreatorId(folder.getCreatorId());
+        dto.setCreatedAt(folder.getCreatedAt());
+        dto.setUpdatedAt(folder.getUpdatedAt());
+        LambdaQueryWrapper<SarRule> countQuery = new LambdaQueryWrapper<>();
+        countQuery.eq(SarRule::getFolderId, folder.getId());
+        dto.setRuleCount(Math.toIntExact(sarRuleMapper.selectCount(countQuery)));
         return dto;
     }
 }

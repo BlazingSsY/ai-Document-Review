@@ -1,0 +1,616 @@
+{
+  "_metadata": {
+    "project_name": "试验大纲智能审查系统",
+    "version": "2.0.0",
+    "scope": "磁效应",
+    "description": "磁效应专项规则（15-* 系列，专审磁影响/磁效应试验章节）。由 prompts_2026.5.14.json 改造拆分而来，内容与 rules_structured.json 一致。"
+  },
+  "version": "1.0",
+  "source_type": "converted_from_legacy_prompts",
+  "source_file": "prompts_2026.5.14.json",
+  "rules": [
+    {
+      "rule_code": "15-2-qtp_basic_info",
+      "name": "磁效应-QTP基本信息完整性",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查QTP名称、引用文件、试验目的（须在\"试验目的\"二级标题下）。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-2-C001",
+          "check_type": "presence",
+          "question": "是否包含QTP名称（如\"DO160G-15章\"\"磁影响试验\"等关键字）？",
+          "pass_criteria": "有QTP名称即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-2-C002",
+          "check_type": "presence",
+          "question": "是否引用试验类别来源文件（如COMAC机载系统专业与供应商的需求传递文件）？",
+          "pass_criteria": "有引用文件即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "15-2-C003",
+          "check_type": "presence",
+          "question": "是否在\"试验目的\"二级标题下给出明确的试验目的描述？",
+          "pass_criteria": "在\"试验目的\"标题下有明确描述即 Pass；其他标题下的类似语义不作依据，缺失判 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 3
+        }
+      ]
+    },
+    {
+      "rule_code": "15-3-eut_name_part_number",
+      "name": "磁效应-EUT设备名称与件号",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：仅依据受试/陪试设备章节核查设备名称与供应商件号/型号。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-3-C001",
+          "check_type": "presence",
+          "question": "受试/陪试设备章节是否包含设备名称？",
+          "pass_criteria": "有设备名称即 Pass；无则 Fail（仅依据受试/陪试设备章节，其他章节不作依据）。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-3-C002",
+          "check_type": "presence",
+          "question": "受试/陪试设备章节是否包含供应商件号/设备型号（COMAC件号可选）？",
+          "pass_criteria": "有供应商件号或设备型号即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "15-4-eut_function_description",
+      "name": "磁效应-EUT功能介绍",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查是否包含EUT设备功能基本介绍。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-4-C001",
+          "check_type": "presence",
+          "question": "是否包含EUT设备功能的基本介绍？",
+          "pass_criteria": "有功能介绍即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-5-eut_installation_location",
+      "name": "磁效应-EUT安装位置",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查是否包含设备机上具体安装位置或区域描述。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-5-C001",
+          "check_type": "presence",
+          "question": "是否包含设备机上具体安装位置或区域的描述？",
+          "pass_criteria": "有安装位置描述即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-6-eut_power_supply",
+      "name": "磁效应-EUT供电说明",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查是否明确设备供电类型。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-6-C001",
+          "check_type": "presence",
+          "question": "是否明确设备供电类型（如28VDC、115VAC或其他）？",
+          "pass_criteria": "有供电类型说明即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-7-eut_magnetic_category",
+      "name": "磁效应-EUT鉴定类别",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查是否明确设备磁效应鉴定类别。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-7-C001",
+          "check_type": "presence",
+          "question": "是否明确设备的磁效应鉴定类别？",
+          "pass_criteria": "有鉴定类别说明即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-8-lab_requirements",
+      "name": "磁效应-实验室/场地要求",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查试验室名称/场地要求及认证资质说明。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-8-C001",
+          "check_type": "presence",
+          "question": "是否包含试验室名称或场地要求？",
+          "pass_criteria": "有即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-8-C002",
+          "check_type": "presence",
+          "question": "是否说明试验室及试验人员应具备的认证资质？",
+          "pass_criteria": "有资质说明即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "15-9-test_equipment",
+      "name": "磁效应-试验设备信息完整性",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查非补偿罗盘/等效磁传感器等试验设备的名称型号、参数精度、校准信息。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-9-C001",
+          "check_type": "presence",
+          "question": "是否包含试验设备名称、型号？",
+          "pass_criteria": "有即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-9-C002",
+          "check_type": "presence",
+          "question": "是否包含试验主要技术参数及精度？",
+          "pass_criteria": "有即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "15-9-C003",
+          "check_type": "presence",
+          "question": "是否包含设备校准信息（校准单位、校准有效期、校准是否合格）？",
+          "pass_criteria": "有即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 3
+        }
+      ]
+    },
+    {
+      "rule_code": "15-10-auxiliary_equipment",
+      "name": "磁效应-辅助设备信息",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查辅助设备的名称、型号、作用（无辅助设备则前置条件不成立）。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-10-C001",
+          "check_type": "presence",
+          "question": "是否包含辅助设备名称？",
+          "pass_criteria": "有即 Pass；无辅助设备则 Review；声明有但缺名称则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-10-C002",
+          "check_type": "presence",
+          "question": "是否包含辅助设备型号？",
+          "pass_criteria": "有即 Pass；无辅助设备则 Review；声明有但缺型号则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "15-10-C003",
+          "check_type": "presence",
+          "question": "是否包含辅助设备作用概述？",
+          "pass_criteria": "有即 Pass；无辅助设备则 Review；声明有但缺作用说明则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 3
+        }
+      ]
+    },
+    {
+      "rule_code": "15-11-test_layout",
+      "name": "磁效应-试验布置要求",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查是否包含试验布置的图示和/或文字描述。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-11-C001",
+          "check_type": "presence",
+          "question": "是否包含试验布置的图示和/或文字描述？",
+          "pass_criteria": "有图示或文字描述即 Pass；无则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-12-deflection_angle_requirement",
+      "name": "磁效应-偏转角Dc要求",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查HCAFS范围说明及超容差时Dc修正值说明。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-12-C001",
+          "check_type": "numeric",
+          "question": "是否说明HCAFS范围（地球环境磁场水平分量在14.4A/m±10%内则Dc=1°）？",
+          "pass_criteria": "有HCAFS范围说明即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-12-C002",
+          "check_type": "numeric",
+          "question": "是否说明超出容差范围时的Dc修正值？",
+          "pass_criteria": "有Dc修正值说明即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "15-13-cable_bundle_requirement",
+      "name": "磁效应-设备线束要求",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查电缆捆束要求及电缆束放置（不沿东-西轴线）要求。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-13-C001",
+          "check_type": "presence",
+          "question": "是否要求EUT的所有电缆及可延伸电源电缆捆成一束？",
+          "pass_criteria": "有捆束要求即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-13-C002",
+          "check_type": "presence",
+          "question": "是否要求电缆束不沿罗盘的东-西轴线放置？",
+          "pass_criteria": "有放置要求即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "15-14-eut_work_mode",
+      "name": "磁效应-EUT工作模式",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查是否说明产生最大磁偏转角的EUT稳态工作模式。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-14-C001",
+          "check_type": "presence",
+          "question": "是否说明会产生非补偿罗盘/等效磁传感器最大磁偏转角的EUT稳态工作模式？",
+          "pass_criteria": "有工作模式说明即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-15-eut_orientation",
+      "name": "磁效应-EUT朝向要求",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查EUT电缆轴线要求及最大磁偏转朝向选择。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-15-C001",
+          "check_type": "presence",
+          "question": "是否要求EUT电缆在通过磁体中心的东-西轴线上保持不变？",
+          "pass_criteria": "有该要求即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-15-C002",
+          "check_type": "presence",
+          "question": "是否要求选择产生最大磁偏转的EUT朝向？",
+          "pass_criteria": "有该要求即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "15-16-minimum_distance",
+      "name": "磁效应-最小距离要求",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查Dc值记录及轴心与EUT部件最小距离D的确定。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-16-C001",
+          "check_type": "numeric",
+          "question": "是否记录减小EUT与磁体距离后所得的Dc值？",
+          "pass_criteria": "有Dc值记录即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-16-C002",
+          "check_type": "numeric",
+          "question": "是否确定轴心与EUT部件之间的最小距离D？",
+          "pass_criteria": "有最小距离D的确定即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 2
+        }
+      ]
+    },
+    {
+      "rule_code": "15-17-acceptance_criteria",
+      "name": "磁效应-试验合格判据",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查是否明确合格判据（最小距离D满足试验类别要求）。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-17-C001",
+          "check_type": "presence",
+          "question": "是否明确EUT与磁体轴心之间的最小距离D应满足试验类别要求（合格判据）？",
+          "pass_criteria": "有合格判据说明即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-18-eut_test_status",
+      "name": "磁效应-被测设备状态",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查测试过程中被测设备是否保持最大发射工作模式。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-18-C001",
+          "check_type": "presence",
+          "question": "是否说明测试过程中被测设备应保持在最大发射的工作模式？",
+          "pass_criteria": "有设备状态说明即 Pass；无则 Fail。",
+          "category": "标准符合性",
+          "evidence_required": true,
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "rule_code": "15-19-test_record_requirements",
+      "name": "磁效应-试验记录要求完整性",
+      "rule_type": "section_specific",
+      "document_type": "试验大纲",
+      "description": "磁影响试验章节：核查试验报告应包含的六项内容。",
+      "applies_to": {
+        "sections": [],
+        "keywords": [
+          "磁影响",
+          "磁效应"
+        ]
+      },
+      "checks": [
+        {
+          "check_code": "15-19-C001",
+          "check_type": "presence",
+          "question": "试验记录是否包含『被测设备和电缆』？",
+          "pass_criteria": "包含即 Pass；缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "15-19-C002",
+          "check_type": "presence",
+          "question": "试验记录是否包含『试验实际布置图』？",
+          "pass_criteria": "包含即 Pass；缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "15-19-C003",
+          "check_type": "presence",
+          "question": "试验记录是否包含『被测设备工作模式』？",
+          "pass_criteria": "包含即 Pass；缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 3
+        },
+        {
+          "check_code": "15-19-C004",
+          "check_type": "presence",
+          "question": "试验记录是否包含『试验设备（及辅助设备）』？",
+          "pass_criteria": "包含即 Pass；缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 4
+        },
+        {
+          "check_code": "15-19-C005",
+          "check_type": "presence",
+          "question": "试验记录是否包含『测试结果（含试验前电搭接测试结果）』？",
+          "pass_criteria": "包含即 Pass；缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 5
+        },
+        {
+          "check_code": "15-19-C006",
+          "check_type": "presence",
+          "question": "试验记录是否包含『试验结论』？",
+          "pass_criteria": "包含即 Pass；缺失则 Fail。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 6
+        }
+      ]
+    }
+  ]
+}

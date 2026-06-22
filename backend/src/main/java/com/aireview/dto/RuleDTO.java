@@ -16,6 +16,7 @@ public class RuleDTO {
     private String content;
     private Long creatorId;
     private Long libraryId;
+    private Long folderId;
     private LocalDateTime updatedAt;
     private Boolean isValid;
 

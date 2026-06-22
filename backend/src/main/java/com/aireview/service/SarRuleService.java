@@ -2,11 +2,15 @@ package com.aireview.service;
 
 import com.aireview.dto.PageResponse;
 import com.aireview.dto.RuleCheckDTO;
+import com.aireview.dto.RuleContentUpdateRequest;
 import com.aireview.dto.RuleDTO;
 import com.aireview.dto.RuleMetadataUpdateRequest;
+import com.aireview.dto.RuleUploadConflictDTO;
 import com.aireview.entity.SarRule;
 import com.aireview.entity.SarRuleCheck;
+import com.aireview.entity.SarRuleFolder;
 import com.aireview.repository.SarRuleCheckMapper;
+import com.aireview.repository.SarRuleFolderMapper;
 import com.aireview.repository.SarRuleMapper;
 import com.aireview.repository.SarUserRuleAssignmentMapper;
 import com.aireview.util.MultiRuleParser;
@@ -28,7 +32,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * SAR 侧规则服务。与 {@link RuleService} 结构对称，不同之处：
@@ -47,24 +53,46 @@ public class SarRuleService {
 
     private final SarRuleMapper sarRuleMapper;
     private final SarRuleCheckMapper sarRuleCheckMapper;
+    private final SarRuleFolderMapper sarRuleFolderMapper;
     private final SarUserRuleAssignmentMapper sarUserRuleAssignmentMapper;
 
     @Value("${file.rules-dir}")
     private String rulesDir;
 
     public List<RuleDTO> uploadRuleAll(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
+        return uploadRuleAll(file, creatorId, libraryId, null);
+    }
+
+    public List<RuleDTO> uploadRuleAll(MultipartFile file, Long creatorId, Long libraryId, Long folderId) throws IOException {
+        return uploadRuleAll(file, creatorId, libraryId, folderId, false);
+    }
+
+    public List<RuleDTO> uploadRuleAll(MultipartFile file, Long creatorId, Long libraryId,
+                                       Long folderId, boolean replaceExisting) throws IOException {
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null) {
             throw new IllegalArgumentException("File name is required");
         }
 
         String content = new String(file.getBytes(), StandardCharsets.UTF_8);
-        return importRuleContent(originalFilename, content, creatorId, libraryId, true);
+        return importRuleContent(originalFilename, content, creatorId, libraryId, folderId, true, replaceExisting);
     }
 
     public List<RuleDTO> importRuleContent(String originalFilename, String content,
                                            Long creatorId, Long libraryId,
                                            boolean persistSourceFile) throws IOException {
+        return importRuleContent(originalFilename, content, creatorId, libraryId, null, persistSourceFile);
+    }
+
+    public List<RuleDTO> importRuleContent(String originalFilename, String content,
+                                           Long creatorId, Long libraryId, Long folderId,
+                                           boolean persistSourceFile) throws IOException {
+        return importRuleContent(originalFilename, content, creatorId, libraryId, folderId, persistSourceFile, false);
+    }
+
+    public List<RuleDTO> importRuleContent(String originalFilename, String content,
+                                           Long creatorId, Long libraryId, Long folderId,
+                                           boolean persistSourceFile, boolean replaceExisting) throws IOException {
         if (originalFilename == null || originalFilename.isBlank()) {
             throw new IllegalArgumentException("File name is required");
         }
@@ -88,6 +116,7 @@ public class SarRuleService {
         }
 
         List<MultiRuleParser.ParsedRule> parsed = MultiRuleParser.parse(originalFilename, fileType, content);
+        handleUploadConflicts(originalFilename, libraryId, folderId, replaceExisting);
         List<RuleDTO> out = new ArrayList<>();
         for (MultiRuleParser.ParsedRule pr : parsed) {
             SarRule rule = new SarRule();
@@ -96,6 +125,7 @@ public class SarRuleService {
             rule.setContent(pr.getContent());
             rule.setCreatorId(creatorId);
             rule.setLibraryId(libraryId);
+            rule.setFolderId(folderId);
             rule.setUpdatedAt(LocalDateTime.now());
             rule.setIsValid(true);
             rule.setSourceFile(originalFilename);
@@ -117,6 +147,48 @@ public class SarRuleService {
         return out;
     }
 
+    public List<RuleUploadConflictDTO> findUploadConflicts(String sourceFile, Long libraryId, Long folderId) {
+        if (sourceFile == null || sourceFile.isBlank()) return List.of();
+        LambdaQueryWrapper<SarRule> query = new LambdaQueryWrapper<>();
+        query.eq(SarRule::getSourceFile, sourceFile)
+                .select(SarRule::getId, SarRule::getRuleName, SarRule::getRuleCode, SarRule::getSourceFile,
+                        SarRule::getLibraryId, SarRule::getFolderId, SarRule::getUpdatedAt)
+                .orderByAsc(SarRule::getId);
+        if (libraryId == null) {
+            query.isNull(SarRule::getLibraryId);
+        } else {
+            query.eq(SarRule::getLibraryId, libraryId);
+        }
+        if (folderId == null) {
+            query.isNull(SarRule::getFolderId);
+        } else {
+            query.eq(SarRule::getFolderId, folderId);
+        }
+        return sarRuleMapper.selectList(query).stream()
+                .map(rule -> new RuleUploadConflictDTO(
+                        rule.getId(),
+                        rule.getRuleName(),
+                        rule.getRuleCode(),
+                        rule.getSourceFile(),
+                        rule.getLibraryId(),
+                        rule.getFolderId(),
+                        rule.getUpdatedAt()))
+                .toList();
+    }
+
+    private void handleUploadConflicts(String sourceFile, Long libraryId, Long folderId, boolean replaceExisting) {
+        List<RuleUploadConflictDTO> conflicts = findUploadConflicts(sourceFile, libraryId, folderId);
+        if (conflicts.isEmpty()) return;
+        if (!replaceExisting) {
+            throw new IllegalArgumentException("规则文件已存在，请选择保留已有规则或用新文件替换");
+        }
+        for (RuleUploadConflictDTO conflict : conflicts) {
+            sarRuleMapper.deleteById(conflict.getId());
+        }
+        log.info("Replaced {} existing SAR rule(s) from sourceFile={} libraryId={} folderId={}",
+                conflicts.size(), sourceFile, libraryId, folderId);
+    }
+
     private void persistChecks(Long ruleId, List<MultiRuleParser.ParsedCheck> checks) {
         if (ruleId == null || checks == null || checks.isEmpty()) return;
         for (MultiRuleParser.ParsedCheck parsed : checks) {
@@ -135,7 +207,7 @@ public class SarRuleService {
     }
 
     public RuleDTO uploadRule(MultipartFile file, Long creatorId, Long libraryId) throws IOException {
-        List<RuleDTO> all = uploadRuleAll(file, creatorId, libraryId);
+        List<RuleDTO> all = uploadRuleAll(file, creatorId, libraryId, null);
         return all.isEmpty() ? null : all.get(0);
     }
 
@@ -144,6 +216,15 @@ public class SarRuleService {
     }
 
     public PageResponse<RuleDTO> listRules(int page, int size, Long userId, String role, Long libraryId) {
+        return listRules(page, size, userId, role, libraryId, null, false);
+    }
+
+    /**
+     * @param folderId      仅返回该文件夹下的规则（为 null 时不按文件夹过滤，除非 uncategorized=true）
+     * @param uncategorized 为 true 时只返回未分类规则（folder_id IS NULL），优先级高于 folderId
+     */
+    public PageResponse<RuleDTO> listRules(int page, int size, Long userId, String role,
+                                           Long libraryId, Long folderId, boolean uncategorized) {
         Page<SarRule> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<SarRule> query = new LambdaQueryWrapper<>();
 
@@ -157,12 +238,18 @@ public class SarRuleService {
         if (libraryId != null) {
             query.eq(SarRule::getLibraryId, libraryId);
         }
+        if (uncategorized) {
+            query.isNull(SarRule::getFolderId);
+        } else if (folderId != null) {
+            query.eq(SarRule::getFolderId, folderId);
+        }
         query.select(
                 SarRule::getId,
                 SarRule::getRuleName,
                 SarRule::getFileType,
                 SarRule::getCreatorId,
                 SarRule::getLibraryId,
+                SarRule::getFolderId,
                 SarRule::getUpdatedAt,
                 SarRule::getIsValid,
                 SarRule::getRuleCode,
@@ -200,7 +287,21 @@ public class SarRuleService {
     public List<SarRule> getRulesByScenarioId(Long scenarioId) {
         List<Long> ids = sarRuleMapper.findIdsByScenarioId(scenarioId);
         if (ids == null || ids.isEmpty()) return new ArrayList<>();
-        return sarRuleMapper.selectBatchIds(ids);
+        List<SarRule> rules = sarRuleMapper.selectBatchIds(ids);
+        // 停用文件夹中的规则在审查时整组排除；未分类（folder_id 为 null）恒保留。
+        Set<Long> disabled = disabledFolderIds();
+        if (disabled.isEmpty()) return rules;
+        return rules.stream()
+                .filter(r -> r.getFolderId() == null || !disabled.contains(r.getFolderId()))
+                .collect(Collectors.toList());
+    }
+
+    private Set<Long> disabledFolderIds() {
+        LambdaQueryWrapper<SarRuleFolder> q = new LambdaQueryWrapper<>();
+        q.eq(SarRuleFolder::getEnabled, false).select(SarRuleFolder::getId);
+        return sarRuleFolderMapper.selectList(q).stream()
+                .map(SarRuleFolder::getId)
+                .collect(Collectors.toSet());
     }
 
     public RuleDTO updateMetadata(Long id, RuleMetadataUpdateRequest req) {
@@ -223,6 +324,48 @@ public class SarRuleService {
         return toDTO(rule);
     }
 
+    /**
+     * 编辑规则内容：正文（content）与原子检查项（sar_rule_checks）。content 为 null 不改；
+     * checks 为 null 不改，非 null（含空列表）整体替换该规则的检查项。
+     */
+    public RuleDTO updateContent(Long id, RuleContentUpdateRequest req) {
+        SarRule rule = sarRuleMapper.selectById(id);
+        if (rule == null) {
+            throw new IllegalArgumentException("SAR rule not found: " + id);
+        }
+        if (req.getContent() != null) {
+            rule.setContent(req.getContent());
+        }
+        rule.setUpdatedAt(LocalDateTime.now());
+        sarRuleMapper.updateById(rule);
+
+        if (req.getChecks() != null) {
+            sarRuleCheckMapper.delete(new LambdaQueryWrapper<SarRuleCheck>().eq(SarRuleCheck::getRuleId, id));
+            int order = 1;
+            for (RuleCheckDTO c : req.getChecks()) {
+                SarRuleCheck check = new SarRuleCheck();
+                check.setRuleId(id);
+                String code = blankToNull(c.getCheckCode());
+                check.setCheckCode(code != null ? code
+                        : (rule.getRuleCode() != null && !rule.getRuleCode().isBlank() ? rule.getRuleCode() : "R")
+                          + "-C" + String.format("%03d", order));
+                String type = blankToNull(c.getCheckType());
+                check.setCheckType(type != null ? type : "presence");
+                check.setQuestion(c.getQuestion());
+                check.setPassCriteria(c.getPassCriteria());
+                check.setCategory(blankToNull(c.getCategory()));
+                check.setEvidenceRequired(c.getEvidenceRequired() == null ? Boolean.TRUE : c.getEvidenceRequired());
+                check.setDisplayOrder(c.getDisplayOrder() != null ? c.getDisplayOrder() : order);
+                check.setIsActive(true);
+                sarRuleCheckMapper.insert(check);
+                order++;
+            }
+        }
+        log.info("SAR rule {} content updated (checks: {})", id,
+                req.getChecks() == null ? "unchanged" : req.getChecks().size());
+        return toDTO(rule);
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.trim();
     }
@@ -234,6 +377,7 @@ public class SarRuleService {
         dto.setFileType(rule.getFileType());
         dto.setCreatorId(rule.getCreatorId());
         dto.setLibraryId(rule.getLibraryId());
+        dto.setFolderId(rule.getFolderId());
         dto.setUpdatedAt(rule.getUpdatedAt());
         dto.setIsValid(rule.getIsValid());
         dto.setDescription(rule.getDescription());

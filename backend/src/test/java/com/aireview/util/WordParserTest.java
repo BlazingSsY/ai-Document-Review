@@ -1,13 +1,10 @@
 package com.aireview.util;
 
-import com.aireview.entity.RagDocumentBlock;
-import com.aireview.service.RagReviewService;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -87,42 +84,6 @@ class WordParserTest {
                 .get("table");
         assertEquals(2, structuredTable.get("rowCount"));
         assertEquals(2, structuredTable.get("columnCount"));
-
-        RagReviewService service = new RagReviewService(
-                null, null, null, null, null, null, null);
-        ReflectionTestUtils.setField(service, "blockMaxChars", 40);
-        List<RagDocumentBlock> blocks = ReflectionTestUtils.invokeMethod(
-                service, "buildBlocks", "task-1", first);
-        assertFalse(blocks.isEmpty());
-        assertTrue(blocks.stream().allMatch(block ->
-                block.getStartNodeId() != null && block.getEndNodeId() != null));
-        assertTrue(blocks.stream().allMatch(block -> "node_range".equals(block.getBlockType())));
-    }
-
-    @Test
-    void ragBlockIdsUseDisplayedChapterOrderAfterFrontMatterIsSkipped() {
-        WordParser.Chapter chapter = new WordParser.Chapter(
-                "DOC-C002",
-                "1 First chapter",
-                "Body",
-                "Body",
-                "<p data-node-id=\"DOC-C002-N0001\">Body</p>",
-                List.of());
-
-        RagReviewService service = new RagReviewService(
-                null, null, null, null, null, null, null);
-        ReflectionTestUtils.setField(service, "blockMaxChars", 40);
-        List<RagDocumentBlock> blocks = ReflectionTestUtils.invokeMethod(
-                service, "buildBlocks", "task-1", List.of(chapter));
-
-        assertFalse(blocks.isEmpty());
-        assertEquals("BLOCK-C001-0001", blocks.get(0).getBlockId());
-        assertEquals(1, blocks.get(0).getChapterIndex());
-
-        Map<String, Object> source = ReflectionTestUtils.invokeMethod(
-                service, "toOriginalSource", chapter, 1);
-        assertEquals("CHAPTER-001", source.get("sourceId"));
-        assertEquals(1, source.get("chapterIndex"));
     }
 
     @Test

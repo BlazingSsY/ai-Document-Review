@@ -128,6 +128,12 @@ public class ReviewService {
      */
     public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
                                       String selectedModel, Long userId) throws IOException {
+        return submitReview(file, scenarioId, selectedModel, userId, true);
+    }
+
+    public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
+                                      String selectedModel, Long userId,
+                                      boolean qualityCheckEnabled) throws IOException {
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
             throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
@@ -147,6 +153,7 @@ public class ReviewService {
         task.setFilePath(savedPath.toString());
         task.setScenarioId(scenarioId);
         task.setSelectedModel(selectedModel);
+        task.setQualityCheckEnabled(qualityCheckEnabled);
         task.setStatus(ReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -462,9 +469,11 @@ public class ReviewService {
                     : rawChapters;
             List<Rule> rules = ruleService.getRulesByScenarioId(task.getScenarioId());
             List<RuleDispatcher.PreparedRule> preparedRules = RuleDispatcher.prepare(rules);
+            List<String> declaredTestItems = extractDeclaredTestItems(chapters);
             attachChecks(preparedRules);
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
             List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
+            final boolean qualityCheck = !Boolean.FALSE.equals(task.getQualityCheckEnabled());
 
             List<Integer> validChunkNumbers = failedChunkNumbers.stream()
                     .filter(n -> n != null && n >= 1 && n <= chunks.size())
@@ -507,14 +516,15 @@ public class ReviewService {
                 final int displayChunk = chunkNumber;
                 final ChunkUtils.ChunkResult chunk = chunks.get(chunkIdx);
                 final RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
-                        chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter);
+                        chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter,
+                        isTestItemChapter(chunk.getLabel(), declaredTestItems));
 
                 CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
                     long startNs = System.nanoTime();
                     try {
                         Map<String, Object> replacement;
                         try {
-                            replacement = reviewSingleChunk(chunkIdx, chunks.size(), chunk, dispatch, chapters, modelConfig);
+                            replacement = reviewSingleChunk(chunkIdx, chunks.size(), chunk, dispatch, chapters, modelConfig, qualityCheck);
                             long elapsedMs = elapsedMs(startNs);
                             replacement.put("elapsedMs", elapsedMs);
                             int done = retriedCount.incrementAndGet();
@@ -651,6 +661,13 @@ public class ReviewService {
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                     "文档已切分为 " + chunks.size() + " 个片段，开始调用AI审查...", 30);
 
+            // 试验项目章节识别：从试验概述(7.1)动态提取声明的试验项目清单，供 test_item 规则按章路由。
+            List<String> declaredTestItems = extractDeclaredTestItems(chapters);
+            if (!declaredTestItems.isEmpty()) {
+                log.info("Detected {} declared test item(s) from overview: {}",
+                        declaredTestItems.size(), declaredTestItems);
+            }
+
             // 5a. Pre-compute dispatch for every chunk so we can write the debug file
             // BEFORE any AI call. This way a 429 / timeout on chunk 1 still leaves a
             // diagnosable 切片结果.json on disk with the applied-rule traces.
@@ -659,7 +676,8 @@ public class ReviewService {
             for (int i = 0; i < chunks.size(); i++) {
                 ChunkUtils.ChunkResult chunk = chunks.get(i);
                 RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
-                        chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter);
+                        chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter,
+                        isTestItemChapter(chunk.getLabel(), declaredTestItems));
                 dispatches.add(dispatch);
 
                 Map<String, Object> dispatchEntry = new LinkedHashMap<>();
@@ -693,11 +711,27 @@ public class ReviewService {
             @SuppressWarnings({"unchecked", "rawtypes"})
             final Map<String, Object>[] orderedResults = new Map[totalChunks];
             AtomicInteger completedChunkCount = new AtomicInteger(0);
+            // 全文质量检查开关（用户在新建审查时选择；默认开启）。关闭时，纯基础质量、
+            // 无任何业务规则命中的章节将被直接跳过，不再调用模型——这也是这类审查变快的关键。
+            final boolean qualityCheck = !Boolean.FALSE.equals(task.getQualityCheckEnabled());
+
             Semaphore taskSlots = new Semaphore(effectiveConcurrency);
             List<CompletableFuture<Void>> chunkFutures = new ArrayList<>(totalChunks);
 
             for (int i = 0; i < totalChunks; i++) {
                 if (cancelledTasks.contains(taskId)) break;
+
+                // 关闭全文质量检查时，跳过没有命中任何业务规则的章节（否则只会跑一遍基础质量）。
+                if (!qualityCheck && dispatches.get(i).getAppliedRules().isEmpty()) {
+                    orderedResults[i] = buildSkippedChunkResult(i, totalChunks, chunks.get(i));
+                    int done = completedChunkCount.incrementAndGet();
+                    webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                            "已跳过 " + (i + 1) + "/" + totalChunks + " [" + chunks.get(i).getLabel()
+                                    + "]（未命中业务规则，全文质量检查已关闭）(" + done + "/" + totalChunks + ")",
+                            35 + (int) ((double) done / totalChunks * 55));
+                    continue;
+                }
+
                 try {
                     taskSlots.acquire();
                 } catch (InterruptedException ie) {
@@ -719,7 +753,7 @@ public class ReviewService {
                     Map<String, Object> result;
                     try {
                         result = reviewSingleChunk(chunkIdx, totalChunks, chunk, dispatch,
-                                chapters, modelConfig, taskId);
+                                chapters, modelConfig, taskId, qualityCheck);
                         long elapsedMs = elapsedMs(startNs);
                         result.put("elapsedMs", elapsedMs);
                         int done = completedChunkCount.incrementAndGet();
@@ -1037,8 +1071,17 @@ public class ReviewService {
      * built-in quality rule first, then the dispatched rules (after token-budget trim).
      */
     private List<RuleParser.RuleEntry> buildRuleEntriesForChunk(List<RuleDispatcher.PreparedRule> rulesForChunk) {
+        return buildRuleEntriesForChunk(rulesForChunk, true);
+    }
+
+    /**
+     * @param qualityCheck 是否注入内置「全文质量检查（基础文字质量审查）」。关闭时：仅装配命中的业务规则；
+     *                     若该章节无任何业务规则，返回空列表（调用方据此跳过该章节，不再调用模型）。
+     */
+    private List<RuleParser.RuleEntry> buildRuleEntriesForChunk(List<RuleDispatcher.PreparedRule> rulesForChunk,
+                                                                boolean qualityCheck) {
         if (rulesForChunk == null || rulesForChunk.isEmpty()) {
-            return List.of(builtInQualityRule());
+            return qualityCheck ? List.of(builtInQualityRule()) : List.of();
         }
 
         // 转 RuleEntry + 缺失编号自动补齐
@@ -1067,7 +1110,7 @@ public class ReviewService {
             log.info("Rule budget triggered: chunk rules trimmed from {} → {} (cap={} tokens)",
                     entries.size(), kept.size(), RULE_BUDGET_TOKENS);
         }
-        kept.add(0, builtInQualityRule());
+        if (qualityCheck) kept.add(0, builtInQualityRule());
         return kept;
     }
 
@@ -1164,6 +1207,87 @@ public class ReviewService {
     }
 
     /**
+     * 全文一级标题目录，附加到每个章节切片的审查上下文末尾。让"按章审查"时模型也能看到
+     * 整篇文档有哪些一级标题章节，从而支持"本章声明的清单 vs 全文实际章节"这类跨章节核对
+     * （例如：试验概述里列出的试验项目，是否都有对应的试验章节）。
+     * 明确标注为"参考、勿对其本身判定问题"，避免被当作本章正文重复审查。
+     */
+    private static String buildChapterOutline(List<WordParser.Chapter> chapters) {
+        if (chapters == null || chapters.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(
+                "\n\n=== 全文章节目录（一级标题，仅供跨章节核对参考，勿对其本身判定问题）===\n");
+        for (int i = 0; i < chapters.size(); i++) {
+            String t = chapters.get(i).getTitle();
+            sb.append(i + 1).append(". ").append(t == null || t.isBlank() ? "(无标题)" : t).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 从"试验概述"章节(一般是 7.1)动态提取本受试设备声明应完成的试验项目清单。
+     * 优先取标题含"试验概述/试验项目概述"的章节正文；否则回退到任一含"(鉴定)试验项目有"的章节。
+     * 解析形如"……应完成的……鉴定试验项目有：温度和高度、温度变化、……等"的声明段。
+     * 解析失败/无声明时返回空列表（此时 test_item 规则不会作用于任何章节，安全降级）。
+     */
+    private List<String> extractDeclaredTestItems(List<WordParser.Chapter> chapters) {
+        if (chapters == null || chapters.isEmpty()) return List.of();
+        String text = null;
+        for (WordParser.Chapter ch : chapters) {
+            String t = ch.getTitle() == null ? "" : ch.getTitle();
+            if (t.contains("试验概述") || t.contains("试验项目概述")) { text = ch.getContent(); break; }
+        }
+        if (text == null) {
+            for (WordParser.Chapter ch : chapters) {
+                String c = ch.getContent();
+                if (c != null && (c.contains("试验项目有") || c.contains("鉴定试验项目有"))) { text = c; break; }
+            }
+        }
+        if (text == null || text.isBlank()) return List.of();
+
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("试验项目有[：:]\\s*([^。\\n\\r]+)").matcher(text);
+        if (!m.find()) return List.of();
+        String seg = m.group(1);
+        for (String stop : new String[]{"等", "具体", "见表", "见附"}) {
+            int cut = seg.indexOf(stop);
+            if (cut > 0) seg = seg.substring(0, cut);
+        }
+        List<String> items = new ArrayList<>();
+        for (String part : seg.split("[、，,；;/]")) {
+            String p = part.trim();
+            if (p.length() >= 2 && !items.contains(p)) items.add(p);
+        }
+        return items;
+    }
+
+    /** 章节标题去掉前导编号与尾部"试验/试验项目"后的核心词，用于与声明项目做宽松匹配。 */
+    private static String normalizeTitleCore(String title) {
+        if (title == null) return "";
+        String s = title.trim()
+                .replaceFirst("^第?\\s*[0-9]+(\\.[0-9]+)*\\s*[章节]?[\\s\\.、:：-]*", "")
+                .replaceAll("(试验项目|试验)$", "")
+                .trim();
+        return s;
+    }
+
+    /**
+     * 判断某章节标题是否对应试验概述声明的某个试验项目（即"试验项目章节"）。
+     * 宽松匹配：标题包含声明项目，或声明项目与标题核心词互相包含。
+     */
+    private boolean isTestItemChapter(String chapterTitle, List<String> declaredTestItems) {
+        if (chapterTitle == null || declaredTestItems == null || declaredTestItems.isEmpty()) return false;
+        String title = chapterTitle.trim();
+        String core = normalizeTitleCore(title);
+        for (String item : declaredTestItems) {
+            String it = item == null ? "" : item.trim();
+            if (it.length() < 2) continue;
+            if (title.contains(it)) return true;
+            if (!core.isEmpty() && (it.contains(core) || core.contains(it))) return true;
+        }
+        return false;
+    }
+
+    /**
      * Compose the user message for the document-level review pass: chapter outline plus
      * each per-chunk summary already returned by the model.
      */
@@ -1212,8 +1336,9 @@ public class ReviewService {
                                                    ChunkUtils.ChunkResult chunk,
                                                    RuleDispatcher.DispatchResult dispatch,
                                                    List<WordParser.Chapter> chapters,
-                                                   AiModelConfig modelConfig) throws Exception {
-        return reviewSingleChunk(chunkIdx, totalChunks, chunk, dispatch, chapters, modelConfig, /*taskId*/ null);
+                                                   AiModelConfig modelConfig,
+                                                   boolean qualityCheck) throws Exception {
+        return reviewSingleChunk(chunkIdx, totalChunks, chunk, dispatch, chapters, modelConfig, /*taskId*/ null, qualityCheck);
     }
 
     /**
@@ -1229,9 +1354,10 @@ public class ReviewService {
                                                    RuleDispatcher.DispatchResult dispatch,
                                                    List<WordParser.Chapter> chapters,
                                                    AiModelConfig modelConfig,
-                                                   String taskId) throws Exception {
+                                                   String taskId,
+                                                   boolean qualityCheck) throws Exception {
         int chunkNum = chunkIdx + 1;
-        List<RuleParser.RuleEntry> ruleEntries = buildRuleEntriesForChunk(dispatch.getAppliedRules());
+        List<RuleParser.RuleEntry> ruleEntries = buildRuleEntriesForChunk(dispatch.getAppliedRules(), qualityCheck);
         String systemPrompt = RuleParser.buildStructuredSystemPrompt(ruleEntries);
         // 1a: floor check_results at the number of injected rules/checks so weak models
         // can't drop them; paired with the prompt's coverage anchoring (same count).
@@ -1243,7 +1369,8 @@ public class ReviewService {
 
         String chunkContent = "章节: " + chunk.getLabel()
                 + " (" + chunkNum + "/" + totalChunks + ")\n\n" + chunk.getContent()
-                + supporting;
+                + supporting
+                + buildChapterOutline(chapters);
 
         int sampleCount = 1;
         List<Map<String, Object>> samples = new ArrayList<>();
@@ -1260,7 +1387,7 @@ public class ReviewService {
             samples.add(parsed);
         }
         Map<String, Object> merged = mergeSamples(samples, chunk.getLabel());
-        enrichBuiltInQualityChecks(merged);
+        if (qualityCheck) enrichBuiltInQualityChecks(merged);
 
         Map<String, Object> chunkResult = new HashMap<>();
         chunkResult.put("chunk", chunkNum);
@@ -1270,7 +1397,7 @@ public class ReviewService {
         chunkResult.put("source", buildChunkSource(chunkIdx, chunk));
         chunkResult.put("sourceRefs", buildChunkSourceRefs(chunkIdx, chunk, refIdx));
         List<String> appliedRuleNames = new ArrayList<>();
-        appliedRuleNames.add(RuleDispatcher.BASIC_QUALITY_RULE_NAME);
+        if (qualityCheck) appliedRuleNames.add(RuleDispatcher.BASIC_QUALITY_RULE_NAME);
         for (String ruleName : dispatch.getAppliedRuleNames()) {
             if (!RuleDispatcher.BASIC_QUALITY_RULE_NAME.equals(ruleName)) {
                 appliedRuleNames.add(ruleName);
@@ -1278,10 +1405,37 @@ public class ReviewService {
         }
         chunkResult.put("appliedRules", appliedRuleNames);
         chunkResult.put("reviewProfile", dispatch.getAppliedRules().isEmpty()
-                ? "basic_quality" : "rule_based");
+                ? (qualityCheck ? "basic_quality" : "skipped") : "rule_based");
         chunkResult.put("samplingStrategy", sampleCount > 1 ? "double" : "single");
         chunkResult.put("sampleCount", sampleCount);
         chunkResult.put("result", merged);
+        return chunkResult;
+    }
+
+    /**
+     * 关闭全文质量检查、且某章节未命中任何业务规则时的占位结果：不调用模型，仅记录"已跳过"，
+     * 保证章节计数/结果列表完整。
+     */
+    private Map<String, Object> buildSkippedChunkResult(int chunkIdx, int totalChunks,
+                                                        ChunkUtils.ChunkResult chunk) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("summary", "本章节未命中任何业务规则，且全文质量检查已关闭，已跳过审查。");
+        result.put("issues", new ArrayList<>());
+        result.put("passed_items", new ArrayList<>());
+        result.put("check_results", new ArrayList<>());
+
+        Map<String, Object> chunkResult = new HashMap<>();
+        chunkResult.put("chunk", chunkIdx + 1);
+        chunkResult.put("chapterTitle", chunk.getLabel());
+        chunkResult.put("totalChunks", totalChunks);
+        chunkResult.put("estimatedTokens", chunk.getEstimatedTokens());
+        chunkResult.put("source", buildChunkSource(chunkIdx, chunk));
+        chunkResult.put("sourceRefs", buildChunkSourceRefs(chunkIdx, chunk, java.util.Set.of()));
+        chunkResult.put("appliedRules", new ArrayList<>());
+        chunkResult.put("reviewProfile", "skipped");
+        chunkResult.put("samplingStrategy", "single");
+        chunkResult.put("sampleCount", 0);
+        chunkResult.put("result", result);
         return chunkResult;
     }
 

@@ -386,6 +386,9 @@ public class MultiRuleParser {
         if (s.contains("文档") || s.equals("document") || s.equals("document_specific")) {
             return RuleMetadata.TYPE_DOCUMENT_SPECIFIC;
         }
+        if (s.contains("试验项目") || s.equals("test_item_chapter") || s.equals("test_item") || s.equals("testitem")) {
+            return RuleMetadata.TYPE_TEST_ITEM;
+        }
         if (s.contains("输出") || s.equals("output")) {
             return RuleMetadata.TYPE_OUTPUT;
         }

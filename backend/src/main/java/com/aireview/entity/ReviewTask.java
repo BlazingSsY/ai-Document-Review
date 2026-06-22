@@ -40,6 +40,9 @@ public class ReviewTask {
     /** Scalar problem count cached on completion/manual-review so the task list never reads ai_result. */
     private Integer problemCount;
 
+    /** 是否对本次审查启用全文质量检查（基础文字质量审查）。默认 true。 */
+    private Boolean qualityCheckEnabled;
+
     // Status constants
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_PROCESSING = "PROCESSING";

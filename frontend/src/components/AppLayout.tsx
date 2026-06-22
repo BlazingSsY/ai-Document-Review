@@ -12,7 +12,6 @@ import {
   TeamOutlined,
   AppstoreOutlined,
   ProfileOutlined,
-  DeploymentUnitOutlined,
   BookOutlined,
   AimOutlined,
 } from '@ant-design/icons';
@@ -91,15 +90,6 @@ function AppLayout() {
   const menuItems: MenuProps['items'] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
     {
-      key: 'rag-section',
-      icon: <DeploymentUnitOutlined />,
-      label: '智能召回审查',
-      children: [
-        { key: '/rag/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
-        { key: '/rag/rules', icon: <ProfileOutlined />, label: '审查规则' },
-      ],
-    },
-    {
       key: 'chunk-section',
       icon: <BookOutlined />,
       label: '全文逐章审查',
@@ -141,14 +131,12 @@ function AppLayout() {
   // leaf path. We default both pipeline groups open so users always see all four
   // entries; they can manually collapse a group if they want.
   const path = location.pathname;
-  const selectedKey = path.startsWith('/rag/scenarios') ? '/rag/scenarios'
-    : path.startsWith('/rag/rules') ? '/rag/rules'
-    : path.startsWith('/chunk/scenarios') ? '/chunk/scenarios'
+  const selectedKey = path.startsWith('/chunk/scenarios') ? '/chunk/scenarios'
     : path.startsWith('/chunk/rules') ? '/chunk/rules'
     : path.startsWith('/sar/scenarios') ? '/sar/scenarios'
     : path.startsWith('/sar/rules') ? '/sar/rules'
     : '/' + path.split('/')[1];
-  const openKeys = ['rag-section', 'chunk-section', 'sar-section'];
+  const openKeys = ['chunk-section', 'sar-section'];
   const roleTag = ROLE_TAG[role] || ROLE_TAG.user;
 
   return (
