@@ -1226,10 +1226,15 @@ public class ReviewService {
     /**
      * 从"试验概述"章节(一般是 7.1)动态提取本受试设备声明应完成的试验项目清单。
      * 优先取标题含"试验概述/试验项目概述"的章节正文；否则回退到任一含"(鉴定)试验项目有"的章节。
-     * 解析形如"……应完成的……鉴定试验项目有：温度和高度、温度变化、……等"的声明段。
-     * 解析失败/无声明时返回空列表（此时 test_item 规则不会作用于任何章节，安全降级）。
+     *
+     * <p>两路提取，取并集（散文常按类别分多句、且未必列全，需配合一览表）：
+     * <ol>
+     *   <li>散文声明：可能有多句"……试验项目有：A、B、C…等"（自然环境类 / 电磁兼容类 / …），逐句逐项收集；</li>
+     *   <li>试验项目一览表：表格行里以"试验"结尾的纯中文单元格通常即试验项目名，补齐散文遗漏的项。</li>
+     * </ol>
+     * 解析失败/无任何项时返回空列表（此时 test_item 规则不作用于任何章节，安全降级）。
      */
-    private List<String> extractDeclaredTestItems(List<WordParser.Chapter> chapters) {
+    static List<String> extractDeclaredTestItems(List<WordParser.Chapter> chapters) {
         if (chapters == null || chapters.isEmpty()) return List.of();
         String text = null;
         for (WordParser.Chapter ch : chapters) {
@@ -1244,18 +1249,31 @@ public class ReviewService {
         }
         if (text == null || text.isBlank()) return List.of();
 
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("试验项目有[：:]\\s*([^。\\n\\r]+)").matcher(text);
-        if (!m.find()) return List.of();
-        String seg = m.group(1);
-        for (String stop : new String[]{"等", "具体", "见表", "见附"}) {
-            int cut = seg.indexOf(stop);
-            if (cut > 0) seg = seg.substring(0, cut);
-        }
         List<String> items = new ArrayList<>();
-        for (String part : seg.split("[、，,；;/]")) {
-            String p = part.trim();
-            if (p.length() >= 2 && !items.contains(p)) items.add(p);
+
+        // ① 散文：逐句"试验项目有：…等/。/见表"，reluctant 匹配，find-all 收集每一句
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("试验项目有[：:]\\s*(.+?)(?:等|。|见表|具体)").matcher(text);
+        while (m.find()) {
+            for (String part : m.group(1).split("[、，,；;/]")) {
+                String p = part.trim();
+                if (p.length() < 2) continue;
+                if (p.contains("试验项目") || p.contains("本设备") || p.contains("应完成")) continue;
+                if (!items.contains(p)) items.add(p);
+            }
+        }
+
+        // ② 试验项目一览表：抓表格行中以"试验"结尾的纯中文单元格（散文常列不全）
+        for (String line : text.split("\\r?\\n")) {
+            if (line.indexOf('|') < 0) continue;
+            for (String cell : line.split("\\|")) {
+                String c = cell.trim();
+                if (c.length() < 3 || c.length() > 16 || !c.endsWith("试验")) continue;
+                if (c.matches(".*[0-9A-Za-z：:].*")) continue;   // 排除含编号/英文/冒号的单元格
+                if (c.contains("条") || c.contains("类") || c.contains("记录") || c.contains("报告")) continue;
+                String core = c.replaceAll("(试验项目|试验)$", "").trim();
+                if (core.length() >= 2 && !items.contains(core)) items.add(core);
+            }
         }
         return items;
     }
@@ -1272,19 +1290,50 @@ public class ReviewService {
 
     /**
      * 判断某章节标题是否对应试验概述声明的某个试验项目（即"试验项目章节"）。
-     * 宽松匹配：标题包含声明项目，或声明项目与标题核心词互相包含。
+     * 匹配层次：①标题/核心词互相包含；②声明项目核心词与标题核心词互相包含；
+     * ③中文字符集重叠度兜底——处理"射频敏感性↔射频敏感度""射频发射↔射频能量发射"等近义用词差异。
      */
-    private boolean isTestItemChapter(String chapterTitle, List<String> declaredTestItems) {
+    static boolean isTestItemChapter(String chapterTitle, List<String> declaredTestItems) {
         if (chapterTitle == null || declaredTestItems == null || declaredTestItems.isEmpty()) return false;
         String title = chapterTitle.trim();
         String core = normalizeTitleCore(title);
+        if (core.isEmpty()) core = title;
         for (String item : declaredTestItems) {
             String it = item == null ? "" : item.trim();
             if (it.length() < 2) continue;
-            if (title.contains(it)) return true;
-            if (!core.isEmpty() && (it.contains(core) || core.contains(it))) return true;
+            String itCore = normalizeTitleCore(it);
+            if (itCore.isEmpty()) itCore = it;
+            if (title.contains(it) || it.contains(core) || core.contains(it)) return true;
+            if (core.contains(itCore) || itCore.contains(core)) return true;
+            if (cjkOverlapMatch(itCore, core)) return true;
         }
         return false;
+    }
+
+    /**
+     * 中文字符集重叠度匹配：共享字符≥2 且 ≥较短串去重字数的 80%，视为同一试验项目。
+     * 80% 阈值能容忍"射频敏感性↔射频敏感度""射频发射↔射频能量发射""雷电↔闪电"等近义用词，
+     * 又能排除"鸟撞冲击↔工作冲击和坠撞安全""防水性↔防爆性"这类仅个别字巧合的误配。
+     */
+    private static boolean cjkOverlapMatch(String a, String b) {
+        java.util.Set<Character> sa = cjkCharSet(a);
+        java.util.Set<Character> sb = cjkCharSet(b);
+        if (sa.size() < 2 || sb.size() < 2) return false;
+        int shared = 0;
+        for (Character c : sa) if (sb.contains(c)) shared++;
+        if (shared < 2) return false;
+        int minLen = Math.min(sa.size(), sb.size());
+        return shared >= Math.max(2, (int) Math.ceil(minLen * 0.8));
+    }
+
+    private static java.util.Set<Character> cjkCharSet(String s) {
+        java.util.Set<Character> set = new java.util.LinkedHashSet<>();
+        if (s == null) return set;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x4e00 && c <= 0x9fa5) set.add(c);
+        }
+        return set;
     }
 
     /**

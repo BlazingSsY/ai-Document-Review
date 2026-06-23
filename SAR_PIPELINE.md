@@ -1,6 +1,8 @@
 # 结构化精准审查（SAR）— 方案设计与调参说明
 
-SAR（Structure-Aware Review）是与 **全文逐章审查（CHUNK）**、**智能召回审查（RAG）** 并列的第三套审查管线，物理隔离、前端二选一进入。它面向 **强结构文档 + 缺失类为主的检查单**（如 DO-160G / QTP），把两条现有管线的共同短板——"定位/路由"——作为主攻点。
+SAR（Structure-Aware Review）是当前系统中与 **全文逐章审查（CHUNK）** 并列开放的结构化精准审查管线，物理隔离、前端可切换进入。它面向 **强结构文档 + 缺失类为主的检查单**（如 DO-160G / QTP），把传统逐章审查和历史 RAG 方案的共同短板——"定位/路由"——作为主攻点。
+
+> 说明：RAG 相关内容在本文中作为历史方案和技术对比保留；当前前端可操作审查入口以 CHUNK / SAR 为准。
 
 ---
 
@@ -157,4 +159,4 @@ docker compose up -d --build      # 跑 schema.sql 建 sar_* 表并编译
 # 4) ai_result.retrievalStats 含 regionMaxBlocks / consistencyFindings 等 SAR 专有字段
 ```
 
-调参与对比测试可参照 [RAG_RECALL_TUNING.md](RAG_RECALL_TUNING.md) 的方法，在一篇已知"应有 N 个问题"的文档上分别跑三条管线，统计命中/漏/误。
+调参与对比测试可参照 [RAG_RECALL_TUNING.md](RAG_RECALL_TUNING.md) 的方法，在一篇已知"应有 N 个问题"的文档上分别跑 CHUNK / SAR，统计命中/漏/误；如需复盘历史 RAG 效果，可在保留 RAG 入口的历史环境中单独对比。

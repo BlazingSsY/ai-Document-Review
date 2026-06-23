@@ -16,6 +16,7 @@ import com.aireview.util.MultiRuleParser;
 import com.aireview.util.RuleMetadata;
 import com.aireview.util.RuleParser;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -340,6 +341,7 @@ public class RuleService {
         if (rule == null) {
             throw new IllegalArgumentException("Rule not found: " + id);
         }
+        LocalDateTime originalUpdatedAt = rule.getUpdatedAt();
         if (req.getRuleName() != null && !req.getRuleName().isBlank()) rule.setRuleName(req.getRuleName().trim());
         if (req.getRuleCode() != null)     rule.setRuleCode(blankToNull(req.getRuleCode()));
         if (req.getRuleType() != null)     rule.setRuleType(blankToNull(req.getRuleType()));
@@ -347,8 +349,13 @@ public class RuleService {
         if (req.getSections() != null)     rule.setSections(emptyToNull(req.getSections()));
         if (req.getKeywords() != null)     rule.setKeywords(emptyToNull(req.getKeywords()));
         if (req.getDescription() != null)  rule.setDescription(blankToNull(req.getDescription()));
-        rule.setUpdatedAt(LocalDateTime.now());
         ruleMapper.updateById(rule);
+        // Metadata edits should not affect list ordering. updateById triggers the
+        // global updatedAt auto-fill, so restore the prior sort timestamp.
+        ruleMapper.update(null, new LambdaUpdateWrapper<Rule>()
+                .eq(Rule::getId, id)
+                .set(Rule::getUpdatedAt, originalUpdatedAt));
+        rule.setUpdatedAt(originalUpdatedAt);
         log.info("Rule {} metadata updated: code={}, type={}, sections={}, keywords={}",
                 id, rule.getRuleCode(), rule.getRuleType(), rule.getSections(),
                 rule.getKeywords());
