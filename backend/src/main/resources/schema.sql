@@ -581,6 +581,11 @@ INSERT INTO users (email, password_hash, name, role)
 VALUES ('admin_root', '$2a$10$ETZlQAgiNM5jbwyBXaG5tOcbZjq8g7Fl7DceMfUmajyOI0/4ASDB.', '项目主管', 'supervisor')
 ON CONFLICT (email) DO NOTHING;
 
+-- 内置质量规则编号统一：旧 R-BASIC-QUALITY → R-Q（存量库改名，避免与下方新种子重复创建）。
+UPDATE rule_checks SET check_code = replace(check_code, 'R-BASIC-QUALITY-', 'R-Q-')
+    WHERE check_code LIKE 'R-BASIC-QUALITY-%';
+UPDATE rules SET rule_code = 'R-Q' WHERE rule_code = 'R-BASIC-QUALITY';
+
 -- Seed the editable built-in "基础文字质量审查" rule + checks.
 -- ReviewService still injects this rule into every chapter prompt and enforces it
 -- (禁止 N/A、漏项补齐、不受 token 预算裁剪) in code; sourcing its preface and checks
@@ -607,40 +612,40 @@ BEGIN
         RETURNING id INTO v_library_id;
     END IF;
 
-    SELECT id INTO v_rule_id FROM rules WHERE rule_code = 'R-BASIC-QUALITY' LIMIT 1;
+    SELECT id INTO v_rule_id FROM rules WHERE rule_code = 'R-Q' LIMIT 1;
     IF v_rule_id IS NULL THEN
         INSERT INTO rules (rule_name, file_type, content, creator_id, library_id,
                            is_valid, rule_code, rule_type, document_type, description)
         VALUES ('基础文字质量审查', 'md',
 '仅审查当前章节的文字表达质量，不审查工程字段完整性、试验项目完整性、设备证书、试验条件、试验程序或标准符合性。
 章节内容简短或只有一行不是问题，不得因篇幅短判定不通过。
-下列检查项对当前章节始终适用，不得跳过；如无法确定请判待复核（Review）。',
-                v_creator_id, v_library_id, TRUE, 'R-BASIC-QUALITY', 'global', '通用',
+错别字/标点、语句通顺、术语一致等文字检查项对当前章节始终适用，不得跳过或判不适用，仅就当前章节文字本身审查。',
+                v_creator_id, v_library_id, TRUE, 'R-Q', 'global', '通用',
                 '系统内置基础文字质量审查规则，所有章节始终执行。')
         RETURNING id INTO v_rule_id;
     END IF;
 
     INSERT INTO rule_checks (rule_id, check_code, check_type, question, pass_criteria,
                              category, evidence_required, display_order, is_active)
-    SELECT v_rule_id, 'R-BASIC-QUALITY-C001', 'other',
+    SELECT v_rule_id, 'R-Q-C001', 'other',
            '是否存在错别字、漏字、多字、重复词或明显标点错误',
            '未发现错别字、漏字、多字、重复词或明显标点错误',
            '其他', TRUE, 1, TRUE
-    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-BASIC-QUALITY-C001');
+    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-Q-C001');
 
     INSERT INTO rule_checks (rule_id, check_code, check_type, question, pass_criteria,
                              category, evidence_required, display_order, is_active)
-    SELECT v_rule_id, 'R-BASIC-QUALITY-C002', 'other',
+    SELECT v_rule_id, 'R-Q-C002', 'other',
            '语句是否通顺，是否存在语序不当、语病或明显歧义',
            '语句通顺、语义明确，不存在语序不当、语病或明显歧义',
            '逻辑一致性', TRUE, 2, TRUE
-    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-BASIC-QUALITY-C002');
+    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-Q-C002');
 
     INSERT INTO rule_checks (rule_id, check_code, check_type, question, pass_criteria,
                              category, evidence_required, display_order, is_active)
-    SELECT v_rule_id, 'R-BASIC-QUALITY-C003', 'other',
+    SELECT v_rule_id, 'R-Q-C003', 'other',
            '本章节内术语、名称和称谓是否一致',
            '本章节内相同对象的术语、名称和称谓保持一致',
            '术语一致性', TRUE, 3, TRUE
-    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-BASIC-QUALITY-C003');
+    WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-Q-C003');
 END $basic_quality_seed$;

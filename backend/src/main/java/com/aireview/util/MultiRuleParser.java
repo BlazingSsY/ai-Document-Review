@@ -96,10 +96,102 @@ public class MultiRuleParser {
         if ("json".equalsIgnoreCase(fileType)) {
             return parseJson(originalFilename, content);
         }
-        // Markdown rules: 1 file = 1 rule (keep existing behaviour).
+        // 新版"审查内容/审查步骤/字段定义"模板：1 个 md 文件含多条规则，按 ## 标题逐条拆分，
+        // 且不生成原子检查项——规则正文原封不动整条上传给大模型，由模型对整条规则给单一结论。
+        if (isStepTemplateMarkdown(content)) {
+            List<ParsedRule> multi = parseStepTemplateMarkdown(originalFilename, content);
+            if (!multi.isEmpty()) {
+                return multi;
+            }
+        }
+        // 其余 Markdown 规则：1 file = 1 rule（保持原行为）。
         ParsedRule single = parseSingle(originalFilename, "md", content);
         List<ParsedRule> out = new ArrayList<>();
         out.add(single);
+        return out;
+    }
+
+    private static final Pattern STEP_TEMPLATE_H2 = Pattern.compile("^##\\s+(.+?)\\s*$");
+    private static final Pattern STEP_TEMPLATE_META =
+            Pattern.compile("^\\s*-\\s*([^：:]+)[：:]\\s*(.+?)\\s*$");
+
+    /**
+     * 识别"新版规则模板"：每条规则用二级标题分隔，块内含 {@code - 规则类型：} 元数据行，
+     * 并带 {@code ### 审查步骤} 小节。两个结构特征同时命中才触发，避免误伤旧版单规则 md
+     * （如基础文字质量审查文档，其正文也可能出现"规则编号："字样但不是本模板）。
+     */
+    static boolean isStepTemplateMarkdown(String content) {
+        if (content == null || content.isBlank()) return false;
+        return content.contains("### 审查步骤")
+                && Pattern.compile("(?m)^\\s*-\\s*规则类型[：:]").matcher(content).find();
+    }
+
+    /**
+     * 把"新版规则模板"markdown 按二级标题拆成多条规则。每个块：
+     * <ul>
+     *   <li>标题去掉前导序号（如 "1. "）作为规则名称；</li>
+     *   <li>从 {@code - 规则编号/规则类型/文档类型/规则说明/关键词} 行提取元数据；</li>
+     *   <li>规则正文为该块原文（去掉标题行与 {@code ---} 分隔线），原封不动用于审查 prompt；</li>
+     *   <li>不生成原子检查项（checks 为空）→ 审查时整条规则上传、由模型给单一结论。</li>
+     * </ul>
+     * 只有声明了"规则编号"的块才会被当作规则。
+     */
+    private static List<ParsedRule> parseStepTemplateMarkdown(String originalFilename, String content) {
+        List<ParsedRule> out = new ArrayList<>();
+        String[] lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n", -1);
+
+        List<Integer> heads = new ArrayList<>();
+        for (int i = 0; i < lines.length; i++) {
+            if (STEP_TEMPLATE_H2.matcher(lines[i]).matches()) heads.add(i);
+        }
+
+        for (int h = 0; h < heads.size(); h++) {
+            int start = heads.get(h);
+            int end = (h + 1 < heads.size()) ? heads.get(h + 1) : lines.length;
+
+            Matcher hm = STEP_TEMPLATE_H2.matcher(lines[start]);
+            if (!hm.matches()) continue;
+            String heading = hm.group(1).trim();
+            String name = heading.replaceFirst("^\\d+\\s*[.、)）]\\s*", "").trim();
+            if (name.isEmpty()) name = heading;
+
+            StringBuilder bodyBuf = new StringBuilder();
+            String ruleCode = null, ruleType = null, docType = null, description = null;
+            List<String> keywords = List.of();
+            for (int i = start + 1; i < end; i++) {
+                String line = lines[i];
+                if (line.trim().equals("---")) continue;
+                bodyBuf.append(line).append("\n");
+                Matcher mm = STEP_TEMPLATE_META.matcher(line);
+                if (mm.matches()) {
+                    String key = mm.group(1).trim();
+                    String val = mm.group(2).trim();
+                    switch (key) {
+                        case "规则编号" -> ruleCode = val;
+                        case "规则类型" -> ruleType = val;
+                        case "文档类型" -> docType = val;
+                        case "规则说明" -> description = val;
+                        case "关键词" -> keywords = parseStringArray(val);
+                        default -> { }
+                    }
+                }
+            }
+
+            // 没有规则编号的块不视为规则（前导说明、空块等）。
+            if (ruleCode == null || ruleCode.isBlank()) continue;
+            String body = bodyBuf.toString().trim();
+            if (body.isEmpty()) continue;
+
+            RuleMetadata meta = new RuleMetadata();
+            meta.setRuleCode(ruleCode);
+            String normType = normalizeRuleType(ruleType);
+            meta.setRuleType(normType == null ? RuleMetadata.TYPE_GLOBAL : normType);
+            if (docType != null && !docType.isBlank()) meta.setDocumentType(docType);
+            if (!keywords.isEmpty()) meta.setKeywords(keywords);
+
+            // checks 为空：整条规则原文上传，不做原子化拆分。
+            out.add(new ParsedRule(name, "md", body, meta, description, List.of()));
+        }
         return out;
     }
 

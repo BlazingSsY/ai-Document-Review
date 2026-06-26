@@ -114,6 +114,8 @@ public class ReviewService {
     private static final double CONVERGENCE_TEMPERATURE = 0.0;
     private static final double CONVERGENCE_TOP_P = 1.0;
     private static final int CONVERGENCE_MAX_TOKENS = 8192;
+    /** JSON 解析失败时的最大整体尝试次数（含首次）；每次换种子重新调用模型。 */
+    private static final int JSON_PARSE_MAX_ATTEMPTS = 3;
     /** 单切片 prompt 中规则部分的硬上限。超过则按 rule_code asc 截断。 */
     private static final int RULE_BUDGET_TOKENS = 6000;
 
@@ -892,12 +894,11 @@ public class ReviewService {
                 m.put("index", i + 1);
                 m.put("title", ch.getTitle().isBlank() ? "(前言/无标题)" : ch.getTitle());
                 m.put("estimatedTokens", ChunkUtils.estimateTokens(ch.getFullText()));
-                m.put("contentLength", ch.getContent().length());
-                m.put("content", ch.getContent());          // backward-compatible Markdown
-                m.put("plainText", ch.getPlainText());
+                // 精简调试导出：content/plainText/html/contentLength 均与 reviewMarkdown 或
+                // nodes 重复，故只保留送审文本 reviewMarkdown + 结构化 nodes（节点再去掉
+                // 与 text 重复的 markdown 及派生的 nodeIndex/headingLevel）。
                 m.put("reviewMarkdown", ch.getContent());
-                m.put("html", ch.getHtml());
-                m.put("nodes", DocumentSourceMapper.toStructuredNodes(ch.getNodes()));
+                m.put("nodes", slimDebugNodes(DocumentSourceMapper.toStructuredNodes(ch.getNodes())));
                 chapterList.add(m);
             }
             debug.put("chapters", chapterList);
@@ -910,8 +911,6 @@ public class ReviewService {
                 m.put("index", i + 1);
                 m.put("label", chunk.getLabel());
                 m.put("estimatedTokens", chunk.getEstimatedTokens());
-                m.put("contentLength", chunk.getContent().length());
-                m.put("content", chunk.getContent());       // backward-compatible Markdown
                 m.put("reviewMarkdown", chunk.getContent());
                 m.put("source", DocumentSourceMapper.toChunkSource(
                         chunk, i + 1, "debug_chunk"));
@@ -1381,6 +1380,17 @@ public class ReviewService {
      *   <li>返回的 Map 是本方法内新建的，调用方拿到独立实例。</li>
      * </ul>
      */
+    /** 调试切片导出用：剔除与 text 重复的 markdown，以及派生的 nodeIndex/headingLevel，缩小体积。 */
+    private static List<Map<String, Object>> slimDebugNodes(List<Map<String, Object>> nodes) {
+        if (nodes == null) return null;
+        for (Map<String, Object> n : nodes) {
+            n.remove("markdown");
+            n.remove("nodeIndex");
+            n.remove("headingLevel");
+        }
+        return nodes;
+    }
+
     private Map<String, Object> reviewSingleChunk(int chunkIdx, int totalChunks,
                                                    ChunkUtils.ChunkResult chunk,
                                                    RuleDispatcher.DispatchResult dispatch,
@@ -1424,19 +1434,31 @@ public class ReviewService {
         int sampleCount = 1;
         List<Map<String, Object>> samples = new ArrayList<>();
         for (int s = 0; s < sampleCount; s++) {
-            long seed = stableSeed(taskId, chunkIdx, s);
-            AiCallOptions options = buildConvergenceOptions(modelConfig, seed, minChecks);
-            String aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent, options);
-            Map<String, Object> parsed = tryParseAiJson(aiResponse);
+            Map<String, Object> parsed = null;
+            String aiResponse = null;
+            // JSON 解析失败重试：弱模型（如 Qwen3.6）对长/多规则章节常返回非法或被截断的 JSON。
+            // 解析在 HTTP 重试之后，原先一旦失败直接降级为“原始文本”，导致整章 R-Q 检查项被补成
+            // “模型未返回→待复核”。这里在解析失败时换种子重试（temperature=0 须换种子才能改变输出），
+            // 多数能拿到合法 JSON，显著减少无定位的待复核噪声。
+            for (int attempt = 1; attempt <= JSON_PARSE_MAX_ATTEMPTS && parsed == null; attempt++) {
+                long seed = stableSeed(taskId, chunkIdx, s) + (attempt - 1);
+                AiCallOptions options = buildConvergenceOptions(modelConfig, seed, minChecks);
+                aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent, options);
+                parsed = tryParseAiJson(aiResponse);
+                if (parsed == null) {
+                    log.warn("Chunk {} sample {} JSON 解析失败（第 {}/{} 次），响应长度={}",
+                            chunkNum, s + 1, attempt, JSON_PARSE_MAX_ATTEMPTS,
+                            aiResponse != null ? aiResponse.length() : 0);
+                }
+            }
             if (parsed == null) {
-                log.warn("Chunk {} sample {} AI 响应无法解析为 JSON，包装为原始文本 issue；长度={}",
-                        chunkNum, s + 1, aiResponse != null ? aiResponse.length() : 0);
+                log.warn("Chunk {} sample {} 多次解析仍失败，降级为原始文本 issue。", chunkNum, s + 1);
                 parsed = buildFallbackResult(chunk.getLabel(), aiResponse);
             }
             samples.add(parsed);
         }
         Map<String, Object> merged = mergeSamples(samples, chunk.getLabel());
-        if (qualityCheck) enrichBuiltInQualityChecks(merged);
+        if (qualityCheck) enrichBuiltInQualityChecks(merged, chunkHasFiguresOrTables(chunk.getContent()));
 
         Map<String, Object> chunkResult = new HashMap<>();
         chunkResult.put("chunk", chunkNum);
@@ -1493,7 +1515,8 @@ public class ReviewService {
             仅审查当前章节的文字表达质量，不审查工程字段完整性、试验项目完整性、
             设备证书、试验条件、试验程序或标准符合性。
             章节内容简短或只有一行不是问题，不得因篇幅短判定不通过。
-            下列三个检查项对当前章节始终适用，不得跳过；如无法确定请判待复核（Review）。
+            错别字/标点、语句通顺、术语一致等文字检查项对当前章节始终适用，不得跳过或判不适用，
+            仅就当前章节文字本身审查，不臆造问题。
             """;
 
     /**
@@ -1505,7 +1528,7 @@ public class ReviewService {
      * 裁剪) is unchanged and keyed on {@link RuleDispatcher#BASIC_QUALITY_RULE_CODE}.
      */
     private RuleParser.RuleEntry builtInQualityRule() {
-        Rule dbRule = loadEditableBasicQualityRule();
+        Rule dbRule = loadEditableRule(RuleDispatcher.BASIC_QUALITY_RULE_CODE);
         String name = RuleDispatcher.BASIC_QUALITY_RULE_NAME;
         String preface = BASIC_QUALITY_DEFAULT_PREFACE;
         if (dbRule != null) {
@@ -1529,7 +1552,7 @@ public class ReviewService {
      * enforcement in {@link #enrichBuiltInQualityChecks(Map)}.
      */
     private List<RuleParser.CheckEntry> basicQualityChecks() {
-        Rule dbRule = loadEditableBasicQualityRule();
+        Rule dbRule = loadEditableRule(RuleDispatcher.BASIC_QUALITY_RULE_CODE);
         if (dbRule != null && dbRule.getId() != null) {
             try {
                 List<RuleCheck> dbChecks = ruleCheckMapper.findActiveByRuleId(dbRule.getId());
@@ -1543,13 +1566,13 @@ public class ReviewService {
         return defaultBasicQualityChecks();
     }
 
-    /** Load the editable built-in rule row by rule_code; null when absent or on error. */
-    private Rule loadEditableBasicQualityRule() {
+    /** Load an editable built-in rule row by rule_code; null when absent or on error. */
+    private Rule loadEditableRule(String ruleCode) {
         try {
-            Long id = ruleMapper.findIdByRuleCode(RuleDispatcher.BASIC_QUALITY_RULE_CODE);
+            Long id = ruleMapper.findIdByRuleCode(ruleCode);
             return id == null ? null : ruleMapper.selectById(id);
         } catch (Exception e) {
-            log.warn("加载可编辑基础文字质量规则失败，回退内置默认：{}", e.getMessage());
+            log.warn("加载可编辑内置规则 {} 失败，回退内置默认：{}", ruleCode, e.getMessage());
             return null;
         }
     }
@@ -1573,11 +1596,35 @@ public class ReviewService {
                         "本章节内术语、名称和称谓是否一致",
                         "本章节内相同对象的术语、名称和称谓保持一致",
                         "术语一致性",
+                        true),
+                new RuleParser.CheckEntry(
+                        RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C004",
+                        "图号、表号是否全文唯一不重复、编号格式统一？",
+                        "编号唯一且格式统一即 Pass；存在重复编号或格式不统一则 Fail。",
+                        "格式",
+                        true),
+                new RuleParser.CheckEntry(
+                        RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C005",
+                        "正文引用的图号/表号是否真实存在，且引用编号与图表实际编号一致、表述统一（无图1/图一混用）？",
+                        "引用均真实且编号表述一致即 Pass；引用不存在的编号或表述混乱则 Fail。",
+                        "逻辑一致性",
+                        true),
+                new RuleParser.CheckEntry(
+                        RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C006",
+                        "图表编号是否按出现顺序递增、不跳号、不倒序？",
+                        "顺序合理即 Pass；跳号或倒序则 Fail。",
+                        "逻辑一致性",
+                        true),
+                new RuleParser.CheckEntry(
+                        RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C007",
+                        "是否所有图表均被正文引用（无未被引用的图表）？",
+                        "图表均被引用即 Pass；存在未被引用的图表则 Fail。",
+                        "完整性",
                         true));
     }
 
     @SuppressWarnings("unchecked")
-    private void enrichBuiltInQualityChecks(Map<String, Object> result) {
+    private void enrichBuiltInQualityChecks(Map<String, Object> result, boolean hasFigures) {
         List<Map<String, Object>> checks = new ArrayList<>();
         if (result.get("check_results") instanceof List<?> rawChecks) {
             for (Object item : rawChecks) {
@@ -1600,7 +1647,7 @@ public class ReviewService {
             }
             RuleParser.CheckEntry entry = metadata.get(checkCode);
             if (entry == null) continue;
-            enrichBuiltInQualityCheck(check, entry);
+            enrichBuiltInQualityCheck(check, entry, hasFigures);
         }
 
         for (RuleParser.CheckEntry entry : metadata.values()) {
@@ -1615,24 +1662,50 @@ public class ReviewService {
             missing.put("missing_items", new ArrayList<>());
             missing.put("suggestion", "");
             missing.put("confidence", "needs_review");
-            enrichBuiltInQualityCheck(missing, entry);
+            enrichBuiltInQualityCheck(missing, entry, hasFigures);
             checks.add(missing);
         }
         result.put("check_results", checks);
     }
 
     private void enrichBuiltInQualityCheck(Map<String, Object> check,
-                                           RuleParser.CheckEntry entry) {
+                                           RuleParser.CheckEntry entry,
+                                           boolean hasFigures) {
         check.put("ruleName", RuleDispatcher.BASIC_QUALITY_RULE_NAME);
         check.put("ruleDescription", "所有章节均执行基础文字质量检查；基础章节不执行具体业务规则。");
         check.put("passCriteria", entry.passCriteria);
         check.putIfAbsent("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
         check.putIfAbsent("check_question", entry.question);
+        // 图表类检查项（图号/表号唯一性、引用、顺序、完整性）在“本章无图表”时空转：
+        // 直接判通过（本章无图表即无图表一致性问题），不再转待复核，避免大量无定位噪声。
+        if (isFigureCheck(entry) && !hasFigures) {
+            check.put("status", "Pass");
+            check.put("confidence", "high");
+            check.put("reason", "本章无图号、表号，图表一致性检查不适用，自动判通过。");
+            check.put("evidence", "");
+            check.put("missing_items", new ArrayList<>());
+            check.put("suggestion", "");
+            return;
+        }
         if ("N/A".equals(normalizeCheckStatus(check.get("status")))) {
             check.put("status", "Review");
             check.put("confidence", "needs_review");
             check.put("reason", "基础文字质量检查始终适用，模型返回“不适用”，已转为待复核。");
         }
+    }
+
+    /** 图表类检查项识别：问题文本含“图”或“表号”即视为图号/表号相关（R-Q 的 C004~C007）。 */
+    private static boolean isFigureCheck(RuleParser.CheckEntry entry) {
+        String q = (entry == null || entry.question == null) ? "" : entry.question;
+        return q.contains("图") || q.contains("表号");
+    }
+
+    /** 本章是否含图表：图片占位、Markdown 表格分隔行、或“图N/表N”题注或引用。 */
+    private static boolean chunkHasFiguresOrTables(String content) {
+        if (content == null || content.isBlank()) return false;
+        if (content.contains("[图片")) return true;
+        if (content.contains("| ---") || content.contains("|---")) return true;
+        return java.util.regex.Pattern.compile("[图表]\\s*\\d").matcher(content).find();
     }
 
     /**
@@ -2017,7 +2090,58 @@ public class ReviewService {
             }
         }
 
+        // 5) Salvage a truncated object (输出被 max_tokens 截断、花括号未闭合)：裁到最后一个
+        //    完整元素，再补齐未闭合的容器。仅当补全后能成功解析才返回，否则维持 null（只增不减）。
+        Map<String, Object> salvaged = salvageTruncatedJson(text);
+        if (salvaged != null) return salvaged;
+
         return null;
+    }
+
+    /** 抢救被截断的 JSON：裁剪到最后一个已闭合的 } / ]，再按未闭合栈补齐结尾括号后尝试解析。 */
+    private Map<String, Object> salvageTruncatedJson(String text) {
+        int start = text.indexOf('{');
+        if (start < 0) return null;
+        String s = text.substring(start);
+        int lastCloser = -1;
+        boolean inStr = false, esc = false;
+        int depth = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (esc) { esc = false; continue; }
+            if (inStr) {
+                if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+                continue;
+            }
+            if (c == '"') inStr = true;
+            else if (c == '{' || c == '[') depth++;
+            else if (c == '}' || c == ']') { depth--; lastCloser = i; }
+        }
+        if (depth <= 0 || lastCloser < 0) return null; // 未截断或无可裁剪点
+        String head = s.substring(0, lastCloser + 1);
+        // 重新扫描 head，按顺序记录仍未闭合的容器，逆序补齐。
+        java.util.Deque<Character> open = new java.util.ArrayDeque<>();
+        inStr = false; esc = false;
+        for (int i = 0; i < head.length(); i++) {
+            char c = head.charAt(i);
+            if (esc) { esc = false; continue; }
+            if (inStr) {
+                if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+                continue;
+            }
+            if (c == '"') inStr = true;
+            else if (c == '{' || c == '[') open.push(c);
+            else if (c == '}' || c == ']') { if (!open.isEmpty()) open.pop(); }
+        }
+        StringBuilder sb = new StringBuilder(head);
+        while (!open.isEmpty()) sb.append(open.pop() == '{' ? '}' : ']');
+        Map<String, Object> parsed = parseJsonSilently(sb.toString());
+        if (parsed != null) {
+            log.warn("已从截断的 AI 响应中抢救出部分 JSON（裁剪+补齐括号），长度 {}→{}", s.length(), sb.length());
+        }
+        return parsed;
     }
 
     @SuppressWarnings("unchecked")

@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public class RuleDispatcher {
 
     public static final String BASIC_QUALITY_RULE_NAME = "基础文字质量审查";
-    public static final String BASIC_QUALITY_RULE_CODE = "R-BASIC-QUALITY";
+    public static final String BASIC_QUALITY_RULE_CODE = "R-Q";
     private static final Pattern LEADING_CHAPTER_NUMBER = Pattern.compile(
             "^\\s*(?:第\\s*)?(\\d+)(?:\\s*章)?(?:\\s|[.．、:：-]|$)");
 

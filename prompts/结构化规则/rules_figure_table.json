@@ -1,0 +1,62 @@
+{
+  "_metadata": {
+    "project_name": "智能文件审查系统",
+    "version": "1.0.0",
+    "scope": "通用-文档级",
+    "description": "图表（图号/表号）一致性文档级规则。由原内置质量规则 R-Q 的 C004~C007 及通用规则 G-16-pic_sheet（global，逐章）迁移而来，改为 document_specific：在文档级审查中基于全文大纲与正文整体判一次，避免逐章空转产生大量无定位的待复核。若全文无任何图、表，则各项判通过。"
+  },
+  "version": "1.0",
+  "source_type": "manual",
+  "source_file": "rules_figure_table.json",
+  "rules": [
+    {
+      "rule_code": "G-FT",
+      "name": "图表编号与引用一致性（文档级）",
+      "rule_type": "document_specific",
+      "document_type": "通用",
+      "description": "文档级规则：基于全文章节大纲与正文，跨章节整体核查图号、表号的唯一性、引用真实性与表述一致、编号顺序、引用完整性。仅在文档级审查执行一次，不逐章重复。全文若无任何图、表，各检查项判通过。",
+      "applies_to": {
+        "sections": [],
+        "keywords": ["图号", "表号", "图表引用", "图表编号"]
+      },
+      "checks": [
+        {
+          "check_code": "G-FT-C001",
+          "check_type": "consistency",
+          "question": "全文的图号、表号是否唯一不重复、编号格式统一（不混用“图1/图一/图 1”等）？",
+          "pass_criteria": "全文图号、表号各自唯一且编号格式统一即 Pass；存在重复编号或格式混用则 Fail；全文无图无表则 Pass。",
+          "category": "格式",
+          "evidence_required": true,
+          "display_order": 1
+        },
+        {
+          "check_code": "G-FT-C002",
+          "check_type": "consistency",
+          "question": "正文引用的图号/表号是否在全文中真实存在，且引用编号与图表实际编号一致、表述统一（无“图1/图一”混用）？",
+          "pass_criteria": "引用均真实存在且编号表述一致即 Pass；引用了不存在的编号或表述不一致则 Fail；全文无图无表且无引用则 Pass。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 2
+        },
+        {
+          "check_code": "G-FT-C003",
+          "check_type": "consistency",
+          "question": "图号、表号是否按其在全文中出现的顺序递增、不跳号、不倒序？",
+          "pass_criteria": "编号按出现顺序递增、连续即 Pass；出现跳号或倒序则 Fail；全文无图无表则 Pass。",
+          "category": "逻辑一致性",
+          "evidence_required": true,
+          "display_order": 3
+        },
+        {
+          "check_code": "G-FT-C004",
+          "check_type": "presence",
+          "question": "全文中所有图、表是否均被正文引用（无未被任何正文引用的孤立图表）？",
+          "pass_criteria": "每个图、表都有正文引用即 Pass；存在未被引用的图表则 Fail；全文无图无表则 Pass。",
+          "category": "完整性",
+          "evidence_required": true,
+          "display_order": 4
+        }
+      ]
+    }
+  ]
+}

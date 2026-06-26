@@ -28,6 +28,12 @@ public class RuleLibraryService {
     private final RuleFolderMapper ruleFolderMapper;
     private final com.aireview.repository.UserRuleAssignmentMapper userRuleAssignmentMapper;
 
+    /**
+     * 系统内置规则库名（schema.sql 播种，承载内置「基础文字质量审查」R-BASIC-QUALITY）。
+     * 该库由全文质量检查内置注入、不走规则库/场景路由，故对用户列表隐藏，避免误删/误用。
+     */
+    private static final String BUILTIN_LIBRARY_NAME = "系统内置规则";
+
     public RuleLibraryDTO createLibrary(String name, String description, Long creatorId) {
         RuleLibrary lib = new RuleLibrary();
         lib.setName(name);
@@ -71,6 +77,7 @@ public class RuleLibraryService {
             }
             query.in(RuleLibrary::getId, assignedIds);
         }
+        query.ne(RuleLibrary::getName, BUILTIN_LIBRARY_NAME); // 隐藏系统内置规则库
         query.orderByDesc(RuleLibrary::getUpdatedAt);
         Page<RuleLibrary> result = ruleLibraryMapper.selectPage(pageParam, query);
         List<RuleLibraryDTO> records = result.getRecords().stream().map(this::toDTO).toList();
@@ -79,6 +86,7 @@ public class RuleLibraryService {
 
     public List<RuleLibraryDTO> listAllLibraries() {
         LambdaQueryWrapper<RuleLibrary> query = new LambdaQueryWrapper<>();
+        query.ne(RuleLibrary::getName, BUILTIN_LIBRARY_NAME); // 隐藏系统内置规则库
         query.orderByDesc(RuleLibrary::getUpdatedAt);
         return ruleLibraryMapper.selectList(query).stream().map(this::toDTO).toList();
     }

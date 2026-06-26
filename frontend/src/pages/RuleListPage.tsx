@@ -1108,14 +1108,14 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
             <Form.Item
               name="content"
               label="规则正文"
-              extra="规则的文本主体（.md/.json 内容）。全文逐章审查直接据此审查；智能召回 / 结构化精准审查以下方的原子检查项为准。"
+              extra="规则的文本主体（.md/.json 内容）。全文逐章审查直接据此审查；智能召回 / 结构化审查以下方的原子检查项为准。"
             >
               <Input.TextArea rows={8} placeholder="规则正文内容" />
             </Form.Item>
 
             <Typography.Title level={5} style={{ marginBottom: 0 }}>原子检查项</Typography.Title>
             <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-              每条 = 一个独立是/否判定；智能召回 / 结构化精准审查按这些检查项逐项判定 通过 / 不通过 / 待复核。
+              每条 = 一个独立是/否判定；智能召回 / 结构化审查按这些检查项逐项判定 通过 / 不通过 / 待复核。
             </Typography.Paragraph>
 
             <Form.List name="checks">

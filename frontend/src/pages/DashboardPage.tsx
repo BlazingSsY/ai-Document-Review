@@ -507,7 +507,7 @@ function DashboardPage() {
               options={[
                 { label: '全部审查方式', value: 'ALL' },
                 { label: '全文逐章审查', value: 'CHUNK' },
-                { label: '结构化精准审查', value: 'SAR' },
+                { label: '结构化审查', value: 'SAR' },
               ]}
             />
             <Select
@@ -562,7 +562,7 @@ function DashboardPage() {
             style={{ textAlign: 'center', cursor: 'pointer' }}
           >
             <AimOutlined style={{ fontSize: 32, color: '#389e0d', marginBottom: 8 }} />
-            <div style={{ fontWeight: 500 }}>结构化精准审查 · 规则与场景</div>
+            <div style={{ fontWeight: 500 }}>结构化审查 · 规则与场景</div>
             <div style={{ color: '#8c8c8c', fontSize: 13 }}>结构路由 + 区域取证 + 一致性</div>
           </Card>
         </Col>
@@ -597,7 +597,7 @@ function DashboardPage() {
             },
             {
               key: 'SAR',
-              label: <span><AimOutlined /> 结构化精准审查</span>,
+              label: <span><AimOutlined /> 结构化审查</span>,
             },
           ]}
         />
@@ -606,7 +606,7 @@ function DashboardPage() {
             type="info"
             showIcon
             message="请先在上方选择审查方式"
-            description="全文逐章审查（按章节切片）、结构化精准审查（结构路由 + 区域取证 + 一致性）两条管线使用各自独立的规则库与场景，互不可见。"
+            description="全文逐章审查（按章节切片）、结构化审查（结构路由 + 区域取证 + 一致性）两条管线使用各自独立的规则库与场景，互不可见。"
           />
         )}
 
@@ -679,7 +679,7 @@ function DashboardPage() {
                 label={
                   <Space size={6}>
                     全文质量检查
-                    <Tooltip title="对全文每个章节执行基础文字质量审查：错别字/漏字/多字、语序不当/语病、章节内术语一致性。关闭后，全文逐章审查将跳过仅有基础质量、未命中业务规则的章节，速度更快、更省 token；但不再做全文文字质量检查。（当前仅全文逐章审查执行该检查）">
+                    <Tooltip title="对全文每个章节执行基础文字质量审查：错别字/漏字/多字、语序不当/语病、章节内术语一致性、图号/表号引用一致性。关闭后，全文逐章审查将跳过仅有基础质量、未命中业务规则的章节，速度更快、更省 token；但不再做全文文字质量检查。（当前仅全文逐章审查执行该检查）">
                       <span style={{ color: '#1677ff', cursor: 'help', fontSize: 12 }}>说明</span>
                     </Tooltip>
                   </Space>
@@ -689,7 +689,7 @@ function DashboardPage() {
                   <Switch checked={qualityCheckEnabled} onChange={setQualityCheckEnabled} />
                   <Typography.Text type="secondary">
                     {qualityCheckEnabled
-                      ? '已启用：逐章执行错别字/语病/术语一致性等文字质量审查'
+                      ? '已启用：逐章执行错别字/语病/术语一致性/图表引用一致性等文字质量审查'
                       : '已关闭：跳过纯文字质量章节，仅跑命中的业务规则（更快）'}
                   </Typography.Text>
                 </Space>

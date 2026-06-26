@@ -14,6 +14,7 @@ import {
   ProfileOutlined,
   BookOutlined,
   AimOutlined,
+  FundOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import useAuthStore from '../store/authStore';
@@ -38,6 +39,7 @@ function AppLayout() {
 
   const role = user?.role || 'user';
   const isSupervisor = role === 'supervisor';
+  const isManager = role === 'supervisor' || role === 'admin';
 
   // Global log subscriber: keep accumulating WebSocket-driven log entries even
   // when the user is NOT on the workspace page, so returning later via 查看详情
@@ -101,13 +103,14 @@ function AppLayout() {
     {
       key: 'sar-section',
       icon: <AimOutlined />,
-      label: '结构化精准审查',
+      label: '结构化审查',
       children: [
         { key: '/sar/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
         { key: '/sar/rules', icon: <ProfileOutlined />, label: '审查规则' },
       ],
     },
     { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
+    ...(isManager ? [{ key: '/analytics', icon: <FundOutlined />, label: '数据看板' }] : []),
     ...(isSupervisor ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }] : []),
   ];
 

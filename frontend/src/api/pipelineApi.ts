@@ -23,7 +23,7 @@ export type { ReviewMode } from './reviews';
 /** 显示给用户看的管线名称。 */
 export const PIPELINE_LABEL: Record<ReviewMode, string> = {
   CHUNK: '全文逐章审查',
-  SAR: '结构化精准审查',
+  SAR: '结构化审查',
 };
 
 /** UI 上为每条管线分配一个稳定的色彩，前端的 Tag / 列表色条共享。 */

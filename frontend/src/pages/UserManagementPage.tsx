@@ -224,7 +224,7 @@ function UserManagementPage() {
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Radio.Group value={assignMode} onChange={(e) => handleSwitchAssignMode(e.target.value)}>
             <Radio.Button value="CHUNK">全文逐章审查</Radio.Button>
-            <Radio.Button value="SAR">结构化精准审查</Radio.Button>
+            <Radio.Button value="SAR">结构化审查</Radio.Button>
           </Radio.Group>
           <Alert
             type="info"
