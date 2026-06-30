@@ -36,6 +36,14 @@ public class RuleDispatcher {
     public static final String BASIC_QUALITY_RULE_CODE = "R-Q";
     private static final Pattern LEADING_CHAPTER_NUMBER = Pattern.compile(
             "^\\s*(?:第\\s*)?(\\d+)(?:\\s*章)?(?:\\s|[.．、:：-]|$)");
+    private static final List<String> EXPLICIT_TEST_SUBJECT_KEYWORDS = List.of(
+            "温度和高度", "低温", "高温", "高度", "温度变化",
+            "湿热", "工作冲击", "坠撞安全", "冲击", "振动", "加速度",
+            "爆炸减压", "防水", "流体敏感性", "流体污染", "砂尘",
+            "霉菌", "盐雾", "磁影响", "磁效应",
+            "电源输入", "电压尖峰", "音频传导", "声学噪声", "感应信号敏感性",
+            "射频敏感性", "射频发射", "雷电", "闪电", "静电放电", "静电",
+            "结冰", "可燃性", "火焰", "风车", "电磁");
 
     private RuleDispatcher() {
     }
@@ -207,6 +215,7 @@ public class RuleDispatcher {
 
     public static boolean isBasicReviewOnlyChapter(String chapterTitle, int basicOnlyMaxChapter) {
         if (basicOnlyMaxChapter <= 0 || chapterTitle == null || chapterTitle.isBlank()) return false;
+        if (containsExplicitTestSubject(chapterTitle)) return false;
         Matcher matcher = LEADING_CHAPTER_NUMBER.matcher(chapterTitle);
         if (!matcher.find()) return false;
         try {
@@ -215,6 +224,16 @@ public class RuleDispatcher {
         } catch (NumberFormatException ignored) {
             return false;
         }
+    }
+
+    private static boolean containsExplicitTestSubject(String chapterTitle) {
+        String title = chapterTitle.toLowerCase(Locale.ROOT);
+        for (String keyword : EXPLICIT_TEST_SUBJECT_KEYWORDS) {
+            if (title.contains(keyword.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** All document-level rules — typically run once on the aggregated summary. */

@@ -32,7 +32,9 @@
       "Bash(java -version)",
       "Bash(/usr/local/bin/docker compose:*)",
       "Bash(python *)",
-      "Read(//d/VS Code/Project/样例文件/7型QTP案例/样例设备QTP/备份仪表-航电系统//**)"
+      "Read(//d/VS Code/Project/样例文件/7型QTP案例/样例设备QTP/备份仪表-航电系统//**)",
+      "Read(//d/Work/9.AI/1.Document_Review/3.Code/大纲&检查单文件/**)",
+      "Read(//d/Work/9.AI/1.Document_Review/**)"
     ]
   }
 }

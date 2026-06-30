@@ -58,6 +58,30 @@ class RuleDispatcherTest {
         assertThat(RuleDispatcher.isBasicReviewOnlyChapter("7 试验设备描述", 6)).isFalse();
     }
 
+    @Test
+    void basicPrefixDoesNotHideExplicitTestSubjectChapters() {
+        assertThat(RuleDispatcher.isBasicReviewOnlyChapter("1 磁效应试验", 6)).isFalse();
+        assertThat(RuleDispatcher.isBasicReviewOnlyChapter("2 磁影响试验", 6)).isFalse();
+        assertThat(RuleDispatcher.isBasicReviewOnlyChapter("3 霉菌试验", 6)).isFalse();
+        assertThat(RuleDispatcher.isBasicReviewOnlyChapter("4 振动试验", 6)).isFalse();
+        assertThat(RuleDispatcher.isBasicReviewOnlyChapter("5 电源输入试验", 6)).isFalse();
+    }
+
+    @Test
+    void explicitTestSubjectInBasicPrefixStillReceivesMatchingRules() {
+        RuleDispatcher.PreparedRule magneticRule = preparedRule(
+                "DO160G-15", RuleMetadata.TYPE_SECTION_SPECIFIC, List.of("磁效应"));
+
+        RuleDispatcher.DispatchResult result = RuleDispatcher.dispatchForChunk(
+                "1 磁效应试验", "磁效应试验正文", List.of(magneticRule), 6);
+
+        assertThat(result.getAppliedRuleNames()).containsExactly("DO160G-15");
+        assertThat(result.getMatchTraces())
+                .singleElement()
+                .satisfies(trace -> assertThat(trace.get("reason"))
+                        .isEqualTo("section_specific"));
+    }
+
     private RuleDispatcher.PreparedRule preparedRule(
             String code,
             String type,

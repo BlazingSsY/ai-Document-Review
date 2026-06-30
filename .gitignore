@@ -39,3 +39,15 @@ __MACOSX
 .idea
 .vscode
 docker/volumes
+
+# Office 临时锁文件
+~$*
+*.tmp
+*.temp
+
+# 审查生成的输出产物（不需要提交到代码库可开启）
+/output/
+
+# 测试用 Office 文档（若规则仅保留 md/json，可忽略 docx/xlsx）
+*.docx
+*.xlsx
