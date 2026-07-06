@@ -9,7 +9,7 @@ import {
   ArrowLeftOutlined, FileTextOutlined, EditOutlined, FormOutlined, MinusCircleOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { Rule, RuleLibrary, RuleFolder, RuleUploadConflict } from '../api/rules';
+import type { Rule, RuleLibrary, RuleFolder } from '../api/rules';
 import {
   getRuleApi, PIPELINE_LABEL, PIPELINE_COLOR, type ReviewMode,
 } from '../api/pipelineApi';
@@ -69,7 +69,6 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
     getRuleList, getRuleDetail, uploadRule, importChecklist, updateRuleMetadata, updateRuleContent, deleteRule,
     getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
     getFolderList, createFolder, updateFolder, deleteFolder,
-    getUploadConflicts,
   } = ruleApi;
   const pipelineLabel = PIPELINE_LABEL[reviewMode];
   const pipelineColor = PIPELINE_COLOR[reviewMode];
@@ -299,17 +298,11 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
     const isExcel = /\.(xlsx|xls)$/i.test(uploadFile.name);
     setUploading(true);
     try {
-      const shouldReplace = await confirmUploadConflictIfNeeded(uploadFile.name, isExcel);
-      if (shouldReplace === null) {
-        message.info('已保留已有规则，未上传新文件');
-        return;
-      }
       const formData = new FormData();
       formData.append('file', uploadFile);
       formData.append('libraryId', String(currentLibrary.id));
       // 进入具体文件夹时上传归入该文件夹；未分类视图不带 folderId（落到未分类）。
       if (currentFolder) formData.append('folderId', String(currentFolder.id));
-      if (shouldReplace) formData.append('replaceExisting', 'true');
       if (isExcel) {
         const res = await importChecklist(formData);
         const result = res.data.data;
@@ -328,50 +321,6 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
       fetchRules();
     } catch { /* handled */ }
     finally { setUploading(false); }
-  };
-
-  const confirmUploadConflictIfNeeded = async (
-    fileName: string,
-    checklist: boolean,
-  ): Promise<boolean | null> => {
-    const res = await getUploadConflicts({
-      fileName,
-      checklist,
-      libraryId: currentLibrary?.id,
-      folderId: currentFolder?.id,
-    });
-    const conflicts = res.data.data || [];
-    if (conflicts.length === 0) return false;
-    return new Promise((resolve) => {
-      Modal.confirm({
-        title: '发现同名规则文件',
-        width: 620,
-        okText: '用新文件替换',
-        cancelText: '保留已有',
-        okButtonProps: { danger: true },
-        content: (
-          <div>
-            <Paragraph style={{ marginBottom: 8 }}>
-              当前位置已存在由同名文件导入的规则。请选择保留已有规则，或删除冲突规则后导入新文件。
-            </Paragraph>
-            <Card size="small" style={{ background: '#fafafa' }}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                {conflicts.map((conflict: RuleUploadConflict) => (
-                  <div key={conflict.id}>
-                    <Text strong>{conflict.ruleName}</Text>
-                    {conflict.ruleCode && <Text type="secondary">（{conflict.ruleCode}）</Text>}
-                    <br />
-                    <Text type="secondary">来源文件：{conflict.sourceFile}</Text>
-                  </div>
-                ))}
-              </Space>
-            </Card>
-          </div>
-        ),
-        onOk: () => resolve(true),
-        onCancel: () => resolve(null),
-      });
-    });
   };
 
   const openEdit = (rule: Rule) => {

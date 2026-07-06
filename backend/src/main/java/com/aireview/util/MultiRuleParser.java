@@ -113,7 +113,7 @@ public class MultiRuleParser {
 
     private static final Pattern STEP_TEMPLATE_H2 = Pattern.compile("^##\\s+(.+?)\\s*$");
     private static final Pattern STEP_TEMPLATE_META =
-            Pattern.compile("^\\s*-\\s*([^：:]+)[：:]\\s*(.+?)\\s*$");
+            Pattern.compile("^\\s*-\\s*(?:\\*\\*)?\\s*([^：:*]+?)\\s*(?:\\*\\*)?\\s*[：:]\\s*(.+?)\\s*$");
 
     /**
      * 识别"新版规则模板"：每条规则用二级标题分隔，块内含 {@code - 规则类型：} 元数据行，
@@ -123,7 +123,9 @@ public class MultiRuleParser {
     static boolean isStepTemplateMarkdown(String content) {
         if (content == null || content.isBlank()) return false;
         return content.contains("### 审查步骤")
-                && Pattern.compile("(?m)^\\s*-\\s*规则类型[：:]").matcher(content).find();
+                && Pattern.compile("(?m)^\\s*-\\s*(?:\\*\\*)?\\s*规则类型\\s*(?:\\*\\*)?\\s*[：:]")
+                        .matcher(content)
+                        .find();
     }
 
     /**

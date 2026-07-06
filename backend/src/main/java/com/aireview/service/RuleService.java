@@ -30,7 +30,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -118,37 +122,112 @@ public class RuleService {
             Files.writeString(savedPath, content, StandardCharsets.UTF_8);
         }
 
-        // Split into one-or-more parsed rules.
+        // Split into one-or-more parsed rules, then upsert each parsed rule independently.
+        // Re-uploading a file should merge with the existing library: same rule_code wins,
+        // rule name is the fallback key, and new rules are appended.
         List<MultiRuleParser.ParsedRule> parsed = MultiRuleParser.parse(originalFilename, fileType, content);
-        handleUploadConflicts(originalFilename, libraryId, folderId, replaceExisting);
+        List<Rule> existingRules = findExistingRulesInScope(libraryId, folderId);
+        Map<String, Rule> existingByCode = indexByRuleCode(existingRules);
+        Map<String, Rule> existingByName = indexByRuleName(existingRules);
+        Set<Long> updatedExistingIds = new HashSet<>();
         List<RuleDTO> out = new ArrayList<>();
         for (MultiRuleParser.ParsedRule pr : parsed) {
-            Rule rule = new Rule();
-            rule.setRuleName(pr.getName());
-            rule.setFileType(pr.getFileType());
-            rule.setContent(pr.getContent());
-            rule.setCreatorId(creatorId);
-            rule.setLibraryId(libraryId);
-            rule.setFolderId(folderId);
-            rule.setUpdatedAt(LocalDateTime.now());
-            rule.setIsValid(true);
-            rule.setSourceFile(originalFilename);
-            RuleMetadata meta = pr.getMetadata();
-            if (meta != null) {
-                rule.setRuleCode(meta.getRuleCode());
-                rule.setRuleType(meta.getRuleType());
-                rule.setDocumentType(meta.getDocumentType());
-                rule.setSections(emptyToNull(meta.getSections()));
-                rule.setKeywords(emptyToNull(meta.getKeywords()));
+            Rule rule = findRuleToUpdate(pr, existingByCode, existingByName, updatedExistingIds);
+            boolean update = rule != null;
+            if (!update) {
+                rule = new Rule();
             }
-            rule.setDescription(pr.getDescription());
-            ruleMapper.insert(rule);
+            applyParsedRule(rule, pr, originalFilename, creatorId, libraryId, folderId);
+            if (update) {
+                ruleMapper.updateById(rule);
+                ruleCheckMapper.delete(new LambdaQueryWrapper<RuleCheck>().eq(RuleCheck::getRuleId, rule.getId()));
+                updatedExistingIds.add(rule.getId());
+            } else {
+                ruleMapper.insert(rule);
+            }
             persistChecks(rule.getId(), pr.getChecks());
             out.add(toDTO(rule));
         }
-        log.info("Rule file '{}' expanded into {} rule row(s) (creator={}, library={})",
-                originalFilename, out.size(), creatorId, libraryId);
+        log.info("Rule file '{}' upserted into {} rule row(s) (creator={}, library={}, folder={}, replaceExistingIgnored={})",
+                originalFilename, out.size(), creatorId, libraryId, folderId, replaceExisting);
         return out;
+    }
+
+    private List<Rule> findExistingRulesInScope(Long libraryId, Long folderId) {
+        LambdaQueryWrapper<Rule> query = new LambdaQueryWrapper<>();
+        query.eq(Rule::getIsValid, true)
+                .select(Rule::getId, Rule::getRuleName, Rule::getRuleCode, Rule::getSourceFile,
+                        Rule::getLibraryId, Rule::getFolderId, Rule::getUpdatedAt);
+        if (libraryId == null) {
+            query.isNull(Rule::getLibraryId);
+        } else {
+            query.eq(Rule::getLibraryId, libraryId);
+        }
+        if (folderId == null) {
+            query.isNull(Rule::getFolderId);
+        } else {
+            query.eq(Rule::getFolderId, folderId);
+        }
+        query.orderByAsc(Rule::getId);
+        return ruleMapper.selectList(query);
+    }
+
+    private Map<String, Rule> indexByRuleCode(List<Rule> rules) {
+        Map<String, Rule> out = new LinkedHashMap<>();
+        for (Rule rule : rules) {
+            String key = normalizeKey(rule.getRuleCode());
+            if (key != null) out.putIfAbsent(key, rule);
+        }
+        return out;
+    }
+
+    private Map<String, Rule> indexByRuleName(List<Rule> rules) {
+        Map<String, Rule> out = new LinkedHashMap<>();
+        for (Rule rule : rules) {
+            String key = normalizeKey(rule.getRuleName());
+            if (key != null) out.putIfAbsent(key, rule);
+        }
+        return out;
+    }
+
+    private Rule findRuleToUpdate(MultiRuleParser.ParsedRule parsed,
+                                  Map<String, Rule> existingByCode,
+                                  Map<String, Rule> existingByName,
+                                  Set<Long> updatedExistingIds) {
+        RuleMetadata meta = parsed.getMetadata();
+        Rule match = null;
+        if (meta != null) {
+            match = existingByCode.get(normalizeKey(meta.getRuleCode()));
+        }
+        if (match == null) {
+            match = existingByName.get(normalizeKey(parsed.getName()));
+        }
+        return match != null && !updatedExistingIds.contains(match.getId()) ? match : null;
+    }
+
+    private void applyParsedRule(Rule rule, MultiRuleParser.ParsedRule pr, String sourceFile,
+                                 Long creatorId, Long libraryId, Long folderId) {
+        rule.setRuleName(pr.getName());
+        rule.setFileType(pr.getFileType());
+        rule.setContent(pr.getContent());
+        rule.setCreatorId(creatorId);
+        rule.setLibraryId(libraryId);
+        rule.setFolderId(folderId);
+        rule.setUpdatedAt(LocalDateTime.now());
+        rule.setIsValid(true);
+        rule.setSourceFile(sourceFile);
+        RuleMetadata meta = pr.getMetadata();
+        rule.setRuleCode(meta == null ? null : meta.getRuleCode());
+        rule.setRuleType(meta == null ? null : meta.getRuleType());
+        rule.setDocumentType(meta == null ? null : meta.getDocumentType());
+        rule.setSections(meta == null ? null : emptyToNull(meta.getSections()));
+        rule.setKeywords(meta == null ? null : emptyToNull(meta.getKeywords()));
+        rule.setDescription(pr.getDescription());
+    }
+
+    private static String normalizeKey(String value) {
+        if (value == null || value.isBlank()) return null;
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     public List<RuleUploadConflictDTO> findUploadConflicts(String sourceFile, Long libraryId, Long folderId) {
@@ -178,19 +257,6 @@ public class RuleService {
                         rule.getFolderId(),
                         rule.getUpdatedAt()))
                 .toList();
-    }
-
-    private void handleUploadConflicts(String sourceFile, Long libraryId, Long folderId, boolean replaceExisting) {
-        List<RuleUploadConflictDTO> conflicts = findUploadConflicts(sourceFile, libraryId, folderId);
-        if (conflicts.isEmpty()) return;
-        if (!replaceExisting) {
-            throw new IllegalArgumentException("规则文件已存在，请选择保留已有规则或用新文件替换");
-        }
-        for (RuleUploadConflictDTO conflict : conflicts) {
-            ruleMapper.deleteById(conflict.getId());
-        }
-        log.info("Replaced {} existing rule(s) from sourceFile={} libraryId={} folderId={}",
-                conflicts.size(), sourceFile, libraryId, folderId);
     }
 
     private void persistChecks(Long ruleId, List<MultiRuleParser.ParsedCheck> checks) {

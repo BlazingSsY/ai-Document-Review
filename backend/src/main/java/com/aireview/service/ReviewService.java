@@ -36,6 +36,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.text.Normalizer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -118,6 +119,11 @@ public class ReviewService {
     private static final int JSON_PARSE_MAX_ATTEMPTS = 3;
     /** 单切片 prompt 中规则部分的硬上限。超过则按 rule_code asc 截断。 */
     private static final int RULE_BUDGET_TOKENS = 6000;
+    private static final String TERMINOLOGY_REVIEW_PROFILE = "terminology_consistency";
+    private static final String TERMINOLOGY_RULE_CODE = "R-TERM";
+    private static final String TERMINOLOGY_CHECK_CODE = "R-TERM-C001";
+    private static final int TERMINOLOGY_PROMPT_TERM_LIMIT = 160;
+    private static final int TERMINOLOGY_PROMPT_OCCURRENCE_LIMIT = 6;
 
     /**
      * Submit a review task: upload the document and start async processing.
@@ -574,7 +580,24 @@ public class ReviewService {
             for (Map.Entry<Integer, Map<String, Object>> entry : replacements.entrySet()) {
                 replaceChunkResult(chunkResults, entry.getValue());
             }
+            removeTerminologyConsistencyChunks(chunkResults);
+            Map<String, Object> terminologyTable = buildTerminologyTable(chunkResults);
+            String terminologyTableFile = saveTerminologyTableToFile(taskId, task.getFileName(),
+                    task.getSelectedModel(), runStamp, terminologyTable);
+            if (hasTerminologyTerms(terminologyTable)) {
+                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                        "正在重新进行全文专业术语一致性审查...", 92);
+                try {
+                    Map<String, Object> termParsed = runTerminologyConsistencyPass(taskId, modelConfig, terminologyTable);
+                    chunkResults.add(buildTerminologyConsistencyChunk(chunkResults.size() + 1,
+                            termParsed, terminologyTable));
+                } catch (Exception termEx) {
+                    log.warn("Terminology consistency retry pass failed: {}", termEx.getMessage(), termEx);
+                }
+            }
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
+            aggregatedResult.put("terminologyTable", terminologyTable);
+            aggregatedResult.put("terminologyTableFile", terminologyTableFile);
             saveAiResultToFile(taskId, task.getFileName(), task.getSelectedModel(), runStamp, aggregatedResult);
             task.setAiResult(aggregatedResult);
             updateTaskStatus(task, ReviewTask.STATUS_COMPLETED, null);
@@ -821,6 +844,7 @@ public class ReviewService {
                     docChunk.put("estimatedTokens", ChunkUtils.estimateTokens(docUserContent));
                     docChunk.put("appliedRules", docRules.stream()
                             .map(r -> r.getRule().getRuleName()).toList());
+                    docChunk.put("reviewProfile", "document_specific");
                     docChunk.put("result", docParsed);
                     chunkResults.add(docChunk);
                 } catch (Exception docEx) {
@@ -828,9 +852,27 @@ public class ReviewService {
                 }
             }
 
+            Map<String, Object> terminologyTable = buildTerminologyTable(chunkResults);
+            String terminologyTableFile = saveTerminologyTableToFile(taskId, task.getFileName(),
+                    task.getSelectedModel(), runStamp, terminologyTable);
+            if (hasTerminologyTerms(terminologyTable)) {
+                webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                        "正在进行全文专业术语一致性审查...", 93);
+                try {
+                    Map<String, Object> termParsed = runTerminologyConsistencyPass(taskId, modelConfig, terminologyTable);
+                    Map<String, Object> termChunk = buildTerminologyConsistencyChunk(chunkResults.size() + 1,
+                            termParsed, terminologyTable);
+                    chunkResults.add(termChunk);
+                } catch (Exception termEx) {
+                    log.warn("Terminology consistency review pass failed: {}", termEx.getMessage(), termEx);
+                }
+            }
+
             // 6. Aggregate results
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在汇总审查结果...", 95);
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
+            aggregatedResult.put("terminologyTable", terminologyTable);
+            aggregatedResult.put("terminologyTableFile", terminologyTableFile);
             // 在结果里冻结模型的可对比性，避免历史任务在跨模型对比 UI 里被误算进来
             boolean crossModelEligible = !ThinkingModeDetector.isThinking(modelConfig);
             aggregatedResult.put("crossModelEligible", crossModelEligible);
@@ -1028,6 +1070,36 @@ public class ReviewService {
             log.info("审查结果 saved to: {}", outputFile.toAbsolutePath());
         } catch (Exception e) {
             log.warn("Failed to save 审查结果: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Persist the screened terminology table for this review run. The table is generated
+     * before the terminology consistency pass and intentionally contains only observations
+     * extracted from real chapter chunks.
+     */
+    private String saveTerminologyTableToFile(String taskId, String fileName, String model, String runStamp,
+                                              Map<String, Object> terminologyTable) {
+        try {
+            Map<String, Object> wrapper = new LinkedHashMap<>();
+            wrapper.put("taskId", taskId);
+            wrapper.put("fileName", fileName);
+            wrapper.put("model", model);
+            wrapper.put("timestamp", LocalDateTime.now().toString());
+            wrapper.put("terminologyTable", terminologyTable);
+
+            String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapper);
+
+            Path outputDir = Path.of("/app/output");
+            Files.createDirectories(outputDir);
+            Path outputFile = outputDir.resolve(buildOutputFileName("术语表", fileName, model, runStamp));
+            Files.writeString(outputFile, json);
+            String path = outputFile.toAbsolutePath().toString();
+            log.info("术语表 saved to: {}", path);
+            return path;
+        } catch (Exception e) {
+            log.warn("Failed to save 术语表: {}", e.getMessage());
+            return "";
         }
     }
 
@@ -1368,6 +1440,335 @@ public class ReviewService {
         return sb.toString();
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> buildTerminologyTable(List<Map<String, Object>> chunkResults) {
+        Map<String, Object> table = new LinkedHashMap<>();
+        table.put("generatedAt", LocalDateTime.now().toString());
+        table.put("source", "chunk_term_observations");
+
+        Map<String, Map<String, Object>> byKey = new LinkedHashMap<>();
+        int observationCount = 0;
+
+        if (chunkResults != null) {
+            for (Map<String, Object> chunk : chunkResults) {
+                if (chunk == null || Boolean.TRUE.equals(chunk.get("failed")) || isSystemGeneratedReviewChunk(chunk)) {
+                    continue;
+                }
+                Object result = chunk.get("result");
+                if (!(result instanceof Map<?, ?> resultMap)) continue;
+                Object rawTerms = resultMap.get("term_observations");
+                if (!(rawTerms instanceof List<?> termList)) continue;
+
+                String chapterTitle = Objects.toString(chunk.getOrDefault("chapterTitle", ""));
+                Object chunkNumber = chunk.get("chunk");
+                for (Object item : termList) {
+                    if (!(item instanceof Map<?, ?> rawTerm)) continue;
+                    Map<String, Object> termMap = (Map<String, Object>) rawTerm;
+                    String term = firstNonBlank(strField(termMap, "term"), strField(termMap, "term_text")).trim();
+                    if (term.isBlank()) continue;
+
+                    String normalized = firstNonBlank(strField(termMap, "normalized_term"),
+                            strField(termMap, "canonical_term")).trim();
+                    if (normalized.isBlank()) normalized = term;
+                    String key = normalizeTermKey(normalized);
+                    if (key.isBlank()) key = normalizeTermKey(term);
+                    if (key.isBlank()) continue;
+
+                    String termType = firstNonBlank(strField(termMap, "term_type"),
+                            firstNonBlank(strField(termMap, "type"), strField(termMap, "category")));
+                    String definition = firstNonBlank(strField(termMap, "definition_or_meaning"),
+                            firstNonBlank(strField(termMap, "meaning"), strField(termMap, "definition")));
+                    String location = firstNonBlank(strField(termMap, "location"), chapterTitle);
+                    String evidence = strField(termMap, "evidence");
+
+                    Map<String, Object> row = byKey.get(key);
+                    if (row == null) {
+                        row = new LinkedHashMap<>();
+                        row.put("canonicalTerm", normalized);
+                        row.put("normalizationKey", key);
+                        row.put("termType", termType);
+                        row.put("definitionOrMeaning", definition);
+                        row.put("variants", new ArrayList<String>());
+                        row.put("occurrences", new ArrayList<Map<String, Object>>());
+                        byKey.put(key, row);
+                    } else {
+                        if (strField(row, "termType").isBlank() && !termType.isBlank()) {
+                            row.put("termType", termType);
+                        }
+                        if (strField(row, "definitionOrMeaning").isBlank() && !definition.isBlank()) {
+                            row.put("definitionOrMeaning", definition);
+                        }
+                    }
+
+                    addDistinctString((List<String>) row.get("variants"), term);
+                    if (!normalized.equals(term)) {
+                        addDistinctString((List<String>) row.get("variants"), normalized);
+                    }
+
+                    Map<String, Object> occurrence = new LinkedHashMap<>();
+                    occurrence.put("term", term);
+                    occurrence.put("normalizedTerm", normalized);
+                    occurrence.put("chapterTitle", chapterTitle);
+                    occurrence.put("sourceChunk", chunkNumber);
+                    occurrence.put("location", location);
+                    occurrence.put("evidence", evidence);
+                    ((List<Map<String, Object>>) row.get("occurrences")).add(occurrence);
+                    observationCount++;
+                }
+            }
+        }
+
+        List<Map<String, Object>> terms = new ArrayList<>();
+        int idx = 1;
+        for (Map<String, Object> row : byKey.values()) {
+            row.put("termId", String.format("TERM-%03d", idx++));
+            List<?> variants = row.get("variants") instanceof List<?> list ? list : List.of();
+            List<?> occurrences = row.get("occurrences") instanceof List<?> list ? list : List.of();
+            row.put("variantCount", variants.size());
+            row.put("occurrenceCount", occurrences.size());
+            terms.add(row);
+        }
+        table.put("terms", terms);
+        table.put("termCount", terms.size());
+        table.put("observationCount", observationCount);
+        return table;
+    }
+
+    private boolean hasTerminologyTerms(Map<String, Object> terminologyTable) {
+        return terminologyTable != null
+                && terminologyTable.get("terms") instanceof List<?> terms
+                && !terms.isEmpty();
+    }
+
+    private boolean isSystemGeneratedReviewChunk(Map<String, Object> chunk) {
+        String profile = Objects.toString(chunk.getOrDefault("reviewProfile", ""));
+        if (TERMINOLOGY_REVIEW_PROFILE.equals(profile) || "document_specific".equals(profile)) {
+            return true;
+        }
+        String title = Objects.toString(chunk.getOrDefault("chapterTitle", ""));
+        return title.startsWith("全文术语一致性审查") || title.startsWith("全文综合审查");
+    }
+
+    private void removeTerminologyConsistencyChunks(List<Map<String, Object>> chunkResults) {
+        if (chunkResults == null) return;
+        chunkResults.removeIf(chunk -> {
+            if (chunk == null) return false;
+            String profile = Objects.toString(chunk.getOrDefault("reviewProfile", ""));
+            String title = Objects.toString(chunk.getOrDefault("chapterTitle", ""));
+            return TERMINOLOGY_REVIEW_PROFILE.equals(profile) || title.startsWith("全文术语一致性审查");
+        });
+    }
+
+    private void addDistinctString(List<String> values, String value) {
+        if (values == null || value == null) return;
+        String trimmed = value.trim();
+        if (trimmed.isBlank()) return;
+        for (String existing : values) {
+            if (trimmed.equals(existing)) return;
+        }
+        values.add(trimmed);
+    }
+
+    private Map<String, Object> runTerminologyConsistencyPass(String taskId,
+                                                              AiModelConfig modelConfig,
+                                                              Map<String, Object> terminologyTable) throws Exception {
+        String systemPrompt = buildTerminologyConsistencySystemPrompt();
+        String userContent = buildTerminologyConsistencyInput(terminologyTable);
+        AiCallOptions options = buildConvergenceOptions(modelConfig,
+                stableSeed(taskId, /*chunkIdx*/ -2, /*sampleIdx*/ 0), 0);
+        String response = callWithRetry(modelConfig, systemPrompt, userContent, options);
+        Map<String, Object> parsed = tryParseAiJson(response);
+        if (parsed == null) {
+            parsed = buildFallbackResult("全文术语一致性审查", response);
+        }
+        normalizeTerminologyConsistencyResult(parsed);
+        return parsed;
+    }
+
+    private String buildTerminologyConsistencySystemPrompt() {
+        StringBuilder sp = new StringBuilder();
+        sp.append("【角色与任务】\n");
+        sp.append("你是一名全文专业术语一致性审查员。请只基于用户消息中的术语表，核查跨章节术语、缩略语、设备名称、试验项目和参数名称是否存在不一致。\n");
+        sp.append("不得依据常识扩展原文没有出现的术语；没有明确跨章节不一致时，不要输出问题或检查项。\n\n");
+        sp.append("【输出 Schema（必须严格遵守）】\n");
+        sp.append("只能输出一个合法 JSON 对象，符合以下 JSON Schema；term_observations 固定填 []：\n");
+        sp.append("```json\n");
+        sp.append(com.alibaba.fastjson2.JSON.toJSONString(ReviewResultSchema.schema(),
+                com.alibaba.fastjson2.JSONWriter.Feature.PrettyFormat,
+                com.alibaba.fastjson2.JSONWriter.Feature.WriteMapNullValue));
+        sp.append("\n```\n\n");
+        sp.append("【判定规则】\n");
+        sp.append("- 只审查全文术语一致性：同一对象多种名称、同一缩略语不同含义、中英文/简称前后混用、参数或试验项目称谓不统一。\n");
+        sp.append("- 输出问题时，issues[].rule_code 固定为 ").append(TERMINOLOGY_RULE_CODE)
+                .append("，category 固定为 术语一致性。\n");
+        sp.append("- 对每个确认或需复核的问题，在 check_results 中输出一条记录：check_code 固定为 ")
+                .append(TERMINOLOGY_CHECK_CODE).append("，rule_code 固定为 ")
+                .append(TERMINOLOGY_RULE_CODE).append("。\n");
+        sp.append("- 明确存在不一致时 status=Fail；证据不足但疑似不一致时 status=Review；不要输出 Pass 检查项。\n");
+        sp.append("- evidence 必须引用术语表里的章节/位置/证据，说明至少两个相互冲突的写法。\n");
+        sp.append("- 若未发现问题，返回 issues=[], passed_items=[], check_results=[], term_observations=[]。\n");
+        return sp.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private String buildTerminologyConsistencyInput(Map<String, Object> terminologyTable)
+            throws JsonProcessingException {
+        Map<String, Object> compact = new LinkedHashMap<>();
+        compact.put("termCount", terminologyTable.getOrDefault("termCount", 0));
+        compact.put("observationCount", terminologyTable.getOrDefault("observationCount", 0));
+
+        List<Map<String, Object>> compactTerms = new ArrayList<>();
+        Object rawTerms = terminologyTable.get("terms");
+        if (rawTerms instanceof List<?> terms) {
+            int count = 0;
+            for (Object item : terms) {
+                if (!(item instanceof Map<?, ?> rawTerm)) continue;
+                Map<String, Object> term = (Map<String, Object>) rawTerm;
+                Map<String, Object> compactTerm = new LinkedHashMap<>();
+                compactTerm.put("termId", term.get("termId"));
+                compactTerm.put("canonicalTerm", term.get("canonicalTerm"));
+                compactTerm.put("termType", term.get("termType"));
+                compactTerm.put("definitionOrMeaning", term.get("definitionOrMeaning"));
+                compactTerm.put("variants", limitStringList(term.get("variants"), 10));
+                compactTerm.put("variantCount", term.get("variantCount"));
+                compactTerm.put("occurrenceCount", term.get("occurrenceCount"));
+
+                List<Map<String, Object>> occurrences = new ArrayList<>();
+                Object rawOccurrences = term.get("occurrences");
+                if (rawOccurrences instanceof List<?> occurrenceList) {
+                    int occCount = 0;
+                    for (Object occItem : occurrenceList) {
+                        if (!(occItem instanceof Map<?, ?> rawOcc)) continue;
+                        Map<String, Object> occurrence = (Map<String, Object>) rawOcc;
+                        Map<String, Object> compactOcc = new LinkedHashMap<>();
+                        compactOcc.put("term", occurrence.get("term"));
+                        compactOcc.put("chapterTitle", occurrence.get("chapterTitle"));
+                        compactOcc.put("location", occurrence.get("location"));
+                        compactOcc.put("evidence", truncateText(strField(occurrence, "evidence"), 180));
+                        occurrences.add(compactOcc);
+                        if (++occCount >= TERMINOLOGY_PROMPT_OCCURRENCE_LIMIT) break;
+                    }
+                }
+                compactTerm.put("occurrences", occurrences);
+                compactTerms.add(compactTerm);
+                if (++count >= TERMINOLOGY_PROMPT_TERM_LIMIT) break;
+            }
+            compact.put("truncated", terms.size() > TERMINOLOGY_PROMPT_TERM_LIMIT);
+            compact.put("includedTermCount", compactTerms.size());
+        }
+        compact.put("terms", compactTerms);
+
+        return "【全文术语表（按章节切片抽取后合并）】\n"
+                + objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(compact)
+                + "\n\n请基于该术语表审查全文专业术语一致性。";
+    }
+
+    @SuppressWarnings("unchecked")
+    private void normalizeTerminologyConsistencyResult(Map<String, Object> result) {
+        if (result == null) return;
+        result.putIfAbsent("summary", "");
+        result.put("term_observations", new ArrayList<>());
+        if (!(result.get("passed_items") instanceof List<?>)) {
+            result.put("passed_items", new ArrayList<>());
+        }
+
+        List<Map<String, Object>> issueMaps = new ArrayList<>();
+        if (result.get("issues") instanceof List<?> issues) {
+            for (Object item : issues) {
+                if (!(item instanceof Map<?, ?> rawIssue)) continue;
+                Map<String, Object> issue = new LinkedHashMap<>((Map<String, Object>) rawIssue);
+                issue.putIfAbsent("location", "全文");
+                issue.putIfAbsent("description", "");
+                issue.putIfAbsent("suggestion", "请统一全文术语写法，并在术语表或缩略语表中明确标准写法。");
+                issue.put("rule", "全文专业术语一致性审查");
+                issue.put("rule_code", TERMINOLOGY_RULE_CODE);
+                issue.put("category", "术语一致性");
+                issue.putIfAbsent("evidence", "");
+                issueMaps.add(issue);
+            }
+        }
+        result.put("issues", issueMaps);
+
+        List<Map<String, Object>> keptChecks = new ArrayList<>();
+        if (result.get("check_results") instanceof List<?> checks) {
+            for (Object item : checks) {
+                if (!(item instanceof Map<?, ?> rawCheck)) continue;
+                Map<String, Object> check = new LinkedHashMap<>((Map<String, Object>) rawCheck);
+                String status = normalizeCheckStatus(check.get("status"));
+                if ("Pass".equals(status)) continue;
+                check.put("check_code", TERMINOLOGY_CHECK_CODE);
+                check.put("rule_code", TERMINOLOGY_RULE_CODE);
+                check.put("ruleName", "全文专业术语一致性审查");
+                check.put("check_question", "全文范围内专业术语、缩略语、设备名称、试验项目和参数名称是否一致");
+                check.put("status", status);
+                check.putIfAbsent("reason", "");
+                check.putIfAbsent("evidence", "");
+                check.putIfAbsent("missing_items", new ArrayList<>());
+                check.putIfAbsent("suggestion", "请统一全文术语写法，并补充术语/缩略语说明。");
+                check.putIfAbsent("confidence", "needs_review");
+                keptChecks.add(check);
+            }
+        }
+        if (keptChecks.isEmpty() && !issueMaps.isEmpty()) {
+            Map<String, Object> firstIssue = issueMaps.get(0);
+            Map<String, Object> check = new LinkedHashMap<>();
+            check.put("check_code", TERMINOLOGY_CHECK_CODE);
+            check.put("rule_code", TERMINOLOGY_RULE_CODE);
+            check.put("ruleName", "全文专业术语一致性审查");
+            check.put("check_question", "全文范围内专业术语、缩略语、设备名称、试验项目和参数名称是否一致");
+            check.put("status", "Review");
+            check.put("reason", strField(firstIssue, "description"));
+            check.put("evidence", strField(firstIssue, "evidence"));
+            check.put("missing_items", new ArrayList<>());
+            check.put("suggestion", strField(firstIssue, "suggestion"));
+            check.put("confidence", "needs_review");
+            keptChecks.add(check);
+        }
+        result.put("check_results", keptChecks);
+    }
+
+    private Map<String, Object> buildTerminologyConsistencyChunk(int chunkNumber,
+                                                                 Map<String, Object> parsed,
+                                                                 Map<String, Object> terminologyTable) {
+        Map<String, Object> chunk = new LinkedHashMap<>();
+        chunk.put("chunk", chunkNumber);
+        chunk.put("chapterTitle", "全文术语一致性审查");
+        chunk.put("totalChunks", chunkNumber);
+        chunk.put("estimatedTokens", 0);
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put("type", "terminology_table");
+        source.put("termCount", terminologyTable.getOrDefault("termCount", 0));
+        source.put("observationCount", terminologyTable.getOrDefault("observationCount", 0));
+        chunk.put("source", source);
+        chunk.put("sourceRefs", new ArrayList<>());
+        chunk.put("appliedRules", List.of("全文专业术语一致性审查"));
+        chunk.put("reviewProfile", TERMINOLOGY_REVIEW_PROFILE);
+        chunk.put("samplingStrategy", "single");
+        chunk.put("sampleCount", 1);
+        chunk.put("result", parsed);
+        return chunk;
+    }
+
+    private List<String> limitStringList(Object raw, int limit) {
+        List<String> out = new ArrayList<>();
+        if (!(raw instanceof List<?> list)) return out;
+        for (Object item : list) {
+            if (item == null) continue;
+            String s = item.toString().trim();
+            if (s.isBlank()) continue;
+            out.add(s);
+            if (out.size() >= limit) break;
+        }
+        return out;
+    }
+
+    private static String truncateText(String text, int maxChars) {
+        if (text == null) return "";
+        String trimmed = text.trim();
+        if (trimmed.length() <= maxChars) return trimmed;
+        return trimmed.substring(0, Math.max(0, maxChars)) + "...";
+    }
+
     /**
      * 单个切片的完整审查流程：组装系统提示词、附加跨章节引用上下文、调用 AI、解析响应。
      *
@@ -1459,6 +1860,8 @@ public class ReviewService {
         }
         Map<String, Object> merged = mergeSamples(samples, chunk.getLabel());
         if (qualityCheck) enrichBuiltInQualityChecks(merged, chunkHasFiguresOrTables(chunk.getContent()));
+        ensureBusinessRuleCoverage(merged, ruleEntries);
+        enrichCheckResultsWithRuleSnapshot(merged, ruleEntries);
 
         Map<String, Object> chunkResult = new HashMap<>();
         chunkResult.put("chunk", chunkNum);
@@ -1494,6 +1897,7 @@ public class ReviewService {
         result.put("issues", new ArrayList<>());
         result.put("passed_items", new ArrayList<>());
         result.put("check_results", new ArrayList<>());
+        result.put("term_observations", new ArrayList<>());
 
         Map<String, Object> chunkResult = new HashMap<>();
         chunkResult.put("chunk", chunkIdx + 1);
@@ -1546,10 +1950,10 @@ public class ReviewService {
     }
 
     /**
-     * The three (or user-edited) basic-quality checks. Loaded from the editable DB rule's
+     * The quality checks. Loaded from the editable DB rule's
      * {@code rule_checks}; falls back to {@link #defaultBasicQualityChecks()} when the rule
-     * row or its active checks are missing. Drives both the prompt and the N/A / missing-item
-     * enforcement in {@link #enrichBuiltInQualityChecks(Map)}.
+     * row or its active checks are missing. They are intentionally not forced into the final
+     * matrix when passing; only Fail/Review quality findings are retained.
      */
     private List<RuleParser.CheckEntry> basicQualityChecks() {
         Rule dbRule = loadEditableRule(RuleDispatcher.BASIC_QUALITY_RULE_CODE);
@@ -1625,11 +2029,11 @@ public class ReviewService {
 
     @SuppressWarnings("unchecked")
     private void enrichBuiltInQualityChecks(Map<String, Object> result, boolean hasFigures) {
-        List<Map<String, Object>> checks = new ArrayList<>();
-        if (result.get("check_results") instanceof List<?> rawChecks) {
-            for (Object item : rawChecks) {
+        List<Map<String, Object>> rawCheckMaps = new ArrayList<>();
+        if (result.get("check_results") instanceof List<?> rawList) {
+            for (Object item : rawList) {
                 if (item instanceof Map<?, ?> raw) {
-                    checks.add((Map<String, Object>) raw);
+                    rawCheckMaps.add((Map<String, Object>) raw);
                 }
             }
         }
@@ -1639,33 +2043,31 @@ public class ReviewService {
             metadata.put(check.checkCode, check);
         }
 
-        Map<String, Map<String, Object>> checksByCode = new LinkedHashMap<>();
-        for (Map<String, Object> check : checks) {
-            String checkCode = Objects.toString(check.get("check_code"), "");
-            if (!checkCode.isBlank()) {
-                checksByCode.putIfAbsent(checkCode, check);
-            }
+        List<Map<String, Object>> kept = new ArrayList<>();
+        for (Map<String, Object> check : rawCheckMaps) {
+            String checkCode = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
+            String ruleCode = firstNonBlank(strField(check, "rule_code"), strField(check, "ruleCode"));
             RuleParser.CheckEntry entry = metadata.get(checkCode);
-            if (entry == null) continue;
-            enrichBuiltInQualityCheck(check, entry, hasFigures);
+            boolean builtInQuality = RuleParser.isBuiltInQualityRuleCode(ruleCode) || entry != null;
+            if (!builtInQuality) {
+                kept.add(check);
+                continue;
+            }
+            if (entry != null && isFigureCheck(entry) && !hasFigures) {
+                continue;
+            }
+            if (entry != null) {
+                enrichBuiltInQualityCheck(check, entry, hasFigures);
+            } else {
+                check.put("ruleName", RuleDispatcher.BASIC_QUALITY_RULE_NAME);
+                check.putIfAbsent("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
+            }
+            if ("Pass".equals(normalizeCheckStatus(check.get("status")))) {
+                continue;
+            }
+            kept.add(check);
         }
-
-        for (RuleParser.CheckEntry entry : metadata.values()) {
-            if (checksByCode.containsKey(entry.checkCode)) continue;
-            Map<String, Object> missing = new LinkedHashMap<>();
-            missing.put("check_code", entry.checkCode);
-            missing.put("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
-            missing.put("check_question", entry.question);
-            missing.put("status", "Review");
-            missing.put("reason", "模型未返回该基础文字质量检查项，已转为待复核。");
-            missing.put("evidence", "");
-            missing.put("missing_items", new ArrayList<>());
-            missing.put("suggestion", "");
-            missing.put("confidence", "needs_review");
-            enrichBuiltInQualityCheck(missing, entry, hasFigures);
-            checks.add(missing);
-        }
-        result.put("check_results", checks);
+        result.put("check_results", kept);
     }
 
     private void enrichBuiltInQualityCheck(Map<String, Object> check,
@@ -1677,7 +2079,7 @@ public class ReviewService {
         check.putIfAbsent("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
         check.putIfAbsent("check_question", entry.question);
         // 图表类检查项（图号/表号唯一性、引用、顺序、完整性）在“本章无图表”时空转：
-        // 直接判通过（本章无图表即无图表一致性问题），不再转待复核，避免大量无定位噪声。
+        // 调用方会直接丢弃该类质量检查结果，避免大量无定位的 Pass 噪声进入矩阵。
         if (isFigureCheck(entry) && !hasFigures) {
             check.put("status", "Pass");
             check.put("confidence", "high");
@@ -1687,10 +2089,143 @@ public class ReviewService {
             check.put("suggestion", "");
             return;
         }
-        if ("N/A".equals(normalizeCheckStatus(check.get("status")))) {
+        if (isRawNotApplicableStatus(check.get("status"))) {
             check.put("status", "Review");
             check.put("confidence", "needs_review");
             check.put("reason", "基础文字质量检查始终适用，模型返回“不适用”，已转为待复核。");
+        }
+    }
+
+    private static boolean isRawNotApplicableStatus(Object raw) {
+        if (raw == null) return false;
+        String lower = raw.toString().trim().toLowerCase(Locale.ROOT);
+        return lower.equals("n/a") || lower.equals("na") || lower.equals("not_applicable")
+                || lower.equals("not applicable") || lower.equals("不适用");
+    }
+
+    @SuppressWarnings("unchecked")
+    private void ensureBusinessRuleCoverage(Map<String, Object> result,
+                                            List<RuleParser.RuleEntry> ruleEntries) {
+        if (result == null || ruleEntries == null || ruleEntries.isEmpty()) return;
+
+        List<Map<String, Object>> checks = new ArrayList<>();
+        if (result.get("check_results") instanceof List<?> rawChecks) {
+            for (Object item : rawChecks) {
+                if (item instanceof Map<?, ?> raw) {
+                    checks.add((Map<String, Object>) raw);
+                }
+            }
+        }
+
+        Set<String> seenRuleCodes = new HashSet<>();
+        Set<String> seenComposite = new HashSet<>();
+        Set<String> seenCheckCodes = new HashSet<>();
+        for (Map<String, Object> check : checks) {
+            String ruleCode = firstNonBlank(strField(check, "rule_code"), strField(check, "ruleCode"));
+            String checkCode = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
+            if (!ruleCode.isBlank()) seenRuleCodes.add(ruleCode);
+            if (!checkCode.isBlank()) seenCheckCodes.add(checkCode);
+            if (!ruleCode.isBlank() && !checkCode.isBlank()) {
+                seenComposite.add(ruleCode + "\u0000" + checkCode);
+            }
+        }
+
+        for (RuleParser.RuleEntry entry : ruleEntries) {
+            if (entry == null || RuleParser.isBuiltInQualityRuleCode(entry.code)) continue;
+            String ruleCode = Objects.toString(entry.code, "");
+            if (ruleCode.isBlank()) continue;
+            if (entry.checks == null || entry.checks.isEmpty()) {
+                String fallbackCheckCode = ruleCode + "-C001";
+                if (seenRuleCodes.contains(ruleCode) || seenCheckCodes.contains(fallbackCheckCode)) continue;
+                checks.add(missingBusinessCheck(entry, null, fallbackCheckCode));
+                seenRuleCodes.add(ruleCode);
+                seenCheckCodes.add(fallbackCheckCode);
+                seenComposite.add(ruleCode + "\u0000" + fallbackCheckCode);
+                continue;
+            }
+            for (RuleParser.CheckEntry checkEntry : entry.checks) {
+                if (checkEntry == null) continue;
+                String checkCode = Objects.toString(checkEntry.checkCode, "");
+                if (checkCode.isBlank()) continue;
+                if (seenComposite.contains(ruleCode + "\u0000" + checkCode) || seenCheckCodes.contains(checkCode)) {
+                    continue;
+                }
+                checks.add(missingBusinessCheck(entry, checkEntry, checkCode));
+                seenCheckCodes.add(checkCode);
+                seenComposite.add(ruleCode + "\u0000" + checkCode);
+            }
+        }
+        result.put("check_results", checks);
+    }
+
+    private Map<String, Object> missingBusinessCheck(RuleParser.RuleEntry entry,
+                                                     RuleParser.CheckEntry checkEntry,
+                                                     String checkCode) {
+        Map<String, Object> missing = new LinkedHashMap<>();
+        missing.put("check_code", checkCode);
+        missing.put("rule_code", entry.code);
+        missing.put("ruleName", entry.name);
+        missing.put("check_question", checkEntry == null ? entry.name : checkEntry.question);
+        missing.put("passCriteria", checkEntry == null ? "" : Objects.toString(checkEntry.passCriteria, ""));
+        missing.put("status", "Review");
+        missing.put("reason", "模型未返回该上传规则的审查意见，已转为待复核。");
+        missing.put("evidence", "");
+        missing.put("missing_items", List.of("审查意见"));
+        missing.put("suggestion", "请人工复核该规则在本章节的适用性和审查结论。");
+        missing.put("confidence", "needs_review");
+        return missing;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void enrichCheckResultsWithRuleSnapshot(Map<String, Object> result,
+                                                    List<RuleParser.RuleEntry> ruleEntries) {
+        if (result == null || ruleEntries == null || ruleEntries.isEmpty()) return;
+        Object rawChecks = result.get("check_results");
+        if (!(rawChecks instanceof List<?> checkList) || checkList.isEmpty()) return;
+
+        Map<String, CheckMetadata> metadataByRuleCode = new LinkedHashMap<>();
+        Map<String, CheckMetadata> metadataByCompositeKey = new LinkedHashMap<>();
+        Map<String, CheckMetadata> metadataByCheckCode = new LinkedHashMap<>();
+        for (RuleParser.RuleEntry entry : ruleEntries) {
+            if (entry == null) continue;
+            String ruleCode = Objects.toString(entry.code, "");
+            String ruleName = Objects.toString(entry.name, "");
+            CheckMetadata ruleMetadata = new CheckMetadata(ruleName, ruleCode, "", "", "");
+            if (!ruleCode.isBlank()) {
+                metadataByRuleCode.putIfAbsent(ruleCode, ruleMetadata);
+            }
+            if (entry.checks == null || entry.checks.isEmpty()) {
+                if (!ruleCode.isBlank()) {
+                    String fallbackCheckCode = ruleCode + "-C001";
+                    metadataByCompositeKey.putIfAbsent(ruleCode + "\u0000" + fallbackCheckCode, ruleMetadata);
+                    metadataByCheckCode.putIfAbsent(fallbackCheckCode, ruleMetadata);
+                }
+                continue;
+            }
+            for (RuleParser.CheckEntry checkEntry : entry.checks) {
+                if (checkEntry == null) continue;
+                String checkCode = Objects.toString(checkEntry.checkCode, "");
+                if (checkCode.isBlank()) continue;
+                CheckMetadata metadata = new CheckMetadata(
+                        ruleName,
+                        ruleCode,
+                        "",
+                        Objects.toString(checkEntry.question, ""),
+                        Objects.toString(checkEntry.passCriteria, ""));
+                metadataByCompositeKey.putIfAbsent(ruleCode + "\u0000" + checkCode, metadata);
+                metadataByCheckCode.putIfAbsent(checkCode, metadata);
+            }
+        }
+
+        for (Object item : checkList) {
+            if (!(item instanceof Map<?, ?> rawMap)) continue;
+            Map<String, Object> check = (Map<String, Object>) rawMap;
+            String checkCode = firstNonBlank(strField(check, "check_code"), strField(check, "checkCode"));
+            String ruleCode = firstNonBlank(strField(check, "rule_code"), strField(check, "ruleCode"));
+            CheckMetadata metadata = metadataByCompositeKey.get(ruleCode + "\u0000" + checkCode);
+            if (metadata == null) metadata = metadataByCheckCode.get(checkCode);
+            if (metadata == null) metadata = metadataByRuleCode.get(ruleCode);
+            applyCheckMetadata(check, metadata);
         }
     }
 
@@ -1773,6 +2308,7 @@ public class ReviewService {
             merged.put("issues", new ArrayList<>());
             merged.put("passed_items", new ArrayList<>());
             merged.put("check_results", new ArrayList<>());
+            merged.put("term_observations", new ArrayList<>());
             return merged;
         }
         Map<String, Object> first = samples.get(0);
@@ -1822,7 +2358,35 @@ public class ReviewService {
         }
         merged.put("passed_items", new ArrayList<>(passed));
         merged.put("check_results", mergeCheckResults(samples));
+        merged.put("term_observations", mergeTermObservations(samples));
         return merged;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> mergeTermObservations(List<Map<String, Object>> samples) {
+        Map<String, Map<String, Object>> byEvidence = new LinkedHashMap<>();
+        if (samples == null) return new ArrayList<>();
+        for (Map<String, Object> sample : samples) {
+            Object rawTerms = sample.get("term_observations");
+            if (!(rawTerms instanceof List<?> termList)) continue;
+            for (Object item : termList) {
+                if (!(item instanceof Map<?, ?> rawMap)) continue;
+                Map<String, Object> term = new LinkedHashMap<>((Map<String, Object>) rawMap);
+                String observed = firstNonBlank(strField(term, "term"), strField(term, "term_text")).trim();
+                if (observed.isBlank()) continue;
+                String normalized = firstNonBlank(strField(term, "normalized_term"), strField(term, "canonical_term"));
+                if (normalized.isBlank()) {
+                    term.put("normalized_term", observed);
+                    normalized = observed;
+                }
+                String key = normalizeTermKey(normalized) + "|"
+                        + normalizeTermKey(observed) + "|"
+                        + normalizeLocation(strField(term, "location")) + "|"
+                        + normalizeLocation(strField(term, "evidence"));
+                byEvidence.putIfAbsent(key, term);
+            }
+        }
+        return new ArrayList<>(byEvidence.values());
     }
 
     private List<Map<String, Object>> mergeCheckResults(List<Map<String, Object>> samples) {
@@ -1898,6 +2462,15 @@ public class ReviewService {
         return s.replaceAll("[\\s>>\\-\\.、，,()（）【】\\[\\]]+", "").toLowerCase(Locale.ROOT);
     }
 
+    private static String normalizeTermKey(String s) {
+        if (s == null) return "";
+        String normalized = Normalizer.normalize(s.trim(), Normalizer.Form.NFKC)
+                .toLowerCase(Locale.ROOT);
+        return normalized
+                .replaceAll("[\\s　]+", "")
+                .replaceAll("[\\p{Punct}，。；：、（）【】《》“”‘’—－]+", "");
+    }
+
     private Map<String, Object> buildFailedChunkResult(int chunkIdx, int totalChunks,
                                                         ChunkUtils.ChunkResult chunk,
                                                         RuleDispatcher.DispatchResult dispatch,
@@ -1922,6 +2495,7 @@ public class ReviewService {
         result.put("issues", new ArrayList<>());
         result.put("passed_items", new ArrayList<>());
         result.put("check_results", new ArrayList<>());
+        result.put("term_observations", new ArrayList<>());
         chunkResult.put("result", result);
         return chunkResult;
     }
@@ -2210,6 +2784,7 @@ public class ReviewService {
         result.put("issues", issues);
         result.put("passed_items", new ArrayList<>());
         result.put("check_results", new ArrayList<>());
+        result.put("term_observations", new ArrayList<>());
         return result;
     }
 

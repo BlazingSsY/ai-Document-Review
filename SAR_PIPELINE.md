@@ -10,7 +10,7 @@ SAR（Structure-Aware Review）是当前系统中与 **全文逐章审查（CHUN
 
 回顾 CHUNK 与 RAG 的失败模式，本质是**同一环节的两种坏法**——"把一条检查项对到文档里正确的位置"：
 
-- **CHUNK** 用**章节标题命中**路由规则 → 标题不规范/前几章只跑基础就漏；但每章原文都被完整通读，误报低。
+- **CHUNK** 由 `RuleDispatcher` 预先路由规则：`section_specific` 依赖一级章节标题命中，`test_item_chapter` 依赖“试验概述/试验项目概述”提取出的试验项目章节；标题或概述不规范时仍可能漏调度，但命中的章节会被完整通读，且当前已强制每条上传业务规则至少返回一条判定。内置 `R-Q` 文字质量/图表编号检查只在 Fail/Review 时进入矩阵；每章同时抽取 `term_observations`，汇总输出术语表并追加一次全文术语一致性审查。
 - **RAG** 用**向量相似度**路由证据 → 文本不相似 / 是"缺失类"就漏；且只给碎片，缺全局上下文导致误报高。
 
 判定（模型读原文给 Pass/Fail）这一步两者都不弱，弱的是"喂给模型的东西对不对、全不全"。SAR 因此**换掉路由层**，并利用这批文档的强结构资产（章节树、章节号、表格、`applies_to.sections/keywords`、`check_type`）。
@@ -60,9 +60,9 @@ planCallBins：同区域检查项装箱（≤ max-checks-per-call），共享该
 命中区域的**整段块**（阅读顺序、封顶 `region-max-blocks`）作为证据喂模型，介于"RAG 碎片"和"CHUNK 整章"之间。
 → **降误报**：上下文足够（接近 CHUNK 精度），又聚焦、省 token；表格作为整体进入也修掉表格类问题。
 
-### ③ 清单式缺失检测 —— 杀手锏，两条现有管线都没有
+### ③ 清单式缺失检测 —— 针对预期位置的缺失判断
 对 `check_type=presence` / `evidence_required` 的检查项，系统提示明确「**本区域=预期位置，区域内不存在满足通过标准的内容即判 Fail**」。
-→ **直接消灭 RAG 的缺失盲区**（检索对"不存在的东西"无能为力），也不依赖"某规则恰好在某章触发"。
+→ **直接消灭 RAG 的缺失盲区**（检索对"不存在的东西"无能为力），并把 CHUNK 中“规则必须先命中章节”的压力转移为“检查项先定位预期区域”。
 
 ### ④ 自适应复核（`runVerifyPass` + `isUncertain`）—— 精准治误报、不烧全量预算
 一次判定给 `status + confidence`；路由置信度 < `route-confidence-threshold` 时把该项 confidence 降级为 `needs_review`。复核**只挑** `confidence ∈ {low, needs_review}` 的非 Pass 项（`verify.adaptive=true`），给 `CONFIRMED/UNCERTAIN` 标签，**只标注不删除、不改判 Pass**。

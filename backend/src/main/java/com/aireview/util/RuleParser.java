@@ -22,6 +22,8 @@ import java.util.List;
 @Slf4j
 public class RuleParser {
 
+    private static final String BUILT_IN_QUALITY_RULE_CODE = "R-Q";
+
     private RuleParser() {
     }
 
@@ -257,7 +259,7 @@ public class RuleParser {
         // ① ROLE + 任务
         sp.append("【角色与任务】\n");
         sp.append("你是一名专业的文档审查员。请仅基于本提示词内列出的规则审查用户消息中的章节内容，使用中文回复。\n");
-        sp.append("禁止补充未在规则中出现的检查项；禁止臆断、推测、自由发挥。\n\n");
+        sp.append("禁止补充未在规则中出现的检查项；术语抽取只填写 term_observations，不作为检查项输出；禁止臆断、推测、自由发挥。\n\n");
 
         // ② JSON Schema
         sp.append("【输出 Schema（必须严格遵守）】\n");
@@ -274,11 +276,11 @@ public class RuleParser {
         sp.append("rule_code 锚点：必须使用本提示词【审查规则清单】中给出的 [R-XXX] 编号；本次未注入的编号一律不得使用。\n");
         sp.append("location 锚点：按 \"一级标题 > 二级标题 > 三级标题\" 写，逐字与原文一致，禁止仅写 \"原文\" / \"表格中\" / \"上文\"。\n\n");
         sp.append("示例 1（正例，识别为问题）：\n");
-        sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"category\":\"完整性\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\"}],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"是否明确工作温度区间\",\"status\":\"Fail\",\"reason\":\"原文未给出明确温度上下限\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\",\"missing_items\":[\"工作温度区间\"],\"suggestion\":\"补充明确温度区间\",\"confidence\":\"high\"}]}\n");
+        sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"category\":\"完整性\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\"}],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"是否明确工作温度区间\",\"status\":\"Fail\",\"reason\":\"原文未给出明确温度上下限\",\"evidence\":\"原文仅写 \\\"在常温下进行\\\"\",\"missing_items\":[\"工作温度区间\"],\"suggestion\":\"补充明确温度区间\",\"confidence\":\"high\"}],\"term_observations\":[{\"term\":\"工作温度区间\",\"normalized_term\":\"工作温度区间\",\"term_type\":\"参数名称\",\"definition_or_meaning\":\"设备工作温度上下限范围\",\"location\":\"4 试验条件 > 4.2 环境条件\",\"evidence\":\"工作温度区间\"}]}\n");
         sp.append("示例 2（规则已适配到本章节，但原文明示前置条件不成立/不适用 → 判 Review 交人工复核，不产生 issue）：\n");
-        sp.append("{\"summary\":\"本章节明确说明无陪试设备，陪试设备检查项前置条件不成立，转待复核\",\"issues\":[],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"陪试设备信息是否完整\",\"status\":\"Review\",\"reason\":\"原文明示陪试设备为无，前置条件不成立，无法直接判通过，转人工复核\",\"evidence\":\"陪试设备：无\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"needs_review\"}]}\n");
+        sp.append("{\"summary\":\"本章节明确说明无陪试设备，陪试设备检查项前置条件不成立，转待复核\",\"issues\":[],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"陪试设备信息是否完整\",\"status\":\"Review\",\"reason\":\"原文明示陪试设备为无，前置条件不成立，无法直接判通过，转人工复核\",\"evidence\":\"陪试设备：无\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"needs_review\"}],\"term_observations\":[{\"term\":\"陪试设备\",\"normalized_term\":\"陪试设备\",\"term_type\":\"设备名称\",\"definition_or_meaning\":\"试验过程中配合受试设备工作的辅助设备\",\"location\":\"设备配置\",\"evidence\":\"陪试设备：无\"}]}\n");
         sp.append("示例 3（混合，有的检查项通过、有的不通过）：\n");
-        sp.append("{\"summary\":\"试验步骤完整，但术语不一致\",\"issues\":[{\"location\":\"5 试验步骤 > 5.3\",\"description\":\"同一项目混用 \\\"试件\\\" 与 \\\"样件\\\"\",\"suggestion\":\"统一为 \\\"试件\\\"\",\"rule\":\"术语一致性\",\"rule_code\":\"R-007\",\"category\":\"术语一致性\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\"}],\"passed_items\":[\"[R-003] 试验步骤完整\"],\"check_results\":[{\"check_code\":\"R-003-C001\",\"rule_code\":\"R-003\",\"check_question\":\"试验步骤是否完整\",\"status\":\"Pass\",\"reason\":\"步骤要素均已给出\",\"evidence\":\"原文列出准备、执行和记录步骤\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"high\"},{\"check_code\":\"R-007-C001\",\"rule_code\":\"R-007\",\"check_question\":\"术语是否一致\",\"status\":\"Fail\",\"reason\":\"同一对象出现两个术语\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\",\"missing_items\":[],\"suggestion\":\"统一术语\",\"confidence\":\"high\"}]}\n\n");
+        sp.append("{\"summary\":\"试验步骤完整，但术语不一致\",\"issues\":[{\"location\":\"5 试验步骤 > 5.3\",\"description\":\"同一项目混用 \\\"试件\\\" 与 \\\"样件\\\"\",\"suggestion\":\"统一为 \\\"试件\\\"\",\"rule\":\"术语一致性\",\"rule_code\":\"R-007\",\"category\":\"术语一致性\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\"}],\"passed_items\":[\"[R-003] 试验步骤完整\"],\"check_results\":[{\"check_code\":\"R-003-C001\",\"rule_code\":\"R-003\",\"check_question\":\"试验步骤是否完整\",\"status\":\"Pass\",\"reason\":\"步骤要素均已给出\",\"evidence\":\"原文列出准备、执行和记录步骤\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"high\"},{\"check_code\":\"R-007-C001\",\"rule_code\":\"R-007\",\"check_question\":\"术语是否一致\",\"status\":\"Fail\",\"reason\":\"同一对象出现两个术语\",\"evidence\":\"5.3.1 用 \\\"样件\\\"，5.3.2 用 \\\"试件\\\"\",\"missing_items\":[],\"suggestion\":\"统一术语\",\"confidence\":\"high\"}],\"term_observations\":[{\"term\":\"样件\",\"normalized_term\":\"试件\",\"term_type\":\"专业术语\",\"definition_or_meaning\":\"接受试验的样品或设备\",\"location\":\"5 试验步骤 > 5.3.1\",\"evidence\":\"样件\"},{\"term\":\"试件\",\"normalized_term\":\"试件\",\"term_type\":\"专业术语\",\"definition_or_meaning\":\"接受试验的样品或设备\",\"location\":\"5 试验步骤 > 5.3.2\",\"evidence\":\"试件\"}]}\n\n");
 
         // ④ 规则清单
         sp.append("【审查规则清单（按 rule_code 升序）】\n");
@@ -294,7 +296,11 @@ public class RuleParser {
                 sp.append(e.body.trim()).append("\n");
             }
             if (e.checks != null && !e.checks.isEmpty()) {
-                sp.append("原子检查项（必须逐项输出 check_results）：\n");
+                if (isBuiltInQualityRuleCode(code)) {
+                    sp.append("内置质量检查项（仅发现 Fail/Review 问题时输出 check_results；全部通过时不要输出 Pass 记录）：\n");
+                } else {
+                    sp.append("原子检查项（必须逐项输出 check_results）：\n");
+                }
                 for (CheckEntry check : e.checks) {
                     sp.append("- [").append(check.checkCode).append("] ");
                     sp.append(check.question == null ? "" : check.question);
@@ -313,12 +319,12 @@ public class RuleParser {
         }
         sp.append("\n本次注入的 rule_code 清单：").append(String.join(", ", manifest)).append("\n");
         sp.append("issues[].rule_code 必须且只能从该清单中选择；不在清单内的编号不允许出现。\n");
-        sp.append("若规则下列出了原子检查项，则必须为每个原子检查项输出一条 check_results[]；"
+        sp.append("除内置基础文字质量规则 R-Q 外，若规则下列出了原子检查项，则必须为每个原子检查项输出一条 check_results[]；"
                 + "status 只能是 Pass、Fail、Review 三选一（不得使用 N/A 或 Partial）。"
                 + "证据充分且满足通过标准判 Pass；明确不满足判 Fail；"
                 + "证据不足、部分满足、或原文明示前置条件不成立/不适用，一律判 Review 交人工复核（不得判 Pass）。"
                 + "不能因为章节主题与规则无关而批量判 Review，这类规则应由规则分发阶段排除。"
-                + "基础文字质量检查始终适用。\n");
+                + "R-Q 基础文字质量检查始终适用，但仅在发现文字质量、图号/表号问题或需人工复核时输出；没有问题时不要输出 R-Q 的 Pass 检查结果。\n");
 
         // 表格阅读规则（保留，原 prompt 中证实对 HTML 表格审查很关键）
         sp.append("\n【表格阅读注意事项】\n");
@@ -327,30 +333,43 @@ public class RuleParser {
         sp.append("- 一行只有一个 <td> 且以 \"注/备注/说明\" 开头的为补充说明行，不作为数据缺失依据；\n");
         sp.append("- 章节正文中若出现 \"=== 以下为本章节引用的其他章节内容 ===\" 分隔块，仅用于补充上下文，不要对其内容套用规则。\n");
 
+        sp.append("\n【术语抽取（用于全文专业术语一致性复核）】\n");
+        sp.append("每次都必须填写 term_observations；没有可筛选术语时填空数组 []。\n");
+        sp.append("只提取对全文一致性有复核价值的术语：专业术语、缩略语、设备/系统/软件名称、试验项目、参数名称、标准名称、关键对象称谓。\n");
+        sp.append("不要提取普通虚词、常见动词、泛泛章节名或一次性无复核价值的普通词；每个切片最多提取 30 条。\n");
+        sp.append("同一对象出现别名/简称/中英文混写时，normalized_term 填建议统一写法；证据不足时 normalized_term 与 term 相同。\n");
+
         // 末尾强制全覆盖锚定：放在 prompt 最后利用 recency，配合 schema 的 minItems，
         // 逼模型为每条注入规则都产出 check_results，避免弱模型（如 DeepSeek-V4-Flash）漏判。
         int expected = expectedCheckCount(sorted);
         sp.append("\n【强制全覆盖（务必遵守）】\n");
-        sp.append("本次共注入 ").append(expected).append(" 个待判定项（基础文字质量检查 + 上述每条规则各至少一项）。\n");
-        sp.append("check_results 数组必须【至少包含 ").append(expected).append(" 条】，且逐一覆盖上面列出的每一条规则：\n");
-        sp.append("- 即使某条规则判 Pass、或与本章主题关系不大，也必须为其输出一条 check_results；\n");
+        sp.append("本次共注入 ").append(expected).append(" 个必须返回的业务待判定项（不含 R-Q 内置质量检查）。\n");
+        sp.append("check_results 数组必须【至少包含 ").append(expected).append(" 条业务规则结果】，且逐一覆盖上面列出的每一条非 R-Q 规则：\n");
+        sp.append("- 即使某条上传规则判 Pass、或与本章主题关系不大，也必须为其输出一条 check_results；\n");
         sp.append("- rule_code 用该规则编号；有原子检查项的用其 check_code，无原子检查项的用『规则编号-C001』作为 check_code；\n");
-        sp.append("- 严禁遗漏、合并或少于 ").append(expected).append(" 条。\n");
+        sp.append("- R-Q 质量检查只在 Fail/Review 时额外输出，不计入上述 ").append(expected).append(" 条强制覆盖数量；\n");
+        sp.append("- 严禁遗漏、合并或少于 ").append(expected).append(" 条业务规则结果。\n");
         return sp.toString();
     }
 
     /**
-     * 期望的 check_results 条数 = 每条规则至少 1 条；定义了原子检查项的按其数量计。
+     * 期望的强制 check_results 条数 = 每条非 R-Q 规则至少 1 条；定义了原子检查项的按其数量计。
+     * R-Q 是内置质量检查，只有发现问题时才进入矩阵，不参与 minItems 下限。
      * 同时用于末尾覆盖锚定文案与 schema 的 {@code minItems} 下限。
      */
     public static int expectedCheckCount(List<RuleEntry> entries) {
         if (entries == null) return 0;
         int n = 0;
         for (RuleEntry e : entries) {
+            if (e == null || isBuiltInQualityRuleCode(e.code)) continue;
             int c = (e.checks == null) ? 0 : e.checks.size();
             n += Math.max(1, c);
         }
         return n;
+    }
+
+    public static boolean isBuiltInQualityRuleCode(String code) {
+        return code != null && BUILT_IN_QUALITY_RULE_CODE.equalsIgnoreCase(code.trim());
     }
 
     /**

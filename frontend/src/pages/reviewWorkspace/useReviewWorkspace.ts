@@ -28,6 +28,14 @@ import {
   textField,
 } from './helpers';
 
+export type CheckStatusFilter = 'ALL' | 'Pass' | 'Fail' | 'Review';
+
+const CHECK_STATUS_FILTERS: CheckStatusFilter[] = ['Pass', 'Fail', 'Review'];
+
+function effectiveCheckStatus(item: Record<string, unknown>): string {
+  return textField(item, ['manualStatus', 'status']) || 'Review';
+}
+
 export function useReviewWorkspace() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
@@ -47,6 +55,7 @@ export function useReviewWorkspace() {
   const [manualTarget, setManualTarget] = useState<Record<string, unknown> | null>(null);
   const [activeIssueIndex, setActiveIssueIndex] = useState(0);
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
+  const [checkStatusFilter, setCheckStatusFilter] = useState<CheckStatusFilter>('ALL');
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [manualForm] = Form.useForm();
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -353,12 +362,20 @@ export function useReviewWorkspace() {
     setActiveIssueIndex(0);
   }, [taskId]);
 
+  useEffect(() => {
+    setActiveIssueIndex(0);
+  }, [checkStatusFilter]);
+
   const status = normalizeStatus(task?.status || '');
   const issues = extractIssues(task?.aiResult || null);
   const checkResults = extractCheckResults(task?.aiResult || null);
   const hasCheckMatrix = checkResults.length > 0;
   const visibleCheckResults = checkResults.filter((item) => !isHighConfidenceNotApplicable(item));
-  const reviewItems = hasCheckMatrix ? visibleCheckResults : issues;
+  const filteredCheckResults = hasCheckMatrix && checkStatusFilter !== 'ALL'
+    ? visibleCheckResults.filter((item) => effectiveCheckStatus(item) === checkStatusFilter)
+    : visibleCheckResults;
+  const reviewItems = hasCheckMatrix ? filteredCheckResults : issues;
+  const unfilteredReviewItemCount = hasCheckMatrix ? visibleCheckResults.length : issues.length;
   const problemCount = hasCheckMatrix
     ? visibleCheckResults.filter(isProblemCheck).length
     : issues.length;
@@ -366,11 +383,14 @@ export function useReviewWorkspace() {
   const categoryCounts = (task?.aiResult?.categoryCounts || {}) as Record<string, number>;
   const checkStatusCounts = hasCheckMatrix
     ? visibleCheckResults.reduce<Record<string, number>>((counts, item) => {
-        const itemStatus = textField(item, ['status']) || 'Review';
+        const itemStatus = effectiveCheckStatus(item);
         counts[itemStatus] = (counts[itemStatus] || 0) + 1;
         return counts;
       }, {})
     : {};
+  for (const itemStatus of CHECK_STATUS_FILTERS) {
+    checkStatusCounts[itemStatus] = checkStatusCounts[itemStatus] || 0;
+  }
   const chunkResults = (task?.aiResult?.chunkResults || []) as Array<Record<string, unknown>>;
   const originalSources = recordArray(task?.aiResult?.originalSources);
   const failedChunks = (task?.aiResult?.failedChunks || []) as Array<Record<string, unknown>>;
@@ -418,6 +438,7 @@ export function useReviewWorkspace() {
     activeSourceTokens,
     activeStartNodeId,
     categoryCounts,
+    checkStatusFilter,
     checkStatusCounts,
     chunkResults,
     closeManualReview,
@@ -451,10 +472,12 @@ export function useReviewWorkspace() {
     reviewMode,
     selectIssue,
     setActiveSourceIndex,
+    setCheckStatusFilter,
     sourceCandidates,
     sourcesLoading,
     status,
     task,
+    unfilteredReviewItemCount,
     wsProgress,
   };
 }

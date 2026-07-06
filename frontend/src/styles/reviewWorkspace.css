@@ -128,6 +128,27 @@
   font-weight: 600;
 }
 
+.matrix-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid #eef0f3;
+  background: #fbfcfd;
+}
+
+.matrix-filter-bar .ant-segmented {
+  max-width: 100%;
+}
+
+.matrix-filter-count {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
 .findings-list {
   flex: 1;
   min-height: 0;

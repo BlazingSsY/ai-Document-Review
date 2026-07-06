@@ -31,7 +31,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -117,35 +121,108 @@ public class SarRuleService {
         }
 
         List<MultiRuleParser.ParsedRule> parsed = MultiRuleParser.parse(originalFilename, fileType, content);
-        handleUploadConflicts(originalFilename, libraryId, folderId, replaceExisting);
+        List<SarRule> existingRules = findExistingRulesInScope(libraryId, folderId);
+        Map<String, SarRule> existingByCode = indexByRuleCode(existingRules);
+        Map<String, SarRule> existingByName = indexByRuleName(existingRules);
+        Set<Long> updatedExistingIds = new HashSet<>();
         List<RuleDTO> out = new ArrayList<>();
         for (MultiRuleParser.ParsedRule pr : parsed) {
-            SarRule rule = new SarRule();
-            rule.setRuleName(pr.getName());
-            rule.setFileType(pr.getFileType());
-            rule.setContent(pr.getContent());
-            rule.setCreatorId(creatorId);
-            rule.setLibraryId(libraryId);
-            rule.setFolderId(folderId);
-            rule.setUpdatedAt(LocalDateTime.now());
-            rule.setIsValid(true);
-            rule.setSourceFile(originalFilename);
-            RuleMetadata meta = pr.getMetadata();
-            if (meta != null) {
-                rule.setRuleCode(meta.getRuleCode());
-                rule.setRuleType(meta.getRuleType());
-                rule.setDocumentType(meta.getDocumentType());
-                rule.setSections(emptyToNull(meta.getSections()));
-                rule.setKeywords(emptyToNull(meta.getKeywords()));
+            SarRule rule = findRuleToUpdate(pr, existingByCode, existingByName, updatedExistingIds);
+            boolean update = rule != null;
+            if (!update) {
+                rule = new SarRule();
             }
-            rule.setDescription(pr.getDescription());
-            sarRuleMapper.insert(rule);
+            applyParsedRule(rule, pr, originalFilename, creatorId, libraryId, folderId);
+            if (update) {
+                sarRuleMapper.updateById(rule);
+                sarRuleCheckMapper.delete(new LambdaQueryWrapper<SarRuleCheck>().eq(SarRuleCheck::getRuleId, rule.getId()));
+                updatedExistingIds.add(rule.getId());
+            } else {
+                sarRuleMapper.insert(rule);
+            }
             persistChecks(rule.getId(), pr.getChecks());
             out.add(toDTO(rule));
         }
-        log.info("SAR rule file '{}' expanded into {} rule row(s) (creator={}, library={})",
-                originalFilename, out.size(), creatorId, libraryId);
+        log.info("SAR rule file '{}' upserted into {} rule row(s) (creator={}, library={}, folder={}, replaceExistingIgnored={})",
+                originalFilename, out.size(), creatorId, libraryId, folderId, replaceExisting);
         return out;
+    }
+
+    private List<SarRule> findExistingRulesInScope(Long libraryId, Long folderId) {
+        LambdaQueryWrapper<SarRule> query = new LambdaQueryWrapper<>();
+        query.eq(SarRule::getIsValid, true)
+                .select(SarRule::getId, SarRule::getRuleName, SarRule::getRuleCode, SarRule::getSourceFile,
+                        SarRule::getLibraryId, SarRule::getFolderId, SarRule::getUpdatedAt);
+        if (libraryId == null) {
+            query.isNull(SarRule::getLibraryId);
+        } else {
+            query.eq(SarRule::getLibraryId, libraryId);
+        }
+        if (folderId == null) {
+            query.isNull(SarRule::getFolderId);
+        } else {
+            query.eq(SarRule::getFolderId, folderId);
+        }
+        query.orderByAsc(SarRule::getId);
+        return sarRuleMapper.selectList(query);
+    }
+
+    private Map<String, SarRule> indexByRuleCode(List<SarRule> rules) {
+        Map<String, SarRule> out = new LinkedHashMap<>();
+        for (SarRule rule : rules) {
+            String key = normalizeKey(rule.getRuleCode());
+            if (key != null) out.putIfAbsent(key, rule);
+        }
+        return out;
+    }
+
+    private Map<String, SarRule> indexByRuleName(List<SarRule> rules) {
+        Map<String, SarRule> out = new LinkedHashMap<>();
+        for (SarRule rule : rules) {
+            String key = normalizeKey(rule.getRuleName());
+            if (key != null) out.putIfAbsent(key, rule);
+        }
+        return out;
+    }
+
+    private SarRule findRuleToUpdate(MultiRuleParser.ParsedRule parsed,
+                                     Map<String, SarRule> existingByCode,
+                                     Map<String, SarRule> existingByName,
+                                     Set<Long> updatedExistingIds) {
+        RuleMetadata meta = parsed.getMetadata();
+        SarRule match = null;
+        if (meta != null) {
+            match = existingByCode.get(normalizeKey(meta.getRuleCode()));
+        }
+        if (match == null) {
+            match = existingByName.get(normalizeKey(parsed.getName()));
+        }
+        return match != null && !updatedExistingIds.contains(match.getId()) ? match : null;
+    }
+
+    private void applyParsedRule(SarRule rule, MultiRuleParser.ParsedRule pr, String sourceFile,
+                                 Long creatorId, Long libraryId, Long folderId) {
+        rule.setRuleName(pr.getName());
+        rule.setFileType(pr.getFileType());
+        rule.setContent(pr.getContent());
+        rule.setCreatorId(creatorId);
+        rule.setLibraryId(libraryId);
+        rule.setFolderId(folderId);
+        rule.setUpdatedAt(LocalDateTime.now());
+        rule.setIsValid(true);
+        rule.setSourceFile(sourceFile);
+        RuleMetadata meta = pr.getMetadata();
+        rule.setRuleCode(meta == null ? null : meta.getRuleCode());
+        rule.setRuleType(meta == null ? null : meta.getRuleType());
+        rule.setDocumentType(meta == null ? null : meta.getDocumentType());
+        rule.setSections(meta == null ? null : emptyToNull(meta.getSections()));
+        rule.setKeywords(meta == null ? null : emptyToNull(meta.getKeywords()));
+        rule.setDescription(pr.getDescription());
+    }
+
+    private static String normalizeKey(String value) {
+        if (value == null || value.isBlank()) return null;
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     public List<RuleUploadConflictDTO> findUploadConflicts(String sourceFile, Long libraryId, Long folderId) {
@@ -175,19 +252,6 @@ public class SarRuleService {
                         rule.getFolderId(),
                         rule.getUpdatedAt()))
                 .toList();
-    }
-
-    private void handleUploadConflicts(String sourceFile, Long libraryId, Long folderId, boolean replaceExisting) {
-        List<RuleUploadConflictDTO> conflicts = findUploadConflicts(sourceFile, libraryId, folderId);
-        if (conflicts.isEmpty()) return;
-        if (!replaceExisting) {
-            throw new IllegalArgumentException("规则文件已存在，请选择保留已有规则或用新文件替换");
-        }
-        for (RuleUploadConflictDTO conflict : conflicts) {
-            sarRuleMapper.deleteById(conflict.getId());
-        }
-        log.info("Replaced {} existing SAR rule(s) from sourceFile={} libraryId={} folderId={}",
-                conflicts.size(), sourceFile, libraryId, folderId);
     }
 
     private void persistChecks(Long ruleId, List<MultiRuleParser.ParsedCheck> checks) {

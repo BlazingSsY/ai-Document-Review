@@ -29,6 +29,7 @@ logs/
 
 # Environment (keep .env with defaults, ignore local overrides)
 .env.local
+.envrc
 
 # 依赖目录（核心！禁止上传）
 node_modules/

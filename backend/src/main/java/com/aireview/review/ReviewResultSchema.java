@@ -19,6 +19,7 @@ import java.util.List;
  *   <li>{@code issues[]}：每条问题必须填齐 rule_code / category / location /
  *       description / suggestion / evidence；这些字段就是跨模型可对比的最小集。</li>
  *   <li>{@code passed_items[]}：通过的检查项（建议带上 [R-XXX] 编号）。</li>
+ *   <li>{@code term_observations[]}：当前切片筛选出的专业术语观察，供全文术语一致性复核使用。</li>
  * </ul>
  *
  * <p>category 用 enum 写死，模型不允许自由发挥；当无法判断时强制输出 {@code 其他}。
@@ -94,15 +95,36 @@ public final class ReviewResultSchema {
         checkArr.put("type", "array");
         checkArr.put("items", checkSchema);
 
+        JSONObject termProps = new JSONObject();
+        termProps.put("term", strProp("原文中出现的术语、缩略语、设备名称、试验项目或参数名称。"));
+        termProps.put("normalized_term", strProp("建议归一后的标准写法；无法归一时与 term 相同。"));
+        termProps.put("term_type", strProp("术语类型，如 专业术语/缩略语/设备名称/试验项目/参数名称/标准名称/其他。"));
+        termProps.put("definition_or_meaning", strProp("从上下文可判断的含义；无法判断时为空字符串。"));
+        termProps.put("location", strProp("该术语出现的位置，按章节路径或可定位线索填写。"));
+        termProps.put("evidence", strProp("支持该术语观察的原文片段。"));
+
+        JSONObject termSchema = new JSONObject();
+        termSchema.put("type", "object");
+        termSchema.put("required", JSON.parseArray(JSON.toJSONString(List.of(
+                "term", "normalized_term", "term_type", "definition_or_meaning", "location", "evidence"))));
+        termSchema.put("properties", termProps);
+        termSchema.put("additionalProperties", false);
+
+        JSONObject termArr = new JSONObject();
+        termArr.put("type", "array");
+        termArr.put("items", termSchema);
+
         JSONObject rootProps = new JSONObject();
         rootProps.put("summary", strProp("本切片审查总结（中文）。"));
         rootProps.put("issues", issuesArr);
         rootProps.put("passed_items", passedArr);
         rootProps.put("check_results", checkArr);
+        rootProps.put("term_observations", termArr);
 
         JSONObject root = new JSONObject();
         root.put("type", "object");
-        root.put("required", JSON.parseArray(JSON.toJSONString(List.of("summary", "issues", "passed_items", "check_results"))));
+        root.put("required", JSON.parseArray(JSON.toJSONString(List.of(
+                "summary", "issues", "passed_items", "check_results", "term_observations"))));
         root.put("properties", rootProps);
         root.put("additionalProperties", false);
         return root;
@@ -120,7 +142,7 @@ public final class ReviewResultSchema {
         JSONObject chunkItem = new JSONObject();
         chunkItem.put("type", "object");
         chunkItem.put("required", JSON.parseArray(JSON.toJSONString(
-                List.of("chunk_id", "summary", "issues", "passed_items", "check_results"))));
+                List.of("chunk_id", "summary", "issues", "passed_items", "check_results", "term_observations"))));
         JSONObject chunkProps = new JSONObject();
         chunkProps.put("chunk_id", strProp("批次中该切片的唯一标记，必须与 user message 中的 ===CHUNK <id>=== 对齐。"));
         // 把单切片 schema 的 properties 嫁接进来，避免重复定义
@@ -129,6 +151,7 @@ public final class ReviewResultSchema {
         chunkProps.put("issues", innerProps.getJSONObject("issues"));
         chunkProps.put("passed_items", innerProps.getJSONObject("passed_items"));
         chunkProps.put("check_results", innerProps.getJSONObject("check_results"));
+        chunkProps.put("term_observations", innerProps.getJSONObject("term_observations"));
         chunkItem.put("properties", chunkProps);
         chunkItem.put("additionalProperties", false);
 

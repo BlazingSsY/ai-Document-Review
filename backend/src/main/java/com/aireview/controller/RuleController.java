@@ -20,8 +20,7 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * 全文逐章审查（chunk 管线）下的规则 REST 入口。
  *
- * 注意：checklist 导入端点已迁到 {@link RagRuleController}，因为它产出 rule_checks
- * 原子检查项，仅 RAG 管线消费。
+ * 注意：检查单导入端点在 SAR 侧，原子检查项由 SAR 管线消费。
  */
 @Slf4j
 @RestController

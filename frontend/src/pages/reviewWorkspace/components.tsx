@@ -8,6 +8,7 @@ import {
   Input,
   Modal,
   Progress,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -38,7 +39,7 @@ import {
   sourceReasonLabel,
   textField,
 } from './helpers';
-import type { ReviewWorkspaceViewModel } from './useReviewWorkspace';
+import type { CheckStatusFilter, ReviewWorkspaceViewModel } from './useReviewWorkspace';
 
 const { Title, Text } = Typography;
 
@@ -215,6 +216,7 @@ function FindingCard({
   const rule = textField(item, ['ruleName', 'rule_name', 'rule']);
   const ruleCode = textField(item, ['rule_code', 'ruleCode']);
   const checkCode = textField(item, ['check_code', 'checkCode']);
+  const matrixRuleLabel = rule ? (ruleCode ? `${ruleCode} ${rule}` : rule) : ruleCode;
   const confidence = textField(item, ['confidence']) || 'single';
   const manualDecisionValue = manualStatus === 'Pass' || manualStatus === 'Fail' || manualStatus === 'Review'
     ? manualStatus
@@ -256,7 +258,8 @@ function FindingCard({
             <Tag color={checkStatusColor(statusValue)}>{CHECK_STATUS_LABELS[statusValue] || statusValue || '待复核'}</Tag>
           )}
           {category && <Tag>{category}</Tag>}
-          {hasCheckMatrix && rule && <Tag color="blue">{ruleCode ? `${ruleCode} ${rule}` : rule}</Tag>}
+          {hasCheckMatrix && matrixRuleLabel && <Tag color="blue">{matrixRuleLabel}</Tag>}
+          {hasCheckMatrix && !matrixRuleLabel && checkCode && <Tag color="cyan">{checkCode}</Tag>}
           {!hasCheckMatrix && ruleCode && <Tag color="blue">{ruleCode}</Tag>}
           {!hasCheckMatrix && checkCode && <Tag color="cyan">{checkCode}</Tag>}
           {manualStatus && <Tag color={checkStatusColor(manualStatus)}>人工：{CHECK_STATUS_LABELS[manualStatus] || manualStatus}</Tag>}
@@ -328,6 +331,12 @@ function FindingCard({
 
 function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const { task } = workspace;
+  const matrixFilterOptions = [
+    { label: `全部 ${workspace.unfilteredReviewItemCount}`, value: 'ALL' },
+    { label: `通过 ${workspace.checkStatusCounts.Pass || 0}`, value: 'Pass' },
+    { label: `不通过 ${workspace.checkStatusCounts.Fail || 0}`, value: 'Fail' },
+    { label: `待复核 ${workspace.checkStatusCounts.Review || 0}`, value: 'Review' },
+  ];
 
   return (
     <div className="review-results-panel">
@@ -343,6 +352,22 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
         <Tag>{workspace.reviewItems.length} 条</Tag>
       </div>
 
+      {workspace.hasCheckMatrix && (
+        <div className="matrix-filter-bar">
+          <Segmented
+            size="small"
+            value={workspace.checkStatusFilter}
+            options={matrixFilterOptions}
+            onChange={(value) => workspace.setCheckStatusFilter(value as CheckStatusFilter)}
+          />
+          {workspace.checkStatusFilter !== 'ALL' && (
+            <Text type="secondary" className="matrix-filter-count">
+              已筛选 {workspace.reviewItems.length} / {workspace.unfilteredReviewItemCount}
+            </Text>
+          )}
+        </div>
+      )}
+
       {workspace.reviewItems.length === 0 ? (
         <div className="findings-list">
           <div className="empty-panel">
@@ -352,7 +377,13 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
                 <Text type="secondary">AI 正在审查中，日志见页面底部。</Text>
               </>
             ) : task?.aiResult ? (
-              <Empty description={workspace.hasCheckMatrix ? '暂无检查项判定' : '未发现审查问题'} />
+              <Empty
+                description={
+                  workspace.hasCheckMatrix && workspace.checkStatusFilter !== 'ALL'
+                    ? '当前筛选条件下暂无检查项'
+                    : workspace.hasCheckMatrix ? '暂无检查项判定' : '未发现审查问题'
+                }
+              />
             ) : (
               <Empty description="暂无审查结果" />
             )}
