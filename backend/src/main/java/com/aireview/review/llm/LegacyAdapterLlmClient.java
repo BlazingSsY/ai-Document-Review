@@ -1,8 +1,8 @@
 package com.aireview.review.llm;
 
-import com.aireview.entity.AiModelConfig;
-import com.aireview.service.AiApiException;
-import com.aireview.service.AiModelService;
+import com.aireview.modelconfig.entity.AiModelConfig;
+import com.aireview.modelconfig.service.AiApiException;
+import com.aireview.modelconfig.service.AiModelService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;

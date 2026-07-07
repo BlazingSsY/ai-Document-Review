@@ -1,6 +1,6 @@
 package com.aireview.review.llm;
 
-import com.aireview.entity.AiModelConfig;
+import com.aireview.modelconfig.entity.AiModelConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Builder;
 import lombok.Data;

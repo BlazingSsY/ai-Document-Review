@@ -1,0 +1,45 @@
+import request, { ApiResponse } from '../../../shared/api/request';
+
+export interface LoginParams {
+  email: string;
+  password: string;
+}
+
+export interface RegisterParams {
+  email: string;
+  password: string;
+  name: string;
+}
+
+export interface UserInfo {
+  id: number;
+  email: string;
+  name: string;
+  role: string;
+}
+
+export interface AuthResult {
+  accessToken: string;
+  refreshToken: string;
+}
+
+export function login(params: LoginParams) {
+  return request.post<ApiResponse<AuthResult>>('/auth/login', params);
+}
+
+export function register(params: RegisterParams) {
+  return request.post<ApiResponse<AuthResult>>('/auth/register', params);
+}
+
+// 后端实际返回 { accessToken, refreshToken }（双 token 轮换），原先 { token } 是错的类型签名。
+export function refreshToken(refreshToken: string) {
+  return request.post<ApiResponse<AuthResult>>('/auth/refresh', { refreshToken });
+}
+
+export function getUserProfile() {
+  return request.get<ApiResponse<UserInfo>>('/user/me');
+}
+
+export function changePassword(params: { oldPassword: string; newPassword: string }) {
+  return request.put<ApiResponse<null>>('/user/password', params);
+}
