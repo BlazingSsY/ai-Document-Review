@@ -7,6 +7,9 @@ import com.aireview.modelconfig.entity.AiModelConfig;
 import com.aireview.review.sar.entity.SarDocumentBlock;
 import com.aireview.review.sar.entity.SarReviewAuditLog;
 import com.aireview.review.sar.entity.SarReviewTask;
+import com.aireview.rule.engine.RuleDispatcher;
+import com.aireview.rule.entity.Rule;
+import com.aireview.rule.entity.RuleCheck;
 import com.aireview.rule.entity.SarRule;
 import com.aireview.rule.entity.SarRuleCheck;
 import com.aireview.review.sar.repository.SarDocumentVectorRepository;
@@ -16,6 +19,8 @@ import com.aireview.common.websocket.WebSocketService;
 import com.aireview.export.ReviewExportUtil;
 import com.aireview.modelconfig.service.AiCallOptions;
 import com.aireview.modelconfig.service.AiModelService;
+import com.aireview.rule.repository.RuleCheckMapper;
+import com.aireview.rule.repository.RuleMapper;
 import com.aireview.rule.repository.SarRuleCheckMapper;
 import com.aireview.rule.service.SarRuleService;
 import com.aireview.review.core.ReviewResultSchema;
@@ -62,6 +67,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -73,10 +79,38 @@ public class SarReviewService {
     private final SarReviewAuditLogMapper sarReviewAuditLogMapper;
     private final SarRuleService sarRuleService;
     private final SarRuleCheckMapper sarRuleCheckMapper;
+    private final RuleMapper ruleMapper;
+    private final RuleCheckMapper ruleCheckMapper;
     private final SarDocumentVectorRepository documentVectorRepository;
     private final AiModelService aiModelService;
     private final WebSocketService webSocketService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final Pattern FIGURE_TABLE_CAPTION = Pattern.compile(
+            "^\\s*([图表])\\s*([0-9０-９一二三四五六七八九十百]+(?:[.．\\-－][0-9０-９一二三四五六七八九十百]+)*)\\s*([:：、.．\\-－\\s].*)?$");
+    private static final Pattern FIGURE_TABLE_REFERENCE = Pattern.compile(
+            "([图表])\\s*([0-9０-９一二三四五六七八九十百]+(?:[.．\\-－][0-9０-９一二三四五六七八九十百]+)*)");
+    private static final Pattern UPPERCASE_TERM = Pattern.compile("\\b[A-Z][A-Z0-9][A-Z0-9\\-/]{1,}\\b");
+    private static final List<String> KNOWN_TERMINOLOGY_ALIASES = List.of(
+            "受试设备", "被测设备", "被试设备", "受试件", "被试件", "试验样机", "试验件", "样机",
+            "试验对象", "EUT", "UUT", "DUT");
+    private static final Set<String> UPPERCASE_TERM_STOPWORDS = Set.of(
+            "AND", "THE", "FOR", "WITH", "FROM", "THIS", "THAT", "PASS", "FAIL", "REVIEW");
+    private static final String SAR_TEXT_QUALITY_SYSTEM_PROMPT = """
+            你是严格的航空文档文字质量审查员。你的任务不是审查工程内容是否满足 DO-160G，
+            而是检查文字表达、格式编号、术语一致性和跨章节表述一致性。
+
+            判定只允许三类：
+            - Pass：能确认未发现该检查项问题。
+            - Fail：能用提供原文或索引证据定位明确问题。
+            - Review：证据不足、上下文冲突或无法可靠判断。
+
+            输出要求：
+            - 对输入中的每个 check_code 各返回一条 results，不得新增 check_code。
+            - 只报告有证据的问题；findings.evidence 必须逐字引用输入中的原文或索引证据。
+            - 没有问题时 status=Pass 且 findings=[]。
+            严格按给定 JSON Schema 输出。
+            """;
 
     @Value("${file.documents-dir}")
     private String documentsDir;
@@ -158,6 +192,24 @@ public class SarReviewService {
     /** 跨章一致性层：抽取关键实体并核对跨章节矛盾（图表号/术语/参数/类别等）。 */
     @Value("${review.sar.consistency.enabled:true}")
     private boolean consistencyEnabled;
+
+    @Value("${review.sar.quality.full-scan.enabled:true}")
+    private boolean qualityFullScanEnabled;
+
+    @Value("${review.sar.quality.full-scan.batch-blocks:4}")
+    private int qualityFullScanBatchBlocks;
+
+    @Value("${review.sar.quality.full-scan.max-blocks:0}")
+    private int qualityFullScanMaxBlocks;
+
+    @Value("${review.sar.quality.structure-index.enabled:true}")
+    private boolean qualityStructureIndexEnabled;
+
+    @Value("${review.sar.quality.terminology.enabled:true}")
+    private boolean qualityTerminologyEnabled;
+
+    @Value("${review.sar.quality.terminology.max-observations:160}")
+    private int qualityTerminologyMaxObservations;
 
     // ==============================================================================
     //  Controller-facing API (task CRUD + manual decisions + exports).
@@ -865,6 +917,21 @@ public class SarReviewService {
             chunkResults.add(chunkResult);
         }
 
+        // 主线二：文字质量审查。与业务规则向量召回分离，避免用 topK 召回漏掉全文分散型问题。
+        boolean textQualityEnabled = !Boolean.FALSE.equals(task.getQualityCheckEnabled());
+        TextQualityReviewResult qualityResult = TextQualityReviewResult.empty();
+        if (textQualityEnabled) {
+            webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
+                    "开始文字质量审查主线：全文扫描、结构索引、术语一致性...", 92);
+            qualityResult = runTextQualityPipeline(taskId, blocks, chapters, chatModel);
+            for (Map<String, Object> row : qualityResult.rows()) {
+                allCheckResults.add(row);
+                statusCounts.merge(String.valueOf(row.get("status")), 1, Integer::sum);
+                findingCount++;
+            }
+            appendTextQualityChunkResults(chunkResults, qualityResult.rows());
+        }
+
         // 阶段三：两阶段复核——对每条非 Pass 违规独立复判，标注 verifyStatus（不删除、不降级为 Pass）。
         int verifiedCount = 0;
         int confirmedCount = 0;
@@ -885,20 +952,6 @@ public class SarReviewService {
             }
         }
 
-        // 阶段四：跨章一致性核对——抽取关键实体、发现跨章节矛盾（两条现有管线都缺这层）。
-        int consistencyFindings = 0;
-        if (consistencyEnabled && chapters.size() >= 2) {
-            webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
-                    "开始跨章一致性核对...", 96);
-            List<Map<String, Object>> consistencyRows = runConsistencyPass(taskId, chapters, chatModel);
-            for (Map<String, Object> row : consistencyRows) {
-                allCheckResults.add(row);
-                statusCounts.merge(String.valueOf(row.get("status")), 1, Integer::sum);
-                findingCount++;
-                consistencyFindings++;
-            }
-        }
-
         Map<String, Object> aiResult = new LinkedHashMap<>();
         aiResult.put("reviewMode", "sar");
         aiResult.put("runStamp", runStamp);
@@ -911,6 +964,7 @@ public class SarReviewService {
         aiResult.put("totalFindings", findingCount);
         aiResult.put("allCheckResults", allCheckResults);
         aiResult.put("checkStatusCounts", statusCounts);
+        aiResult.put("reviewPipelines", buildReviewPipelineSummary(plans.size(), qualityResult));
         applyProblemSummary(aiResult, allCheckResults);
         aiResult.put("originalSources", java.util.stream.IntStream.range(0, chapters.size())
                 .mapToObj(i -> toOriginalSource(chapters.get(i), i + 1))
@@ -937,15 +991,18 @@ public class SarReviewService {
         retrievalStats.put("verifiedFindings", verifiedCount);
         retrievalStats.put("confirmedFindings", confirmedCount);
         retrievalStats.put("regionMaxBlocks", regionMaxBlocks);
+        retrievalStats.put("textQualityEnabled", textQualityEnabled);
+        retrievalStats.put("textQualityStats", qualityResult.stats());
         retrievalStats.put("consistencyEnabled", consistencyEnabled);
-        retrievalStats.put("consistencyFindings", consistencyFindings);
+        retrievalStats.put("consistencyFindings", qualityResult.consistencyFindings());
         aiResult.put("retrievalStats", retrievalStats);
 
         task.setAiResult(aiResult);
         updateTaskStatus(task, SarReviewTask.STATUS_COMPLETED, null);
         webSocketService.sendTaskUpdate(taskId, SarReviewTask.STATUS_COMPLETED,
                 remainingFailedCount == 0
-                        ? "SAR 审查完成：" + plans.size() + " 个检查项"
+                        ? "SAR 审查完成：" + plans.size() + " 个业务检查项，"
+                                + qualityResult.rows().size() + " 条文字质量/一致性发现"
                         : "SAR 审查完成：" + plans.size() + " 个检查项，其中 "
                                 + remainingFailedCount + " 个补审后仍需人工复核");
     }
@@ -1411,6 +1468,666 @@ public class SarReviewService {
         check.put("reviewError", rootErrorMessage(attempt.error()));
         check.put("retryExhausted", true);
         return check;
+    }
+
+    // ---------------- 主线二：文字质量审查 ----------------
+
+    private TextQualityReviewResult runTextQualityPipeline(String taskId,
+                                                           List<SarDocumentBlock> blocks,
+                                                           List<WordParser.Chapter> chapters,
+                                                           AiModelConfig chatModel) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("enabled", true);
+        Map<String, QualityCheckTemplate> templates = qualityCheckTemplatesByCode();
+
+        if (qualityFullScanEnabled) {
+            try {
+                webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
+                        "文字质量审查：全文切片扫描...", 92);
+                List<Map<String, Object>> fullScanRows =
+                        runFullScanQualityReview(taskId, blocks, chatModel, templates);
+                rows.addAll(fullScanRows);
+                stats.put("fullScanFindings", fullScanRows.size());
+            } catch (Exception e) {
+                log.warn("SAR text quality full scan failed: task={}, err={}", taskId, rootErrorMessage(e));
+                stats.put("fullScanError", rootErrorMessage(e));
+            }
+        } else {
+            stats.put("fullScanFindings", 0);
+            stats.put("fullScanSkipped", true);
+        }
+
+        if (qualityStructureIndexEnabled) {
+            try {
+                webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
+                        "文字质量审查：图表/章节结构索引检查...", 94);
+                List<Map<String, Object>> structureRows =
+                        runStructureIndexQualityReview(blocks, templates);
+                rows.addAll(structureRows);
+                stats.put("structureIndexFindings", structureRows.size());
+            } catch (Exception e) {
+                log.warn("SAR text quality structure-index check failed: task={}, err={}",
+                        taskId, rootErrorMessage(e));
+                stats.put("structureIndexError", rootErrorMessage(e));
+            }
+        } else {
+            stats.put("structureIndexFindings", 0);
+            stats.put("structureIndexSkipped", true);
+        }
+
+        if (qualityTerminologyEnabled) {
+            try {
+                webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
+                        "文字质量审查：全文术语一致性审查...", 95);
+                List<Map<String, Object>> terminologyRows =
+                        runTerminologyQualityReview(taskId, blocks, chatModel, templates);
+                rows.addAll(terminologyRows);
+                stats.put("terminologyFindings", terminologyRows.size());
+            } catch (Exception e) {
+                log.warn("SAR terminology consistency check failed: task={}, err={}",
+                        taskId, rootErrorMessage(e));
+                stats.put("terminologyError", rootErrorMessage(e));
+            }
+        } else {
+            stats.put("terminologyFindings", 0);
+            stats.put("terminologySkipped", true);
+        }
+
+        int consistencyFindings = 0;
+        if (consistencyEnabled && chapters.size() >= 2) {
+            try {
+                webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
+                        "文字质量审查：跨章一致性核对...", 96);
+                List<Map<String, Object>> consistencyRows = runConsistencyPass(taskId, chapters, chatModel);
+                for (Map<String, Object> row : consistencyRows) {
+                    annotateTextQualityRow(row, "CROSS_CHAPTER_CONSISTENCY", "跨章一致性审查");
+                }
+                rows.addAll(consistencyRows);
+                consistencyFindings = consistencyRows.size();
+                stats.put("crossChapterConsistencyFindings", consistencyFindings);
+            } catch (Exception e) {
+                log.warn("SAR cross-chapter consistency check failed: task={}, err={}",
+                        taskId, rootErrorMessage(e));
+                stats.put("crossChapterConsistencyError", rootErrorMessage(e));
+            }
+        } else {
+            stats.put("crossChapterConsistencyFindings", 0);
+            stats.put("crossChapterConsistencySkipped", !consistencyEnabled || chapters.size() < 2);
+        }
+
+        stats.put("totalTextQualityFindings", rows.size());
+        return new TextQualityReviewResult(rows, stats, consistencyFindings);
+    }
+
+    private List<Map<String, Object>> runFullScanQualityReview(String taskId,
+                                                               List<SarDocumentBlock> blocks,
+                                                               AiModelConfig chatModel,
+                                                               Map<String, QualityCheckTemplate> templates) throws Exception {
+        List<QualityCheckTemplate> checks = List.of(
+                templates.getOrDefault(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C001",
+                        defaultQualityCheckTemplates().get(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C001")),
+                templates.getOrDefault(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C002",
+                        defaultQualityCheckTemplates().get(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C002")))
+                .stream()
+                .filter(Objects::nonNull)
+                .toList();
+        if (checks.isEmpty() || blocks.isEmpty()) return List.of();
+
+        int limit = qualityFullScanMaxBlocks > 0
+                ? Math.min(blocks.size(), qualityFullScanMaxBlocks)
+                : blocks.size();
+        int batchSize = Math.max(1, qualityFullScanBatchBlocks);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (int start = 0; start < limit; start += batchSize) {
+            int end = Math.min(limit, start + batchSize);
+            List<ScoredBlock> evidence = blocks.subList(start, end).stream()
+                    .map(block -> new ScoredBlock(block, 1.0, "full_scan"))
+                    .toList();
+            Map<String, Map<String, Object>> byCode = callQualityChecks(
+                    taskId,
+                    chatModel,
+                    checks,
+                    evidence,
+                    "FULL_SCAN",
+                    "请逐块检查错别字、漏字、多字、重复词、明显标点错误、语病、语序不当和歧义。"
+                            + "只报告能用原文证据定位的问题；未发现问题的检查项返回 Pass 且 findings 为空。",
+                    300000 + start);
+            for (QualityCheckTemplate check : checks) {
+                rows.addAll(buildRowsFromQualityResult(check, byCode.get(check.checkCode()),
+                        evidence, "FULL_SCAN", "全文切片扫描"));
+            }
+        }
+        return rows;
+    }
+
+    private List<Map<String, Object>> runStructureIndexQualityReview(List<SarDocumentBlock> blocks,
+                                                                     Map<String, QualityCheckTemplate> templates) {
+        List<FigureTableMention> mentions = extractFigureTableMentions(blocks);
+        if (mentions.isEmpty()) return List.of();
+
+        QualityCheckTemplate uniqueness = templates.getOrDefault(
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C004",
+                defaultQualityCheckTemplates().get(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C004"));
+        QualityCheckTemplate refExists = templates.getOrDefault(
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C005",
+                defaultQualityCheckTemplates().get(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C005"));
+        QualityCheckTemplate order = templates.getOrDefault(
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C006",
+                defaultQualityCheckTemplates().get(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C006"));
+        QualityCheckTemplate allReferenced = templates.getOrDefault(
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C007",
+                defaultQualityCheckTemplates().get(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C007"));
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        List<FigureTableMention> captions = mentions.stream().filter(FigureTableMention::caption).toList();
+        List<FigureTableMention> refs = mentions.stream().filter(m -> !m.caption()).toList();
+
+        Map<String, List<FigureTableMention>> captionsByKey = new LinkedHashMap<>();
+        for (FigureTableMention caption : captions) {
+            captionsByKey.computeIfAbsent(caption.key(), k -> new ArrayList<>()).add(caption);
+        }
+        for (Map.Entry<String, List<FigureTableMention>> entry : captionsByKey.entrySet()) {
+            if (entry.getValue().size() <= 1) continue;
+            rows.add(buildQualityFindingRow(uniqueness, "Fail",
+                    "发现重复的" + entry.getValue().get(0).kind() + "编号：" + entry.getKey(),
+                    joinMentionEvidence(entry.getValue()),
+                    "请保证全文图号、表号唯一，重复编号应重新编号并同步修改正文引用。",
+                    "high",
+                    scoredMentions(entry.getValue(), "structure_index"),
+                    "STRUCTURE_INDEX",
+                    "结构化索引检查"));
+        }
+
+        Map<String, Set<String>> numberStyles = new LinkedHashMap<>();
+        for (FigureTableMention mention : mentions) {
+            numberStyles.computeIfAbsent(mention.kind(), k -> new HashSet<>())
+                    .add(numberStyle(mention.rawNumber()));
+        }
+        for (Map.Entry<String, Set<String>> entry : numberStyles.entrySet()) {
+            if (entry.getValue().size() <= 1) continue;
+            rows.add(buildQualityFindingRow(uniqueness, "Fail",
+                    entry.getKey() + "编号存在阿拉伯数字/中文数字等格式混用。",
+                    entry.getKey() + "编号格式集合：" + entry.getValue(),
+                    "请统一图号、表号的编号格式。",
+                    "medium",
+                    scoredMentions(mentions.stream().filter(m -> entry.getKey().equals(m.kind())).toList(),
+                            "structure_index"),
+                    "STRUCTURE_INDEX",
+                    "结构化索引检查"));
+        }
+
+        Set<String> captionKeys = new HashSet<>(captionsByKey.keySet());
+        Map<String, List<FigureTableMention>> refsByKey = new LinkedHashMap<>();
+        for (FigureTableMention ref : refs) {
+            refsByKey.computeIfAbsent(ref.key(), k -> new ArrayList<>()).add(ref);
+        }
+        for (Map.Entry<String, List<FigureTableMention>> entry : refsByKey.entrySet()) {
+            if (captionKeys.contains(entry.getKey())) continue;
+            rows.add(buildQualityFindingRow(refExists, "Fail",
+                    "正文引用了不存在的图表编号：" + entry.getKey(),
+                    joinMentionEvidence(entry.getValue()),
+                    "请补充对应图表，或修正文中引用编号。",
+                    "high",
+                    scoredMentions(entry.getValue(), "structure_index"),
+                    "STRUCTURE_INDEX",
+                    "结构化索引检查"));
+        }
+
+        rows.addAll(checkFigureTableSequence(captions, order));
+
+        Set<String> referencedKeys = new HashSet<>(refsByKey.keySet());
+        for (Map.Entry<String, List<FigureTableMention>> entry : captionsByKey.entrySet()) {
+            if (referencedKeys.contains(entry.getKey())) continue;
+            rows.add(buildQualityFindingRow(allReferenced, "Fail",
+                    "存在未被正文引用的图表：" + entry.getKey(),
+                    joinMentionEvidence(entry.getValue()),
+                    "请在正文中引用该图表，或删除未使用的图表。",
+                    "medium",
+                    scoredMentions(entry.getValue(), "structure_index"),
+                    "STRUCTURE_INDEX",
+                    "结构化索引检查"));
+        }
+        return rows;
+    }
+
+    private List<Map<String, Object>> checkFigureTableSequence(List<FigureTableMention> captions,
+                                                               QualityCheckTemplate template) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        Map<String, List<FigureTableMention>> byKind = new LinkedHashMap<>();
+        for (FigureTableMention caption : captions) {
+            byKind.computeIfAbsent(caption.kind(), k -> new ArrayList<>()).add(caption);
+        }
+        for (Map.Entry<String, List<FigureTableMention>> entry : byKind.entrySet()) {
+            Integer previous = null;
+            FigureTableMention previousMention = null;
+            for (FigureTableMention caption : entry.getValue()) {
+                Integer current = parseSimplePositiveNumber(caption.rawNumber());
+                if (current == null) continue;
+                if (previous != null && (current < previous || current > previous + 1)) {
+                    List<FigureTableMention> evidence = previousMention == null
+                            ? List.of(caption) : List.of(previousMention, caption);
+                    rows.add(buildQualityFindingRow(template, "Fail",
+                            entry.getKey() + "编号未按出现顺序连续递增。",
+                            joinMentionEvidence(evidence),
+                            "请按正文出现顺序重新编号，并同步修正文中引用。",
+                            "high",
+                            scoredMentions(evidence, "structure_index"),
+                            "STRUCTURE_INDEX",
+                            "结构化索引检查"));
+                }
+                previous = current;
+                previousMention = caption;
+            }
+        }
+        return rows;
+    }
+
+    private List<Map<String, Object>> runTerminologyQualityReview(String taskId,
+                                                                  List<SarDocumentBlock> blocks,
+                                                                  AiModelConfig chatModel,
+                                                                  Map<String, QualityCheckTemplate> templates) throws Exception {
+        QualityCheckTemplate check = templates.getOrDefault(
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C003",
+                defaultQualityCheckTemplates().get(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C003"));
+        if (check == null) return List.of();
+        List<TermObservation> observations = extractTerminologyObservations(blocks);
+        long distinctTerms = observations.stream().map(TermObservation::term).distinct().count();
+        if (observations.size() < 2 || distinctTerms < 2) return List.of();
+
+        List<ScoredBlock> evidence = observations.stream()
+                .map(obs -> new ScoredBlock(obs.block(), 1.0, "terminology_index"))
+                .collect(LinkedHashMap<String, ScoredBlock>::new,
+                        (map, item) -> map.putIfAbsent(item.block().getBlockId(), item),
+                        LinkedHashMap::putAll)
+                .values().stream().toList();
+        String prompt = buildTerminologyQualityPrompt(check, observations);
+        Map<String, Map<String, Object>> byCode = callQualityPrompt(
+                taskId, chatModel, prompt, 400000, ReviewResultSchema.RAG_GROUP_SCHEMA_NAME);
+        return buildRowsFromQualityResult(check, byCode.get(check.checkCode()), evidence,
+                "TERMINOLOGY_CONSISTENCY", "术语一致性审查");
+    }
+
+    private Map<String, Map<String, Object>> callQualityChecks(String taskId,
+                                                               AiModelConfig chatModel,
+                                                               List<QualityCheckTemplate> checks,
+                                                               List<ScoredBlock> evidence,
+                                                               String mechanism,
+                                                               String instruction,
+                                                               int seed) throws Exception {
+        String prompt = buildQualityPrompt(checks, evidence, mechanism, instruction);
+        return callQualityPrompt(taskId, chatModel, prompt, seed, ReviewResultSchema.RAG_GROUP_SCHEMA_NAME);
+    }
+
+    private Map<String, Map<String, Object>> callQualityPrompt(String taskId,
+                                                               AiModelConfig chatModel,
+                                                               String prompt,
+                                                               int seed,
+                                                               String schemaName) throws Exception {
+        AiCallOptions options = AiCallOptions.builder()
+                .temperature(0.0)
+                .topP(1.0)
+                .maxTokensOverride(8192)
+                .seed(stableSeed(taskId, seed))
+                .enablePromptCache(true)
+                .structuredSchema(com.alibaba.fastjson2.JSON.parseObject(
+                        com.alibaba.fastjson2.JSON.toJSONString(ReviewResultSchema.ragGroupSchema())))
+                .structuredSchemaName(schemaName)
+                .build();
+        String response = aiModelService.callAiModel(chatModel, SAR_TEXT_QUALITY_SYSTEM_PROMPT, prompt, options);
+        Map<String, Object> parsed = parseJson(response);
+        Map<String, Map<String, Object>> byCode = new LinkedHashMap<>();
+        Object results = parsed.get("results");
+        if (results instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> m) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> rm = (Map<String, Object>) m;
+                    String code = Objects.toString(rm.get("check_code"), "");
+                    if (!code.isBlank()) byCode.put(code, rm);
+                }
+            }
+        }
+        return byCode;
+    }
+
+    private String buildQualityPrompt(List<QualityCheckTemplate> checks,
+                                      List<ScoredBlock> evidence,
+                                      String mechanism,
+                                      String instruction) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("【执行机制】").append(mechanism).append('\n')
+                .append(instruction).append("\n\n")
+                .append("【待审查原文切片】\n");
+        for (ScoredBlock item : evidence) {
+            SarDocumentBlock block = item.block();
+            sb.append("[").append(block.getBlockId()).append("] ")
+                    .append(block.getSectionPath()).append('\n')
+                    .append(block.getTextContent()).append("\n\n");
+        }
+        sb.append("【文字质量检查项】必须对每个 check_code 返回一条 result；"
+                + "没有问题时 status=Pass 且 findings=[]；发现问题时每处问题写入 findings。\n");
+        for (QualityCheckTemplate check : checks) {
+            sb.append("- check_code: ").append(check.checkCode()).append('\n')
+                    .append("  检查问题: ").append(check.question()).append('\n')
+                    .append("  通过标准: ").append(check.passCriteria()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String buildTerminologyQualityPrompt(QualityCheckTemplate check,
+                                                 List<TermObservation> observations) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("【执行机制】TERMINOLOGY_CONSISTENCY\n")
+                .append("下面是全文切片扫描得到的术语/缩略语/设备称谓出现索引。")
+                .append("请只基于索引中的原文证据判断同一对象是否存在多种称谓、同一缩写是否含义不一致、")
+                .append("中英文/简称是否前后混用。没有明确不一致时返回 Pass。\n\n")
+                .append("【术语出现索引】\n");
+        int idx = 1;
+        for (TermObservation obs : observations) {
+            sb.append(idx++).append(". term=").append(obs.term())
+                    .append(" | location=").append(obs.block().getSectionPath())
+                    .append(" | source=").append(obs.block().getBlockId())
+                    .append(" | evidence=").append(obs.evidence()).append('\n');
+        }
+        sb.append("\n【待判定检查项】\n")
+                .append("- check_code: ").append(check.checkCode()).append('\n')
+                .append("  检查问题: ").append(check.question()).append('\n')
+                .append("  通过标准: ").append(check.passCriteria()).append('\n')
+                .append("\n输出 findings 时，evidence 必须同时引用至少两处相互冲突的术语证据。");
+        return sb.toString();
+    }
+
+    private List<Map<String, Object>> buildRowsFromQualityResult(QualityCheckTemplate template,
+                                                                 Map<String, Object> result,
+                                                                 List<ScoredBlock> evidence,
+                                                                 String mechanism,
+                                                                 String mechanismLabel) {
+        if (template == null || result == null) return List.of();
+        List<Map<String, Object>> rows = buildRowsFromResult(toQualityPlan(template), result, evidence, 0.9);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            if ("Pass".equals(normalizeCheckStatus(row.get("status")))) continue;
+            annotateTextQualityRow(row, mechanism, mechanismLabel);
+            out.add(row);
+        }
+        return out;
+    }
+
+    private Map<String, Object> buildQualityFindingRow(QualityCheckTemplate template,
+                                                       String status,
+                                                       String reason,
+                                                       String evidenceText,
+                                                       String suggestion,
+                                                       String confidence,
+                                                       List<ScoredBlock> evidence,
+                                                       String mechanism,
+                                                       String mechanismLabel) {
+        Map<String, Object> row = buildRow(toQualityPlan(template), status, reason, evidenceText,
+                suggestion, confidence, evidence, evidence.isEmpty() ? null : evidence.get(0), 0, 1);
+        annotateTextQualityRow(row, mechanism, mechanismLabel);
+        return row;
+    }
+
+    private void annotateTextQualityRow(Map<String, Object> row, String mechanism, String mechanismLabel) {
+        row.put("mainLine", "TEXT_QUALITY_REVIEW");
+        row.put("reviewPipeline", "文字质量审查");
+        row.put("executionMechanism", mechanism);
+        row.put("executionMechanismLabel", mechanismLabel);
+        row.putIfAbsent("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
+        row.putIfAbsent("ruleName", RuleDispatcher.BASIC_QUALITY_RULE_NAME);
+        if (Objects.toString(row.get("ruleName"), "").isBlank()) {
+            row.put("ruleName", RuleDispatcher.BASIC_QUALITY_RULE_NAME);
+        }
+        row.putIfAbsent("ruleDescription", "SAR 文字质量审查主线：全文扫描、结构化索引、术语一致性与跨章一致性。");
+        if (Objects.toString(row.get("ruleDescription"), "").isBlank()) {
+            row.put("ruleDescription", "SAR 文字质量审查主线：全文扫描、结构化索引、术语一致性与跨章一致性。");
+        }
+    }
+
+    private CheckPlan toQualityPlan(QualityCheckTemplate template) {
+        return new CheckPlan(null, null,
+                RuleDispatcher.BASIC_QUALITY_RULE_CODE,
+                template.checkCode(),
+                template.question(),
+                template.passCriteria(),
+                template.category());
+    }
+
+    private Map<String, QualityCheckTemplate> qualityCheckTemplatesByCode() {
+        Map<String, QualityCheckTemplate> checks = new LinkedHashMap<>(defaultQualityCheckTemplates());
+        Rule dbRule = loadEditableQualityRule();
+        if (dbRule == null || dbRule.getId() == null) return checks;
+        try {
+            List<RuleCheck> dbChecks = ruleCheckMapper.findActiveByRuleId(dbRule.getId());
+            if (dbChecks != null) {
+                for (RuleCheck check : dbChecks) {
+                    String code = firstNonBlank(check.getCheckCode(), "");
+                    if (code.isBlank()) continue;
+                    checks.put(code, new QualityCheckTemplate(
+                            code,
+                            firstNonBlank(check.getQuestion(), code),
+                            firstNonBlank(check.getPassCriteria(), ""),
+                            firstNonBlank(check.getCategory(), "其他")));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("加载可编辑基础文字质量检查项失败，回退默认项：{}", e.getMessage());
+        }
+        return checks;
+    }
+
+    private Rule loadEditableQualityRule() {
+        try {
+            Long id = ruleMapper.findIdByRuleCode(RuleDispatcher.BASIC_QUALITY_RULE_CODE);
+            return id == null ? null : ruleMapper.selectById(id);
+        } catch (Exception e) {
+            log.warn("加载基础文字质量规则失败，使用默认定义：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    private Map<String, QualityCheckTemplate> defaultQualityCheckTemplates() {
+        Map<String, QualityCheckTemplate> checks = new LinkedHashMap<>();
+        checks.put("R-Q-C001", new QualityCheckTemplate("R-Q-C001",
+                "是否存在错别字、漏字、多字、重复词或明显标点错误",
+                "未发现错别字、漏字、多字、重复词或明显标点错误", "其他"));
+        checks.put("R-Q-C002", new QualityCheckTemplate("R-Q-C002",
+                "语句是否通顺，是否存在语序不当、语病或明显歧义",
+                "语句通顺、语义明确，不存在语序不当、语病或明显歧义", "逻辑一致性"));
+        checks.put("R-Q-C003", new QualityCheckTemplate("R-Q-C003",
+                "全文范围内术语、缩略语、设备名称、试验项目和参数名称是否一致",
+                "全文范围内相同对象的术语、名称和称谓保持一致", "术语一致性"));
+        checks.put("R-Q-C004", new QualityCheckTemplate("R-Q-C004",
+                "图号、表号是否全文唯一不重复、编号格式统一？",
+                "编号唯一且格式统一即通过；存在重复编号或格式不统一则不通过。", "格式"));
+        checks.put("R-Q-C005", new QualityCheckTemplate("R-Q-C005",
+                "正文引用的图号/表号是否真实存在，且引用编号与图表实际编号一致、表述统一？",
+                "引用均真实且编号表述一致即通过；引用不存在的编号或表述混乱则不通过。", "逻辑一致性"));
+        checks.put("R-Q-C006", new QualityCheckTemplate("R-Q-C006",
+                "图表编号是否按出现顺序递增、不跳号、不倒序？",
+                "顺序合理即通过；跳号或倒序则不通过。", "逻辑一致性"));
+        checks.put("R-Q-C007", new QualityCheckTemplate("R-Q-C007",
+                "是否所有图表均被正文引用？",
+                "图表均被引用即通过；存在未被引用的图表则不通过。", "完整性"));
+        return checks;
+    }
+
+    private List<FigureTableMention> extractFigureTableMentions(List<SarDocumentBlock> blocks) {
+        List<FigureTableMention> mentions = new ArrayList<>();
+        int order = 0;
+        for (SarDocumentBlock block : blocks) {
+            String text = block.getTextContent();
+            if (text == null || text.isBlank()) continue;
+            for (String line : text.split("\\R")) {
+                String trimmed = line.trim();
+                if (trimmed.isBlank()) continue;
+                Matcher captionMatcher = FIGURE_TABLE_CAPTION.matcher(trimmed);
+                boolean caption = captionMatcher.find() && isLikelyFigureTableCaption(trimmed);
+                if (caption) {
+                    String kind = captionMatcher.group(1);
+                    String number = captionMatcher.group(2);
+                    mentions.add(new FigureTableMention(kind, number, normalizeFigureTableNumber(number),
+                            trimmed, block, true, order++));
+                    continue;
+                }
+                Matcher refMatcher = FIGURE_TABLE_REFERENCE.matcher(trimmed);
+                while (refMatcher.find()) {
+                    String kind = refMatcher.group(1);
+                    String number = refMatcher.group(2);
+                    mentions.add(new FigureTableMention(kind, number, normalizeFigureTableNumber(number),
+                            trimmed, block, false, order++));
+                }
+            }
+        }
+        return mentions;
+    }
+
+    private boolean isLikelyFigureTableCaption(String line) {
+        if (line.length() > 120) return false;
+        return !(line.contains("见图") || line.contains("见表")
+                || line.contains("如图") || line.contains("如表")
+                || line.contains("所示") || line.contains("参见")
+                || line.contains("详见"));
+    }
+
+    private String joinMentionEvidence(List<FigureTableMention> mentions) {
+        StringBuilder sb = new StringBuilder();
+        for (FigureTableMention mention : mentions) {
+            if (sb.length() > 0) sb.append("\n");
+            sb.append("[").append(mention.block().getBlockId()).append("] ")
+                    .append(mention.block().getSectionPath()).append("：")
+                    .append(mention.text());
+        }
+        return sb.toString();
+    }
+
+    private List<ScoredBlock> scoredMentions(List<FigureTableMention> mentions, String reason) {
+        LinkedHashMap<String, ScoredBlock> byBlock = new LinkedHashMap<>();
+        for (FigureTableMention mention : mentions) {
+            byBlock.putIfAbsent(mention.block().getBlockId(),
+                    new ScoredBlock(mention.block(), 1.0, reason));
+        }
+        return new ArrayList<>(byBlock.values());
+    }
+
+    private String normalizeFigureTableNumber(String raw) {
+        if (raw == null) return "";
+        return toHalfWidth(raw).replace('．', '.').replace('－', '-').trim();
+    }
+
+    private String numberStyle(String raw) {
+        String s = normalizeFigureTableNumber(raw);
+        if (s.matches("[0-9]+([.\\-][0-9]+)*")) return "arabic";
+        if (s.matches("[一二三四五六七八九十百]+")) return "chinese";
+        return "mixed";
+    }
+
+    private Integer parseSimplePositiveNumber(String raw) {
+        String s = normalizeFigureTableNumber(raw);
+        if (!s.matches("[0-9]+")) return null;
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String toHalfWidth(String s) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '０' && c <= '９') {
+                out.append((char) ('0' + c - '０'));
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    private List<TermObservation> extractTerminologyObservations(List<SarDocumentBlock> blocks) {
+        List<TermObservation> observations = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (SarDocumentBlock block : blocks) {
+            String text = block.getTextContent();
+            if (text == null || text.isBlank()) continue;
+            for (String term : KNOWN_TERMINOLOGY_ALIASES) {
+                if (!text.contains(term)) continue;
+                addTermObservation(observations, seen, term, block, snippetAround(text, term));
+            }
+            Matcher matcher = UPPERCASE_TERM.matcher(text);
+            while (matcher.find()) {
+                String term = matcher.group();
+                if (UPPERCASE_TERM_STOPWORDS.contains(term)) continue;
+                addTermObservation(observations, seen, term, block, snippetAround(text, term));
+            }
+            if (observations.size() >= Math.max(2, qualityTerminologyMaxObservations)) break;
+        }
+        return observations;
+    }
+
+    private void addTermObservation(List<TermObservation> observations, Set<String> seen,
+                                    String term, SarDocumentBlock block, String evidence) {
+        String key = term + "|" + block.getBlockId() + "|" + evidence;
+        if (!seen.add(key)) return;
+        observations.add(new TermObservation(term, evidence, block));
+    }
+
+    private String snippetAround(String text, String needle) {
+        if (text == null || text.isBlank()) return "";
+        int idx = needle == null || needle.isBlank() ? -1 : text.indexOf(needle);
+        if (idx < 0) {
+            String trimmed = text.trim();
+            return trimmed.length() > 160 ? trimmed.substring(0, 160) : trimmed;
+        }
+        int start = Math.max(0, idx - 60);
+        int end = Math.min(text.length(), idx + needle.length() + 80);
+        return text.substring(start, end).replaceAll("\\s+", " ").trim();
+    }
+
+    private void appendTextQualityChunkResults(List<Map<String, Object>> chunkResults,
+                                               List<Map<String, Object>> rows) {
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> chunkResult = new LinkedHashMap<>();
+            chunkResult.put("chunk", chunkResults.size() + 1);
+            chunkResult.put("chapterTitle", Objects.toString(
+                    row.getOrDefault("executionMechanismLabel", "文字质量审查"), "文字质量审查"));
+            chunkResult.put("totalChunks", chunkResults.size() + 1);
+            chunkResult.put("sourceRefs", row.get("sourceRefs"));
+            chunkResult.put("appliedRules", List.of(Objects.toString(
+                    row.getOrDefault("ruleName", RuleDispatcher.BASIC_QUALITY_RULE_NAME), "")));
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("summary", Objects.toString(row.getOrDefault("reason", ""), ""));
+            result.put("issues", new ArrayList<>());
+            result.put("passed_items", new ArrayList<>());
+            result.put("check_results", List.of(row));
+            chunkResult.put("result", result);
+            chunkResults.add(chunkResult);
+        }
+    }
+
+    private List<Map<String, Object>> buildReviewPipelineSummary(int businessCheckCount,
+                                                                 TextQualityReviewResult qualityResult) {
+        List<Map<String, Object>> pipelines = new ArrayList<>();
+        Map<String, Object> business = new LinkedHashMap<>();
+        business.put("mainLine", "BUSINESS_RULE_REVIEW");
+        business.put("label", "业务规则审查");
+        business.put("checkCount", businessCheckCount);
+        business.put("executionMechanisms", List.of(
+                "STRUCTURAL_ROUTE", "LEXICAL_ROUTE", "VECTOR_RECALL", "REGION_EVIDENCE", "GROUP_LLM_REVIEW"));
+        pipelines.add(business);
+
+        Map<String, Object> quality = new LinkedHashMap<>();
+        quality.put("mainLine", "TEXT_QUALITY_REVIEW");
+        quality.put("label", "文字质量审查");
+        quality.put("enabled", Boolean.TRUE.equals(qualityResult.stats().get("enabled")));
+        quality.put("findingCount", qualityResult.rows().size());
+        quality.put("executionMechanisms", List.of(
+                "FULL_SCAN", "STRUCTURE_INDEX", "TERMINOLOGY_CONSISTENCY", "CROSS_CHAPTER_CONSISTENCY"));
+        quality.put("stats", qualityResult.stats());
+        pipelines.add(quality);
+        return pipelines;
     }
 
     private String rootErrorMessage(Throwable error) {
@@ -2021,5 +2738,38 @@ public class SarReviewService {
 
     /** 一次分组调用的装箱：成员检查项 + 它们共享的去重证据。 */
     private record CallBin(List<RetrievedCheck> members, List<ScoredBlock> unionEvidence) {
+    }
+
+    private record TextQualityReviewResult(List<Map<String, Object>> rows,
+                                           Map<String, Object> stats,
+                                           int consistencyFindings) {
+        static TextQualityReviewResult empty() {
+            Map<String, Object> stats = new LinkedHashMap<>();
+            stats.put("enabled", false);
+            return new TextQualityReviewResult(List.of(), stats, 0);
+        }
+    }
+
+    private record QualityCheckTemplate(String checkCode,
+                                        String question,
+                                        String passCriteria,
+                                        String category) {
+    }
+
+    private record FigureTableMention(String kind,
+                                      String rawNumber,
+                                      String normalizedNumber,
+                                      String text,
+                                      SarDocumentBlock block,
+                                      boolean caption,
+                                      int order) {
+        String key() {
+            return kind + ":" + normalizedNumber;
+        }
+    }
+
+    private record TermObservation(String term,
+                                   String evidence,
+                                   SarDocumentBlock block) {
     }
 }
