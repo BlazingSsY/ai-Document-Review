@@ -132,6 +132,9 @@ review:
       adaptive: true                 # 仅复核低置信/定位不确定项（而非全量）
     consistency:
       enabled: true                  # 跨章一致性核对（抽取关键实体、查跨章节矛盾）
+      max-input-chars: 48000         # 一致性摘要总字符预算，按章节公平分配
+      per-chapter-max-chars: 4800    # 单章最多进入一致性模型的字符数
+      windows-per-chapter: 4         # 长章节从头/中/尾等位置均匀取样
     quality:
       full-scan:
         enabled: true                # 文字质量主线：全文切片扫描（错别字、病句、标点等局部问题）

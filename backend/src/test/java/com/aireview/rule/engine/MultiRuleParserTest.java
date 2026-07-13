@@ -1,4 +1,4 @@
-package com.aireview.util;
+package com.aireview.rule.engine;
 
 import org.junit.jupiter.api.Test;
 
@@ -9,16 +9,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MultiRuleParserTest {
 
     @Test
-    void parsesStepTemplateMarkdownWithBoldMetadata() {
+    void parsesCurrentStepTemplateMarkdown() {
         String content = """
                 # DO160G-15章 磁效应试验QTP精细化审查规则
 
                 ## 1. 磁效应试验-QTP基本信息
 
-                - **规则编号**：15-01-qtp_basic_info_qtp
-                - **规则类型**：section_specific
-                - **检查项**：QTP基本信息
-                - **关键词**：磁效应试验、DO160G-15、QTP
+                - 规则编号：15-01-qtp_basic_info_qtp
+                - 规则类型：section_specific
+                - 检查项：QTP基本信息
+                - 关键词：磁效应试验、DO160G-15、QTP
 
                 ### 审查内容
 
@@ -34,10 +34,10 @@ class MultiRuleParserTest {
 
                 ## 2. 磁效应试验-EUT设备名称、件号
 
-                - **规则编号**：15-02-device_identification_eut
-                - **规则类型**：section_specific
-                - **检查项**：EUT设备名称、件号
-                - **关键词**：磁效应试验、EUT设备名称
+                - 规则编号：15-02-device_identification_eut
+                - 规则类型：section_specific
+                - 检查项：EUT设备名称、件号
+                - 关键词：磁效应试验、EUT设备名称
 
                 ### 审查内容
 

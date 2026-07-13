@@ -13,6 +13,7 @@ frontend/tsconfig.tsbuildinfo
 .idea/
 *.iml
 .vscode/
+.codex/
 .settings/
 .project
 .classpath

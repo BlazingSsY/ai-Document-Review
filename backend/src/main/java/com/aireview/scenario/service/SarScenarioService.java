@@ -7,6 +7,7 @@ import com.aireview.scenario.entity.SarScenario;
 import com.aireview.scenario.entity.SarScenarioLibraryMapping;
 import com.aireview.scenario.repository.SarScenarioMapper;
 import com.aireview.scenario.repository.SarScenarioLibraryMappingMapper;
+import com.aireview.user.repository.SarUserRuleAssignmentMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * SAR 侧场景服务。与 {@link ScenarioService} 结构对称，仅注入的 mapper 不同。
@@ -26,6 +28,26 @@ public class SarScenarioService {
 
     private final SarScenarioMapper sarScenarioMapper;
     private final SarScenarioLibraryMappingMapper sarScenarioLibraryMappingMapper;
+    private final SarUserRuleAssignmentMapper sarUserRuleAssignmentMapper;
+
+    public void requireReviewAccess(Long scenarioId, Long userId, String role) {
+        if (scenarioId == null) {
+            throw new IllegalArgumentException("SAR scenario is required");
+        }
+        SarScenario scenario = sarScenarioMapper.selectById(scenarioId);
+        if (scenario == null) {
+            throw new IllegalArgumentException("SAR scenario not found: " + scenarioId);
+        }
+        String normalizedRole = role == null ? "user" : role.trim().toLowerCase(Locale.ROOT);
+        if ("admin".equals(normalizedRole) || scenario.getCreatorId().equals(userId)) return;
+
+        List<Long> scenarioLibraryIds = sarScenarioLibraryMappingMapper.findLibraryIdsByScenarioId(scenarioId);
+        List<Long> assignedLibraryIds = sarUserRuleAssignmentMapper.findLibraryIdsByUserId(userId);
+        if (scenarioLibraryIds == null || scenarioLibraryIds.isEmpty()
+                || assignedLibraryIds == null || !assignedLibraryIds.containsAll(scenarioLibraryIds)) {
+            throw new IllegalArgumentException("You do not have access to all rule libraries in this SAR scenario");
+        }
+    }
 
     @Transactional
     public ScenarioDTO createScenario(ScenarioCreateRequest request, Long creatorId) {

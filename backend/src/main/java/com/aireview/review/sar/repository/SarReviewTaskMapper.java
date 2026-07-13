@@ -35,4 +35,7 @@ public interface SarReviewTaskMapper extends BaseMapper<SarReviewTask> {
             + "jsonb_build_object('chunkResults', ai_result->'chunkResults') AS ai_result "
             + "FROM sar_review_tasks WHERE id = #{taskId}")
     SarReviewTask selectSourcesById(@Param("taskId") String taskId);
+
+    @Select("SELECT status FROM sar_review_tasks WHERE id = #{taskId}")
+    String selectStatusById(@Param("taskId") String taskId);
 }

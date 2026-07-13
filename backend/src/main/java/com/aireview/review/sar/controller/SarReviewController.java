@@ -5,6 +5,7 @@ import com.aireview.review.dto.ManualCheckDecisionRequest;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.review.dto.ReviewTaskDTO;
 import com.aireview.review.sar.service.SarReviewService;
+import com.aireview.auth.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -39,8 +40,10 @@ public class SarReviewController {
             @RequestParam(value = "qualityCheckEnabled", required = false, defaultValue = "true") boolean qualityCheckEnabled,
             Authentication authentication) {
         try {
-            Long userId = (Long) authentication.getPrincipal();
-            ReviewTaskDTO task = sarReviewService.submitReview(file, scenarioId, selectedModel, userId, qualityCheckEnabled);
+            Long userId = SecurityUtils.getUserId(authentication);
+            String role = SecurityUtils.getRoleFromAuthentication(authentication);
+            ReviewTaskDTO task = sarReviewService.submitReview(
+                    file, scenarioId, selectedModel, userId, qualityCheckEnabled, role);
             return ApiResponse.success("SAR review task submitted", task);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
