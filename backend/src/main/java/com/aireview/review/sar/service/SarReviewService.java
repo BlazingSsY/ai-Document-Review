@@ -27,6 +27,7 @@ import com.aireview.scenario.service.SarScenarioService;
 import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.llm.JsonExtractor;
 import com.aireview.document.ChunkUtils;
+import com.aireview.document.DocumentEvidenceLocator;
 import com.aireview.document.DocumentSourceMapper;
 import com.aireview.document.WordParser;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -115,7 +116,8 @@ public class SarReviewService {
 
             输出要求：
             - 对输入中的每个 check_code 各返回一条 results，不得新增 check_code。
-            - 只报告有证据的问题；findings.evidence 必须逐字引用输入中的原文或索引证据。
+            - 只报告有证据的问题；findings.evidence 必须是从输入中逐字复制的最小充分片段，不得改写或添加说明性前后缀。
+            - findings.description 必须按“原文“<evidence逐字内容>”存在/表明……”表述，中文引号内文字必须与 evidence 完全一致。
             - 没有问题时 status=Pass 且 findings=[]。
             严格按给定 JSON Schema 输出。
             """;
@@ -2676,7 +2678,8 @@ public class SarReviewService {
 
             输出要求：
             - 对输入里的每一个 check_code 各返回一条 results，按 check_code 对齐，不得遗漏、不得新增、不得合并。
-            - 每个检查项的每一处违规作为它 findings 里的一条，给出可定位的 location 与逐字摘录的 evidence。
+            - 每个检查项的每一处违规作为它 findings 里的一条，给出可定位的 location；evidence 必须是从区域原文逐字复制的最小充分片段，不得改写或添加说明性前后缀。
+            - findings.description 必须按“原文“<evidence逐字内容>”存在/表明……”表述，中文引号内文字必须与 evidence 完全一致。
             - 同一检查项的问题在多个位置出现时，每个位置各列一条，不要合并。
             - 只依据提供的区域原文判断，不要臆造；PARTIAL 证据不得用于证明全文缺失。
             严格按给定 JSON Schema 输出。
@@ -2811,8 +2814,10 @@ public class SarReviewService {
         String sys = "你是严格的航空机载文档一致性审查员。只找【跨章节】的相互矛盾或不一致："
                 + "同一实体在不同章节取值不同（温度范围、鉴定试验类别、设备型号/数量、合格判据数值等），"
                 + "图号/表号/章节引用前后不一致，术语前后不统一。不要报单章节内的问题，找不到明确矛盾就返回空列表。"
-                + "严格输出 JSON：{\"issues\":[{\"location\":\"涉及章节/位置\",\"description\":\"矛盾说明\","
-                + "\"evidence\":\"两处相互矛盾的原文摘录\",\"suggestion\":\"如何统一\"}]}";
+                + "evidence 必须逐字复制两处相互矛盾的原文，不得改写或添加说明性前后缀；"
+                + "description 必须按“原文“第一处证据”与“第二处证据”存在矛盾……”表述。"
+                + "严格输出 JSON：{\"issues\":[{\"location\":\"涉及章节/位置\",\"description\":\"带原文引号的矛盾说明\","
+                + "\"evidence\":\"两处逐字原文摘录\",\"suggestion\":\"如何统一\"}]}";
         AiCallOptions options = AiCallOptions.builder()
                 .temperature(0.0).topP(1.0).maxTokensOverride(4096)
                 .seed(stableSeed(taskId, 800000)).enablePromptCache(true).build();
@@ -2829,13 +2834,37 @@ public class SarReviewService {
             if (!(o instanceof Map<?, ?> m)) continue;
             @SuppressWarnings("unchecked")
             Map<String, Object> im = (Map<String, Object>) m;
-            rows.add(buildConsistencyRow(idx++, total,
+            Map<String, Object> row = buildConsistencyRow(idx++, total,
                     Objects.toString(im.getOrDefault("location", ""), ""),
                     Objects.toString(im.getOrDefault("description", ""), ""),
                     Objects.toString(im.getOrDefault("evidence", ""), ""),
-                    Objects.toString(im.getOrDefault("suggestion", ""), "")));
+                    Objects.toString(im.getOrDefault("suggestion", ""), ""));
+            row.put("sourceRefs", locateConsistencySourceRefs(
+                    chapters, Objects.toString(im.getOrDefault("evidence", ""), "")));
+            rows.add(row);
         }
         return rows;
+    }
+
+    private List<Map<String, Object>> locateConsistencySourceRefs(
+            List<WordParser.Chapter> chapters, String evidence) {
+        List<Map<String, Object>> refs = new ArrayList<>();
+        for (int index = 0; index < chapters.size(); index++) {
+            WordParser.Chapter chapter = chapters.get(index);
+            int chapterIndex = index + 1;
+            DocumentEvidenceLocator.locate(chapter.getNodes(), evidence).ifPresent(range -> {
+                Map<String, Object> ref = new LinkedHashMap<>();
+                ref.put("sourceId", "CHAPTER-" + String.format("%03d", chapterIndex));
+                ref.put("chapterIndex", chapterIndex);
+                ref.put("title", range.sectionPath());
+                ref.put("sectionPath", range.sectionPath());
+                ref.put("startNodeId", range.startNodeId());
+                ref.put("endNodeId", range.endNodeId());
+                ref.put("reason", "matched_evidence");
+                refs.add(ref);
+            });
+        }
+        return refs;
     }
 
     String sampleEvenWindows(String content, int maxChars, int windows) {

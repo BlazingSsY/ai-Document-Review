@@ -22,6 +22,7 @@ import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.document.ChapterReferenceResolver;
 import com.aireview.document.ChunkUtils;
+import com.aireview.document.DocumentEvidenceLocator;
 import com.aireview.document.DocumentSourceMapper;
 import com.aireview.rule.engine.RuleDispatcher;
 import com.aireview.rule.engine.RuleMetadata;
@@ -1465,6 +1466,7 @@ public class ReviewService {
         }
         Map<String, Object> merged = mergeSamples(samples, chunk.getLabel());
         if (qualityCheck) enrichBuiltInQualityChecks(merged, chunkHasFiguresOrTables(chunk.getContent()));
+        enrichResultSourceRefs(merged, chunkIdx, chunk, refIdx);
 
         Map<String, Object> chunkResult = new HashMap<>();
         chunkResult.put("chunk", chunkNum);
@@ -1961,6 +1963,47 @@ public class ReviewService {
             }
         }
         return refs;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void enrichResultSourceRefs(Map<String, Object> result,
+                                        int chunkIdx,
+                                        ChunkUtils.ChunkResult chunk,
+                                        Set<Integer> supportingChapterIndices) {
+        if (result == null) return;
+        for (String field : List.of("issues", "check_results")) {
+            Object rawItems = result.get(field);
+            if (!(rawItems instanceof List<?> items)) continue;
+            for (Object rawItem : items) {
+                if (!(rawItem instanceof Map<?, ?>)) continue;
+                Map<String, Object> item = (Map<String, Object>) rawItem;
+                String evidence = Objects.toString(item.getOrDefault("evidence", ""), "").trim();
+                List<Map<String, Object>> refs = buildChunkSourceRefs(
+                        chunkIdx, chunk, supportingChapterIndices);
+                locateEvidenceNode(chunk, evidence).ifPresent(range -> {
+                    if (refs.isEmpty()) return;
+                    Map<String, Object> primary = new LinkedHashMap<>(refs.get(0));
+                    primary.put("startNodeId", range.startNodeId());
+                    primary.put("endNodeId", range.endNodeId());
+                    if (range.sectionPath() != null && !range.sectionPath().isBlank()) {
+                        primary.put("title", range.sectionPath());
+                        primary.put("sectionPath", range.sectionPath());
+                        item.put("location", range.sectionPath());
+                        item.put("sourceTitle", range.sectionPath());
+                    }
+                    refs.set(0, primary);
+                });
+                item.put("sourceRefs", refs);
+            }
+        }
+    }
+
+    private Optional<DocumentEvidenceLocator.NodeRange> locateEvidenceNode(
+            ChunkUtils.ChunkResult chunk, String evidence) {
+        WordParser.Chapter chapter = chunk == null ? null : chunk.getSourceChapter();
+        return chapter == null
+                ? Optional.empty()
+                : DocumentEvidenceLocator.locate(chapter.getNodes(), evidence);
     }
 
     private static long elapsedMs(long startNs) {

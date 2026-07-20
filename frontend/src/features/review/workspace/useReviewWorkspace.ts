@@ -272,12 +272,12 @@ export function useReviewWorkspace() {
   const handleInlineManualDecision = async (
     item: Record<string, unknown>,
     decision: 'Pass' | 'Fail' | 'Review',
-  ) => {
-    if (!taskId) return;
+  ): Promise<boolean> => {
+    if (!taskId) return false;
     const checkCode = textField(item, ['check_code', 'checkCode']);
     if (!checkCode) {
       message.error('当前检查项缺少编号，无法保存人工校验');
-      return;
+      return false;
     }
     setManualSaving(true);
     try {
@@ -290,8 +290,10 @@ export function useReviewWorkspace() {
       });
       setTask(res.data.data);
       message.success('人工校验已保存');
+      return true;
     } catch {
       message.error('人工校验保存失败');
+      return false;
     } finally {
       setManualSaving(false);
     }

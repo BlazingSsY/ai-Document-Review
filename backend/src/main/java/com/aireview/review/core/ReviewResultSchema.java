@@ -48,7 +48,8 @@ public final class ReviewResultSchema {
         issueProps.put("rule", strProp("命中的规则名称。"));
         issueProps.put("rule_code", strProp("命中的规则编号，必须使用本次注入清单内的 [R-XXX] 编号。"));
         issueProps.put("category", enumProp(CATEGORY_ENUM, "问题分类。无法归类时填 其他。"));
-        issueProps.put("evidence", strProp("判定依据：摘录支持该结论的原文片段或表格行。"));
+        issueProps.put("evidence", strProp(
+                "支持该结论的逐字原文片段或表格行；只能复制原文，不得改写，不得添加“原文写道”等说明性前后缀。"));
 
         JSONObject issueSchema = new JSONObject();
         issueSchema.put("type", "object");
@@ -75,8 +76,10 @@ public final class ReviewResultSchema {
         checkProps.put("check_question", strProp("检查项问题。"));
         checkProps.put("status", enumProp(CHECK_STATUS_ENUM,
                 "三级判定：Pass（通过）、Fail（不通过）、Review（待复核）。部分通过、不适用一律判 Review。"));
-        checkProps.put("reason", strProp("判定理由，说明为何给出该状态。"));
-        checkProps.put("evidence", strProp("证据原文摘录；证据不足时写明未找到直接证据。"));
+        checkProps.put("reason", strProp(
+                "判定理由。存在直接证据时必须按“原文“逐字证据”存在/表明……”表述，中文引号中的内容必须与 evidence 完全一致。"));
+        checkProps.put("evidence", strProp(
+                "逐字原文摘录；只能复制原文，不得改写或添加说明性前后缀。没有直接证据时必须为空字符串。"));
         checkProps.put("missing_items", missingArr);
         checkProps.put("suggestion", strProp("整改建议；Pass 可为空字符串。"));
         checkProps.put("confidence", enumProp(List.of("high", "medium", "low", "needs_review"),
@@ -175,8 +178,10 @@ public final class ReviewResultSchema {
     public static JSONObject ragGroupSchema() {
         JSONObject findingProps = new JSONObject();
         findingProps.put("location", strProp("违规所在位置：章节路径或可在原文中定位的线索。"));
-        findingProps.put("evidence", strProp("支持该违规判定的原文摘录，必须逐字引用证据块中的文字。"));
-        findingProps.put("description", strProp("该处违规的具体说明。"));
+        findingProps.put("evidence", strProp(
+                "支持该违规判定的逐字原文摘录；只能复制证据块中的文字，不得改写或添加说明性前后缀。"));
+        findingProps.put("description", strProp(
+                "该处违规的具体说明，必须按“原文“逐字证据”存在/表明……”表述，中文引号中的内容必须与 evidence 完全一致。"));
         findingProps.put("suggestion", strProp("针对该处的整改建议。"));
         JSONObject findingSchema = new JSONObject();
         findingSchema.put("type", "object");
@@ -193,7 +198,8 @@ public final class ReviewResultSchema {
         resultProps.put("status", enumProp(CHECK_STATUS_ENUM,
                 "三级判定：Pass（能引用到满足要求的原文）、Fail（存在违规或要求内容缺失）、"
                         + "Review（证据自相矛盾或确实无法判断）。"));
-        resultProps.put("reason", strProp("总体判定理由（中文）。"));
+        resultProps.put("reason", strProp(
+                "总体判定理由（中文）；存在直接证据时应使用“原文“逐字证据”……”表述。"));
         resultProps.put("confidence", enumProp(List.of("high", "medium", "low", "needs_review"),
                 "置信度。证据不足、冲突或不确定时填 needs_review。"));
         resultProps.put("findings", findingsArr);

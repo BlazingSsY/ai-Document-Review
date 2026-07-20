@@ -1,27 +1,41 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import {
+  Badge,
   Button,
-  Card,
+  Drawer,
+  Dropdown,
   Empty,
   Form,
   Input,
   Modal,
   Progress,
+  Radio,
+  Segmented,
   Select,
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   ArrowLeftOutlined,
+  CheckCircleFilled,
   CheckCircleOutlined,
+  ClockCircleOutlined,
   CloseCircleOutlined,
   DownloadOutlined,
+  FileSearchOutlined,
+  FilterOutlined,
   InfoCircleOutlined,
+  LeftOutlined,
   LoadingOutlined,
   ReloadOutlined,
+  RightOutlined,
+  SearchOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import { PIPELINE_COLOR, PIPELINE_LABEL } from '../api/pipelineApi';
@@ -40,7 +54,7 @@ import {
 } from './helpers';
 import type { ReviewWorkspaceViewModel } from './useReviewWorkspace';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const LOG_LEVEL_STYLES: Record<string, { color: string }> = {
   info: { color: '#1677ff' },
@@ -49,14 +63,24 @@ const LOG_LEVEL_STYLES: Record<string, { color: string }> = {
   warning: { color: '#faad14' },
 };
 
-const LOG_LEVEL_ICONS: Record<string, React.ReactNode> = {
+const LOG_LEVEL_ICONS: Record<string, ReactNode> = {
   info: <InfoCircleOutlined />,
   error: <CloseCircleOutlined />,
   success: <CheckCircleOutlined />,
   warning: <WarningOutlined />,
 };
 
-function highlightPlainText(text: string, locator: string): React.ReactNode {
+type ThreeState = 'Pass' | 'Fail' | 'Review';
+type ResultFilter = 'all' | ThreeState;
+
+interface ReviewCounts {
+  total: number;
+  Pass: number;
+  Fail: number;
+  Review: number;
+}
+
+function highlightPlainText(text: string, locator: string): ReactNode {
   for (const candidate of locatorCandidates(locator)) {
     const index = text.indexOf(candidate);
     if (index >= 0) {
@@ -70,6 +94,48 @@ function highlightPlainText(text: string, locator: string): React.ReactNode {
     }
   }
   return text;
+}
+
+function evidenceForDisplay(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('“') && trimmed.endsWith('”'))
+    || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function normalizeThreeState(status: string): ThreeState {
+  if (status === 'Pass') return 'Pass';
+  if (status === 'Fail') return 'Fail';
+  return 'Review';
+}
+
+function itemThreeState(item: Record<string, unknown>, hasCheckMatrix: boolean): ThreeState {
+  if (!hasCheckMatrix) return 'Fail';
+  return normalizeThreeState(textField(item, ['manualStatus', 'status']));
+}
+
+function summarizeReviewItems(workspace: ReviewWorkspaceViewModel): ReviewCounts {
+  const counts: ReviewCounts = { total: workspace.reviewItems.length, Pass: 0, Fail: 0, Review: 0 };
+  workspace.reviewItems.forEach((item) => {
+    counts[itemThreeState(item, workspace.hasCheckMatrix)] += 1;
+  });
+  return counts;
+}
+
+function formatTaskTime(value: string | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
 
 function StructuredSourceView({
@@ -100,512 +166,617 @@ function StructuredSourceView({
   );
 }
 
-function ReviewPageHeader({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+function ReviewPageHeader({
+  workspace,
+  onOpenRuntime,
+}: {
+  workspace: ReviewWorkspaceViewModel;
+  onOpenRuntime: () => void;
+}) {
   const { task } = workspace;
   if (!task) return null;
 
+  const statusColor = workspace.status === 'completed'
+    ? 'success'
+    : workspace.status === 'failed'
+      ? 'error'
+      : workspace.status === 'cancelled'
+        ? 'warning'
+        : 'processing';
+  const exportLoading = workspace.exporting || workspace.exportingReport || workspace.exportingAudit;
+  const exportItems: MenuProps['items'] = [
+    { key: 'report', label: 'Word 审查报告' },
+    { key: 'excel', label: 'Excel 审查意见表' },
+    { key: 'audit', label: 'JSON 审计日志' },
+  ];
+
+  const handleExportMenu: MenuProps['onClick'] = ({ key }) => {
+    if (key === 'report') void workspace.handleExportReport();
+    if (key === 'excel') void workspace.handleExportExcel();
+    if (key === 'audit') void workspace.handleExportAudit();
+  };
+
   return (
-    <div className="page-header review-page-header">
-      <Space>
-        <Button icon={<ArrowLeftOutlined />} onClick={workspace.goDashboard}>
-          返回
-        </Button>
-        <Title level={5} style={{ margin: 0 }}>{task.fileName}</Title>
-        <Tag color={PIPELINE_COLOR[workspace.reviewMode]}>{PIPELINE_LABEL[workspace.reviewMode]}</Tag>
-        <Tag color={workspace.status === 'completed' ? 'success' : workspace.status === 'failed' ? 'error' : workspace.status === 'cancelled' ? 'warning' : 'processing'}>
-          {STATUS_LABELS[workspace.status] || task.status}
-        </Tag>
-      </Space>
-      <Space wrap>
-        <Text type="secondary">模型：{task.selectedModel}</Text>
-        {workspace.status === 'completed' && task.aiResult && (
-          <Button icon={<DownloadOutlined />} loading={workspace.exporting} onClick={workspace.handleExportExcel}>
-            导出Excel
+    <header className="review-page-header">
+      <div className="review-heading-main">
+        <Tooltip title="返回工作台">
+          <Button
+            aria-label="返回工作台"
+            className="review-back-button"
+            icon={<ArrowLeftOutlined />}
+            onClick={workspace.goDashboard}
+          />
+        </Tooltip>
+        <div className="review-heading-copy">
+          <div className="review-title-line">
+            <h1>{task.fileName}</h1>
+            <Tag color={PIPELINE_COLOR[workspace.reviewMode]}>{PIPELINE_LABEL[workspace.reviewMode]}</Tag>
+            <Tag color={statusColor}>{STATUS_LABELS[workspace.status] || task.status}</Tag>
+          </div>
+          <p>
+            <FileSearchOutlined />
+            <span>模型：{task.selectedModel || '未记录'}</span>
+            {task.createdAt && <><i /> <span>{formatTaskTime(task.createdAt)}</span></>}
+          </p>
+        </div>
+      </div>
+
+      <Space className="review-heading-actions" size={8} wrap>
+        <Badge count={workspace.failedChunkCount} size="small" offset={[-2, 2]}>
+          <Button
+            icon={workspace.isProcessing ? <LoadingOutlined spin /> : <InfoCircleOutlined />}
+            onClick={onOpenRuntime}
+          >
+            运行信息
           </Button>
-        )}
+        </Badge>
         {workspace.status === 'completed' && task.aiResult && (
-          <Button icon={<DownloadOutlined />} loading={workspace.exportingReport} onClick={workspace.handleExportReport}>
-            导出报告
-          </Button>
-        )}
-        {workspace.status === 'completed' && task.aiResult && (
-          <Button icon={<DownloadOutlined />} loading={workspace.exportingAudit} onClick={workspace.handleExportAudit}>
-            导出审计
-          </Button>
+          <Dropdown menu={{ items: exportItems, onClick: handleExportMenu }} placement="bottomRight">
+            <Button icon={<DownloadOutlined />} loading={exportLoading}>导出成果</Button>
+          </Dropdown>
         )}
         {workspace.status === 'completed' && workspace.failedChunkCount > 0 && (
-          <Button icon={<ReloadOutlined />} loading={workspace.retryingFailed} onClick={workspace.handleRetryFailedChunks}>
+          <Button
+            icon={<ReloadOutlined />}
+            loading={workspace.retryingFailed}
+            onClick={workspace.handleRetryFailedChunks}
+          >
             重审失败切片
           </Button>
         )}
         {!workspace.isProcessing && (
-          <Button type="primary" icon={<ReloadOutlined />} loading={workspace.reReviewing} onClick={workspace.handleReReview}>
+          <Button
+            type="primary"
+            icon={<ReloadOutlined />}
+            loading={workspace.reReviewing}
+            onClick={workspace.handleReReview}
+          >
             重新审查
           </Button>
         )}
       </Space>
+    </header>
+  );
+}
+
+function WorkflowStep({ label, state, last }: { label: string; state: 'done' | 'current' | 'waiting'; last: boolean }) {
+  return (
+    <div className={`review-workflow-step ${state}`}>
+      {state === 'done' ? <CheckCircleFilled /> : state === 'current' ? <LoadingOutlined spin /> : <ClockCircleOutlined />}
+      <span>{label}</span>
+      {!last && <i />}
     </div>
   );
 }
 
-function OverviewStrip({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+function ReviewMetric({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
   return (
-    <section className="review-overview-strip" aria-label="审查概要">
-      <div className="overview-item">
-        <span className="overview-label">问题数</span>
-        <strong className={workspace.problemCount > 0 ? 'danger-text' : undefined}>{workspace.problemCount}</strong>
-      </div>
-      <div className="overview-item">
-        <span className="overview-label">文档切片</span>
-        <strong>{workspace.displayedChunkCount}</strong>
-      </div>
-      <div className="overview-item">
-        <span className="overview-label">失败切片</span>
-        <strong className={workspace.failedChunkCount > 0 ? 'danger-text' : undefined}>{workspace.failedChunkCount}</strong>
-      </div>
-      <div className="overview-tags">
-        {workspace.hasCheckMatrix && Object.entries(workspace.checkStatusCounts).map(([name, count]) => (
-          count > 0 ? <Tag key={name} color={checkStatusColor(name)}>{CHECK_STATUS_LABELS[name] || name} {count}</Tag> : null
+    <div className={`review-metric ${tone || ''}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ExecutionStrip({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  const counts = summarizeReviewItems(workspace);
+  const progress = workspace.status === 'completed'
+    ? 100
+    : Math.max(0, Math.min(100, workspace.wsProgress || Number(workspace.task?.progress || 0)));
+  const completedStages = workspace.status === 'completed' ? 5 : Math.floor(progress / 20);
+  const activeStage = workspace.isProcessing ? Math.min(completedStages, 4) : -1;
+  const stageLabels = ['文档解析', '章节切片', '规则调度', '模型审查', '结果复核'];
+
+  return (
+    <section className="review-status-strip" aria-label="审查执行状态">
+      <div className="review-workflow">
+        {stageLabels.map((label, index) => (
+          <WorkflowStep
+            key={label}
+            label={label}
+            last={index === stageLabels.length - 1}
+            state={index < completedStages ? 'done' : index === activeStage ? 'current' : 'waiting'}
+          />
         ))}
-        {Object.entries(workspace.categoryCounts).slice(0, 6).map(([name, count]) => (
-          <Tag key={name}>{name} {count}</Tag>
-        ))}
+      </div>
+      <div className="status-strip-divider" />
+      <ReviewMetric label="检查项" value={counts.total} />
+      <ReviewMetric label="通过" value={counts.Pass} tone="success" />
+      <ReviewMetric label="不通过" value={counts.Fail} tone="error" />
+      <ReviewMetric label="待复核" value={counts.Review} tone="warning" />
+      <div className="review-coverage">
+        <div><span>{workspace.isProcessing ? '审查进度' : '审查覆盖率'}</span><strong>{progress}%</strong></div>
+        <Progress percent={progress} showInfo={false} status={workspace.status === 'failed' ? 'exception' : 'normal'} size="small" />
       </div>
     </section>
   );
 }
 
-function ProgressLine({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
-  if (!workspace.isProcessing || workspace.wsProgress <= 0) return null;
-  return (
-    <div className="review-progress-line">
-      <LoadingOutlined spin />
-      <Progress percent={workspace.wsProgress} status="active" showInfo={false} />
-      <Text type="secondary">{workspace.wsProgress}%</Text>
-    </div>
-  );
-}
-
-function FindingCard({
+function FindingItem({
   active,
   hasCheckMatrix,
-  index,
   item,
-  manualSaving,
-  onInlineDecision,
   onSelect,
 }: {
   active: boolean;
   hasCheckMatrix: boolean;
-  index: number;
   item: Record<string, unknown>;
-  manualSaving: boolean;
-  onInlineDecision: ReviewWorkspaceViewModel['handleInlineManualDecision'];
-  onSelect: (index: number) => void;
+  onSelect: () => void;
 }) {
-  const statusValue = textField(item, ['status']);
+  const status = itemThreeState(item, hasCheckMatrix);
+  const rawStatus = textField(item, ['manualStatus', 'status']);
   const manualStatus = textField(item, ['manualStatus']);
   const category = textField(item, ['category']);
-  const description = hasCheckMatrix
+  const title = hasCheckMatrix
     ? textField(item, ['check_question', 'question', 'description'])
     : textField(item, ['description', 'explanation', 'issue', 'problem', 'summary']);
-  const locator = textField(item, ['evidence', 'originalText']);
-  const reason = textField(item, ['reason']);
-  const suggestion = textField(item, ['suggestion', 'recommendation']);
+  const excerpt = textField(item, ['reason', 'evidence', 'originalText', 'suggestion', 'recommendation']);
   const rule = textField(item, ['ruleName', 'rule_name', 'rule']);
   const ruleCode = textField(item, ['rule_code', 'ruleCode']);
   const checkCode = textField(item, ['check_code', 'checkCode']);
-  const confidence = textField(item, ['confidence']) || 'single';
-  const manualDecisionValue = manualStatus === 'Pass' || manualStatus === 'Fail' || manualStatus === 'Review'
-    ? manualStatus
-    : undefined;
-  const confidenceColor = confidence === 'high'
-    ? 'green'
-    : confidence === 'medium'
-      ? 'blue'
-      : confidence === 'low'
-        ? 'orange'
-        : confidence === 'needs_review'
-          ? 'purple'
-          : 'default';
-  const needsManualCheck = confidence === 'needs_review';
-  const showManualDecision = needsManualCheck || hasCheckMatrix;
-  const sourceChunkNo = numericField(item, ['sourceChunk', 'chunk']);
-  const missingItems = Array.isArray(item.missing_items) ? item.missing_items : [];
-  const statusClass = statusValue.replace(/[^A-Za-z0-9_-]/g, '-');
-  // RAG：一个检查项展开成多条违规时的序号，以及两阶段复核结论。
-  const verifyStatus = textField(item, ['verifyStatus']);
-  const violationCount = numericField(item, ['violationCount']) ?? 0;
+  const confidence = textField(item, ['confidence']);
+  const chapter = textField(item, ['sectionPath', 'chapterTitle', 'sourceTitle']);
+  const sourceChunk = numericField(item, ['sourceChunk', 'chunk']);
+  const location = chapter || (sourceChunk ? `切片 ${sourceChunk}` : '点击查看定位证据');
+  const itemCode = checkCode || ruleCode;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      className={`finding-card ${hasCheckMatrix ? `check-status-${statusClass || 'Review'}` : 'finding-card-neutral'} ${active ? 'active' : ''}`}
-      onClick={() => onSelect(index)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onSelect(index);
-        }
-      }}
-    >
-      <div className="finding-card-top">
-        <Space wrap size={4}>
-          {hasCheckMatrix && (
-            <Tag color={checkStatusColor(statusValue)}>{CHECK_STATUS_LABELS[statusValue] || statusValue || '待复核'}</Tag>
-          )}
+    <button type="button" className={`review-finding-item status-${status} ${active ? 'active' : ''}`} onClick={onSelect}>
+      <div className="finding-item-heading">
+        <Space size={5} wrap>
+          <Tag color={checkStatusColor(status)}>{CHECK_STATUS_LABELS[status]}</Tag>
           {category && <Tag>{category}</Tag>}
-          {hasCheckMatrix && rule && <Tag color="blue">{ruleCode ? `${ruleCode} ${rule}` : rule}</Tag>}
-          {!hasCheckMatrix && ruleCode && <Tag color="blue">{ruleCode}</Tag>}
-          {!hasCheckMatrix && checkCode && <Tag color="cyan">{checkCode}</Tag>}
-          {manualStatus && <Tag color={checkStatusColor(manualStatus)}>人工：{CHECK_STATUS_LABELS[manualStatus] || manualStatus}</Tag>}
-          {violationCount > 1 && (
-            <Tag color="volcano">违规 {(Number(item.violationIndex) || 0) + 1}/{violationCount}</Tag>
-          )}
-          {verifyStatus === 'CONFIRMED' && <Tag color="red">复核确认</Tag>}
-          {verifyStatus === 'UNCERTAIN' && <Tag color="gold">复核待定</Tag>}
-          {!hasCheckMatrix && sourceChunkNo && <Tag color="purple">切片 {sourceChunkNo}</Tag>}
+          {itemCode && <span className="finding-code">{itemCode}</span>}
+          {manualStatus && <Tag color="geekblue">人工：{CHECK_STATUS_LABELS[normalizeThreeState(manualStatus)]}</Tag>}
         </Space>
-        <div
-          className="confidence-actions"
-          onClick={(event) => event.stopPropagation()}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          {!needsManualCheck && (
-            <Tag color={confidenceColor}>{confidenceLabel(confidence)}</Tag>
-          )}
-          {showManualDecision && (
-            <>
-              <Tag color="purple">人工校验</Tag>
-              <Select
-                size="small"
-                className="manual-decision-select"
-                placeholder="处理"
-                value={manualDecisionValue}
-                loading={manualSaving}
-                disabled={manualSaving}
-                onChange={(value: 'Pass' | 'Fail' | 'Review') => onInlineDecision(item, value)}
-                options={[
-                  { label: '通过', value: 'Pass' },
-                  { label: '不通过', value: 'Fail' },
-                  { label: '改判', value: 'Review' },
-                ]}
-              />
-            </>
-          )}
-        </div>
+        <RightOutlined className="finding-arrow" />
       </div>
-      {locator && (
-        <div className="finding-locator">
-          <span>判定依据 / 定位线索</span>
-          <p>{locator}</p>
-        </div>
-      )}
-      {!hasCheckMatrix && description && <div className="finding-description">{description}</div>}
-      {reason && (
-        <div className="finding-field">
-          <span>判定理由</span>
-          <p>{reason}</p>
-        </div>
-      )}
-      {!hasCheckMatrix && missingItems.length > 0 && (
-        <div className="finding-field missing">
-          <span>缺失项</span>
-          <p>{missingItems.map((missingItem) => String(missingItem)).join('；')}</p>
-        </div>
-      )}
-      {suggestion && (
-        <div className="finding-field suggestion">
-          <span>建议</span>
-          <p>{suggestion}</p>
-        </div>
-      )}
-      {!hasCheckMatrix && rule && rule !== ruleCode && <div className="rule-name">{rule}</div>}
-    </div>
+      <h3>{title || rule || '未命名检查项'}</h3>
+      {excerpt && <p>{excerpt}</p>}
+      <div className="finding-item-footer">
+        <span><FileSearchOutlined />{location}</span>
+        {confidence && <span className="finding-confidence">{confidenceLabel(confidence)}</span>}
+        {!confidence && rawStatus === 'Partial' && <span className="finding-confidence">部分满足</span>}
+      </div>
+    </button>
   );
 }
 
+function matchesFilter(item: Record<string, unknown>, filter: ResultFilter, hasCheckMatrix: boolean): boolean {
+  return filter === 'all' || itemThreeState(item, hasCheckMatrix) === filter;
+}
+
 function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
-  const { task } = workspace;
+  const counts = summarizeReviewItems(workspace);
+  const [filter, setFilter] = useState<ResultFilter>(() => workspace.hasCheckMatrix && counts.Fail > 0 ? 'Fail' : 'all');
+  const [search, setSearch] = useState('');
+  const normalizedSearch = search.trim().toLowerCase();
+
+  const filteredItems = useMemo(() => workspace.reviewItems
+    .map((item, originalIndex) => ({ item, originalIndex }))
+    .filter(({ item }) => matchesFilter(item, filter, workspace.hasCheckMatrix))
+    .filter(({ item }) => {
+      if (!normalizedSearch) return true;
+      return [
+        textField(item, ['check_question', 'question', 'description', 'explanation', 'issue', 'problem', 'summary']),
+        textField(item, ['ruleName', 'rule_name', 'rule']),
+        textField(item, ['rule_code', 'ruleCode']),
+        textField(item, ['check_code', 'checkCode']),
+        textField(item, ['evidence', 'reason']),
+      ].join(' ').toLowerCase().includes(normalizedSearch);
+    }), [filter, normalizedSearch, workspace.hasCheckMatrix, workspace.reviewItems]);
+
+  const handleFilterChange = (value: string | number) => {
+    const nextFilter = value as ResultFilter;
+    setFilter(nextFilter);
+    const firstMatch = workspace.reviewItems.findIndex((item) => matchesFilter(item, nextFilter, workspace.hasCheckMatrix));
+    if (firstMatch >= 0) workspace.selectIssue(firstMatch);
+  };
 
   return (
-    <div className="review-results-panel">
-      <div className="panel-header">
+    <aside className="review-findings-pane">
+      <div className="review-pane-header">
         <div>
-          <h3>{workspace.hasCheckMatrix ? '检查项判定矩阵' : '大模型审查结果'}</h3>
-          <Text type="secondary">
-            {workspace.hasCheckMatrix
-              ? '点击检查项查看原文。判定仅为通过 / 不通过 / 待复核三种；证据不足、部分满足或不适用均判为待复核，交人工复核。'
-              : '点击任一问题，右侧定位并显示完整章节原文。'}
-          </Text>
+          <h2>{workspace.hasCheckMatrix ? '检查项判定' : '审查问题'}</h2>
+          <span>{workspace.hasCheckMatrix ? '按规则逐项复核审查结论' : '按问题查看判定依据与完整原文'}</span>
         </div>
-        <Tag>{workspace.reviewItems.length} 条</Tag>
+        <Tag>{counts.total} 条</Tag>
       </div>
 
-      {workspace.reviewItems.length === 0 ? (
-        <div className="findings-list">
-          <div className="empty-panel">
-            {workspace.isProcessing ? (
-              <>
-                <Spin />
-                <Text type="secondary">AI 正在审查中，日志见页面底部。</Text>
-              </>
-            ) : task?.aiResult ? (
-              <Empty description={workspace.hasCheckMatrix ? '暂无检查项判定' : '未发现审查问题'} />
-            ) : (
-              <Empty description="暂无审查结果" />
-            )}
-          </div>
+      <div className="review-filter-bar">
+        <Segmented
+          block
+          size="small"
+          value={filter}
+          onChange={handleFilterChange}
+          options={[
+            { label: `全部 ${counts.total}`, value: 'all' },
+            { label: `不通过 ${counts.Fail}`, value: 'Fail' },
+            { label: `待复核 ${counts.Review}`, value: 'Review' },
+            { label: `已通过 ${counts.Pass}`, value: 'Pass' },
+          ]}
+        />
+        <Space.Compact block>
+          <Input
+            allowClear
+            aria-label="搜索检查项"
+            prefix={<SearchOutlined />}
+            placeholder="搜索规则、检查项或证据"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <Tooltip title="筛选结果跟随上方结论分类">
+            <Button aria-label="筛选说明" icon={<FilterOutlined />} />
+          </Tooltip>
+        </Space.Compact>
+      </div>
+
+      {filteredItems.length === 0 ? (
+        <div className="review-empty-list">
+          {workspace.isProcessing ? <><Spin /><Text type="secondary">AI 正在生成审查结果</Text></> : <Empty description="当前筛选条件下没有检查项" />}
         </div>
       ) : (
-        // 虚拟滚动：只渲染可视区的卡片，避免数百个检查项一次性挂载（含 AntD Select）拖慢首屏。
         <Virtuoso
-          className="findings-list"
-          data={workspace.reviewItems}
-          computeItemKey={(index) => index}
-          increaseViewportBy={300}
-          itemContent={(index, item) => (
-            <div style={{ paddingBottom: 10 }}>
-              <FindingCard
-                active={index === workspace.activeIndex}
+          className="review-findings-list"
+          data={filteredItems}
+          increaseViewportBy={240}
+          computeItemKey={(_, entry) => textField(entry.item, ['finding_id', 'findingId']) || entry.originalIndex}
+          itemContent={(_, entry) => (
+            <div className="review-finding-wrapper">
+              <FindingItem
+                active={entry.originalIndex === workspace.activeIndex}
                 hasCheckMatrix={workspace.hasCheckMatrix}
-                index={index}
-                item={item}
-                manualSaving={workspace.manualSaving}
-                onInlineDecision={workspace.handleInlineManualDecision}
-                onSelect={workspace.selectIssue}
+                item={entry.item}
+                onSelect={() => workspace.selectIssue(entry.originalIndex)}
               />
             </div>
           )}
         />
       )}
-    </div>
-  );
-}
 
-function SourcePanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
-  return (
-    <div className="review-source-panel">
-      <div className="panel-header">
-        <div>
-          <h3>对应原文</h3>
-          <Text type="secondary">{workspace.activeSourceTitle || '完整章节原文'}</Text>
-        </div>
-        <Space wrap size={4}>
-          {(workspace.activeSourceChapterLabel || workspace.activeSourceId) && (
-            <Tag color="blue">{workspace.activeSourceChapterLabel || workspace.activeSourceId}</Tag>
-          )}
-          {workspace.activeSourceLength !== undefined && <Tag>{workspace.activeSourceLength} 字</Tag>}
-          {workspace.activeSourceTokens !== undefined && <Tag>{workspace.activeSourceTokens} tokens</Tag>}
-          {workspace.hasCheckMatrix && workspace.activeItem && (
-            <Button size="small" type="primary" onClick={() => workspace.openManualReview(workspace.activeItem)}>
-              人工复核
-            </Button>
-          )}
+      <div className="review-list-footer">
+        <span>显示 {filteredItems.length} / {counts.total} 条</span>
+        <Space size={4}>
+          <Button
+            size="small"
+            aria-label="上一检查项"
+            icon={<LeftOutlined />}
+            disabled={workspace.activeIndex <= 0}
+            onClick={() => workspace.selectIssue(workspace.activeIndex - 1)}
+          />
+          <Button
+            size="small"
+            aria-label="下一检查项"
+            icon={<RightOutlined />}
+            disabled={workspace.activeIndex < 0 || workspace.activeIndex >= workspace.reviewItems.length - 1}
+            onClick={() => workspace.selectIssue(workspace.activeIndex + 1)}
+          />
         </Space>
       </div>
-
-      <div className="source-content">
-        {workspace.sourceCandidates.length > 1 && (
-          <div className="source-switcher">
-            <Text type="secondary">关联章节</Text>
-            <Space wrap size={6}>
-              {workspace.sourceCandidates.map((source, index) => (
-                <Button
-                  key={sourceCandidateKey(source) || index}
-                  size="small"
-                  type={index === workspace.activeSourceSafeIndex ? 'primary' : 'default'}
-                  onClick={() => workspace.setActiveSourceIndex(index)}
-                >
-                  {index + 1}
-                </Button>
-              ))}
-            </Space>
-          </div>
-        )}
-        {(workspace.activeSourceId || workspace.activeSourceReason || workspace.activeSourceScore !== undefined) && (
-          <div className="source-provenance">
-            <Text type="secondary">定位溯源</Text>
-            <Space wrap size={6}>
-              {workspace.activeEvidenceSourceId && <Tag color="blue">定位片段</Tag>}
-              {workspace.activeSourceReason && <Tag color="geekblue">{sourceReasonLabel(workspace.activeSourceReason)}</Tag>}
-              {workspace.activeSourceScore !== undefined && <Tag>召回分 {workspace.activeSourceScore.toFixed(3)}</Tag>}
-            </Space>
-          </div>
-        )}
-        {workspace.activeSourceHtml ? (
-          <StructuredSourceView
-            html={workspace.activeSourceHtml}
-            startNodeId={workspace.activeStartNodeId}
-            endNodeId={workspace.activeEndNodeId}
-            locator={workspace.activeLocator}
-          />
-        ) : workspace.activeSourceText ? (
-          <pre className="source-text-view">{highlightPlainText(workspace.activeSourceText, workspace.activeLocator)}</pre>
-        ) : workspace.isProcessing ? (
-          <div className="empty-panel">
-            <Spin />
-            <Text type="secondary">审查完成后显示完整章节原文。</Text>
-          </div>
-        ) : workspace.sourcesLoading ? (
-          <div className="empty-panel">
-            <Spin />
-            <Text type="secondary">正在加载原文…</Text>
-          </div>
-        ) : (
-          <Empty description="当前结果未携带可展示原文；请使用新版本重新审查该文档。" />
-        )}
-      </div>
-    </div>
+    </aside>
   );
 }
 
-function MainGrid({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+function DecisionSummary({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  const item = workspace.activeItem;
+  if (!item) return null;
+
+  const title = workspace.hasCheckMatrix
+    ? textField(item, ['check_question', 'question', 'description'])
+    : textField(item, ['description', 'explanation', 'issue', 'problem', 'summary']);
+  const reason = textField(item, ['reason', 'explanation']);
+  const evidence = textField(item, ['evidence', 'originalText']);
+  const suggestion = textField(item, ['suggestion', 'recommendation']);
+  const rule = textField(item, ['ruleName', 'rule_name', 'rule']);
+  const ruleCode = textField(item, ['rule_code', 'ruleCode']);
+  const evidenceCount = workspace.sourceCandidates.length || (workspace.activeLocator ? 1 : 0);
+
   return (
-    <section className="review-main-grid">
-      <ResultsPanel workspace={workspace} />
-      <SourcePanel workspace={workspace} />
+    <section className="review-decision-summary">
+      <div className="decision-copy">
+        <span className="review-section-label">判定结论</span>
+        <h3>{title || rule || '当前检查项'}</h3>
+        <p>{reason || workspace.activeLocator || '系统未返回补充判定理由，请结合右侧原文进行人工复核。'}</p>
+        {evidence && itemThreeState(item, workspace.hasCheckMatrix) !== 'Pass' && (
+          <div className="decision-evidence">
+            <strong>问题原文：</strong>
+            <q>{evidenceForDisplay(evidence)}</q>
+          </div>
+        )}
+        {suggestion && <div className="decision-suggestion"><strong>修改建议</strong>{suggestion}</div>}
+      </div>
+      <div className="decision-metadata">
+        <div><span>规则来源</span><strong>{ruleCode || rule || '系统规则'}</strong></div>
+        <div><span>定位结果</span><strong>{evidenceCount} 处原文证据</strong></div>
+        {workspace.activeSourceScore !== undefined && <div><span>召回分数</span><strong>{workspace.activeSourceScore.toFixed(3)}</strong></div>}
+        {workspace.activeSourceLength !== undefined && <div><span>原文长度</span><strong>{workspace.activeSourceLength} 字</strong></div>}
+      </div>
     </section>
   );
 }
 
-function LogCard({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+function SourceEvidence({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   return (
-    <Card
-      size="small"
-      className="log-card"
-      title={(
-        <Space>
-          {workspace.isProcessing ? <LoadingOutlined spin style={{ color: '#1677ff' }} /> : <InfoCircleOutlined />}
-          <span>审查日志</span>
-          <Tag color={workspace.isProcessing ? 'processing' : workspace.logs.some((log) => log.level === 'error') ? 'error' : 'default'}>
-            {workspace.logs.length} 条
-          </Tag>
-        </Space>
+    <div className="review-source-viewport">
+      {workspace.activeSourceHtml ? (
+        <StructuredSourceView
+          html={workspace.activeSourceHtml}
+          startNodeId={workspace.activeStartNodeId}
+          endNodeId={workspace.activeEndNodeId}
+          locator={workspace.activeLocator}
+        />
+      ) : workspace.activeSourceText ? (
+        <pre className="source-text-view">{highlightPlainText(workspace.activeSourceText, workspace.activeLocator)}</pre>
+      ) : workspace.isProcessing ? (
+        <div className="review-source-empty"><Spin /><Text type="secondary">审查完成后显示完整章节原文</Text></div>
+      ) : workspace.sourcesLoading ? (
+        <div className="review-source-empty"><Spin /><Text type="secondary">正在加载原文</Text></div>
+      ) : (
+        <div className="review-source-empty"><Empty description="当前结果没有可展示的定位原文" /></div>
       )}
-      styles={{ body: { padding: 0 } }}
-    >
-      <div className="log-window">
-        {workspace.logs.length === 0 ? (
-          <div className="log-empty">
-            <InfoCircleOutlined />
-            等待审查日志...
-          </div>
-        ) : (
-          workspace.logs.map((log: LogEntry, index) => {
-            const style = LOG_LEVEL_STYLES[log.level] || LOG_LEVEL_STYLES.info;
-            return (
-              <div key={`${log.time}-${index}`} className="log-row" style={{ borderLeftColor: style.color }}>
-                <span className="log-time">{log.time}</span>
-                <span className="log-icon" style={{ color: style.color }}>{LOG_LEVEL_ICONS[log.level]}</span>
-                <span className="log-message">
-                  {log.message}
-                  {log.progress !== undefined && <span className="log-progress">({log.progress}%)</span>}
-                </span>
-              </div>
-            );
-          })
-        )}
-        <div ref={workspace.logEndRef} />
-      </div>
-    </Card>
+    </div>
   );
 }
 
-function RuntimeCard({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+function ManualReviewBar({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  const item = workspace.activeItem;
+  const itemIdentity = textField(item, ['finding_id', 'findingId', 'check_code', 'checkCode']) || String(workspace.activeIndex);
+  const [decision, setDecision] = useState<ThreeState>('Review');
+  const checkCode = textField(item, ['check_code', 'checkCode']);
+
+  useEffect(() => {
+    setDecision(normalizeThreeState(textField(item, ['manualStatus', 'status'])));
+  }, [item, itemIdentity]);
+
+  if (!item || !checkCode) return null;
+
+  const handleSaveAndAdvance = async () => {
+    const saved = await workspace.handleInlineManualDecision(item, decision);
+    if (saved && workspace.activeIndex < workspace.reviewItems.length - 1) {
+      workspace.selectIssue(workspace.activeIndex + 1);
+    }
+  };
+
+  return (
+    <footer className="manual-review-bar">
+      <div className="manual-decision-control">
+        <span className="review-section-label">人工复核</span>
+        <Radio.Group
+          size="small"
+          buttonStyle="solid"
+          value={decision}
+          onChange={(event) => setDecision(event.target.value as ThreeState)}
+        >
+          <Radio.Button value="Pass">通过</Radio.Button>
+          <Radio.Button value="Fail">不通过</Radio.Button>
+          <Radio.Button value="Review">待复核</Radio.Button>
+        </Radio.Group>
+      </div>
+      <Space size={8}>
+        <Button onClick={() => workspace.openManualReview(item)}>复核备注</Button>
+        <Button type="primary" loading={workspace.manualSaving} onClick={handleSaveAndAdvance}>
+          保存并查看下一项
+        </Button>
+      </Space>
+    </footer>
+  );
+}
+
+function EvidencePanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  const item = workspace.activeItem;
+  const status = item ? itemThreeState(item, workspace.hasCheckMatrix) : 'Review';
+  const confidence = textField(item, ['confidence']);
+  const checkCode = textField(item, ['check_code', 'checkCode']);
+  const ruleCode = textField(item, ['rule_code', 'ruleCode']);
+
+  return (
+    <main className="review-evidence-pane">
+      <div className="review-pane-header evidence-heading">
+        <div>
+          <h2>审查详情</h2>
+          <span>{[checkCode || ruleCode, workspace.activeSourceTitle].filter(Boolean).join(' · ') || '选择左侧检查项查看详情'}</span>
+        </div>
+        {item && (
+          <Space size={5} wrap>
+            <Tag color={checkStatusColor(status)}>{CHECK_STATUS_LABELS[status]}</Tag>
+            {confidence && <Tag color={confidence === 'high' ? 'blue' : confidence === 'medium' ? 'geekblue' : 'gold'}>{confidenceLabel(confidence)}</Tag>}
+          </Space>
+        )}
+      </div>
+
+      {item ? (
+        <>
+          <DecisionSummary workspace={workspace} />
+          <div className="review-source-toolbar">
+            <div>
+              <h3>原文定位</h3>
+              <span>{workspace.activeSourceTitle || '完整章节原文'}</span>
+            </div>
+            <Space size={5} wrap>
+              {workspace.activeSourceChapterLabel && <Tag color="blue">{workspace.activeSourceChapterLabel}</Tag>}
+              {workspace.activeSourceReason && <Tag>{sourceReasonLabel(workspace.activeSourceReason)}</Tag>}
+              {workspace.sourceCandidates.length > 0 && (
+                <Tag color="processing">定位证据 {workspace.activeSourceSafeIndex + 1} / {workspace.sourceCandidates.length}</Tag>
+              )}
+              <Tooltip title="上一处证据">
+                <Button
+                  size="small"
+                  aria-label="上一处证据"
+                  icon={<LeftOutlined />}
+                  disabled={workspace.activeSourceSafeIndex <= 0}
+                  onClick={() => workspace.setActiveSourceIndex(workspace.activeSourceSafeIndex - 1)}
+                />
+              </Tooltip>
+              <Tooltip title="下一处证据">
+                <Button
+                  size="small"
+                  aria-label="下一处证据"
+                  icon={<RightOutlined />}
+                  disabled={workspace.activeSourceSafeIndex < 0 || workspace.activeSourceSafeIndex >= workspace.sourceCandidates.length - 1}
+                  onClick={() => workspace.setActiveSourceIndex(workspace.activeSourceSafeIndex + 1)}
+                />
+              </Tooltip>
+            </Space>
+          </div>
+          <SourceEvidence workspace={workspace} />
+          <ManualReviewBar workspace={workspace} />
+        </>
+      ) : (
+        <div className="review-source-empty">
+          {workspace.isProcessing ? <><Spin /><Text type="secondary">AI 正在生成审查结果</Text></> : <Empty description="暂无审查结果" />}
+        </div>
+      )}
+    </main>
+  );
+}
+
+function ReviewMainSurface({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  return (
+    <section className="review-main-surface">
+      <ResultsPanel workspace={workspace} />
+      <EvidencePanel workspace={workspace} />
+    </section>
+  );
+}
+
+function ReviewLogSection({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  return (
+    <section className="runtime-section">
+      <div className="runtime-section-heading">
+        <Space>
+          {workspace.isProcessing ? <LoadingOutlined spin className="runtime-running-icon" /> : <InfoCircleOutlined />}
+          <strong>审查日志</strong>
+        </Space>
+        <Tag>{workspace.logs.length} 条</Tag>
+      </div>
+      <div className="runtime-log-window">
+        {workspace.logs.length === 0 ? (
+          <div className="runtime-empty">等待审查日志...</div>
+        ) : workspace.logs.map((log: LogEntry, index) => {
+          const style = LOG_LEVEL_STYLES[log.level] || LOG_LEVEL_STYLES.info;
+          return (
+            <div key={`${log.time}-${index}`} className="runtime-log-row" style={{ borderLeftColor: style.color }}>
+              <span className="runtime-log-time">{log.time}</span>
+              <span style={{ color: style.color }}>{LOG_LEVEL_ICONS[log.level]}</span>
+              <span className="runtime-log-message">
+                {log.message}
+                {log.progress !== undefined && <em>({log.progress}%)</em>}
+              </span>
+            </div>
+          );
+        })}
+        <div ref={workspace.logEndRef} />
+      </div>
+    </section>
+  );
+}
+
+function RuleRuntimeSection({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const { task } = workspace;
   if (!task) return null;
 
   return (
-    <Card size="small" className="runtime-card" title="审查运行信息">
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        {task.failReason && <Text type="danger">失败原因：{task.failReason}</Text>}
+    <section className="runtime-section">
+      <div className="runtime-section-heading"><strong>规则调度与失败信息</strong></div>
+      <div className="runtime-details">
+        {task.failReason && <div className="runtime-error">失败原因：{task.failReason}</div>}
         {workspace.failedChunks.length > 0 && (
-          <div>
+          <div className="runtime-group">
             <Text strong>失败切片</Text>
-            <div className="runtime-list">
-              {workspace.failedChunks.map((failedChunk, index) => (
-                <div key={index} className="runtime-item">
-                  <span>#{String(failedChunk.chunk || index + 1)} {String(failedChunk.chapterTitle || '')}</span>
-                  {Boolean(failedChunk.error) && <Text type="danger">{String(failedChunk.error)}</Text>}
-                </div>
-              ))}
-            </div>
+            {workspace.failedChunks.map((chunk, index) => (
+              <div key={index} className="runtime-detail-item">
+                <span>#{String(chunk.chunk || index + 1)} {String(chunk.chapterTitle || '')}</span>
+                {Boolean(chunk.error) && <Text type="danger">{String(chunk.error)}</Text>}
+              </div>
+            ))}
           </div>
         )}
         {workspace.chunkResults.length > 0 && (
-          <div>
-            <Text strong>规则调度</Text>
-            <div className="runtime-list">
-              {workspace.chunkResults.map((chunkResult, index) => {
-                const applied = (chunkResult.appliedRules || []) as string[];
-                const title = String(chunkResult.chapterTitle || `切片 ${index + 1}`);
-                return (
-                  <div key={index} className="runtime-item">
-                    <div className="runtime-item-heading">
-                      <span>{title}</span>
-                      <Text type="secondary">{applied.length} 条规则</Text>
-                    </div>
-                    {applied.length > 0 && (
-                      <div className="runtime-rule-names">{applied.join('、')}</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+          <div className="runtime-group">
+            <Text strong>章节规则调度</Text>
+            {workspace.chunkResults.map((chunk, index) => {
+              const applied = (chunk.appliedRules || []) as string[];
+              return (
+                <div key={index} className="runtime-detail-item">
+                  <div><span>{String(chunk.chapterTitle || `切片 ${index + 1}`)}</span><em>{applied.length} 条规则</em></div>
+                  {applied.length > 0 && <p>{applied.join('、')}</p>}
+                </div>
+              );
+            })}
           </div>
         )}
-        {workspace.chunkResults.length === 0 && !task.failReason && <Text type="secondary">暂无运行明细。</Text>}
-      </Space>
-    </Card>
+        {!task.failReason && workspace.failedChunks.length === 0 && workspace.chunkResults.length === 0 && (
+          <div className="runtime-empty">暂无运行明细</div>
+        )}
+      </div>
+    </section>
   );
 }
 
-function BottomGrid({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+function RuntimeDrawer({
+  workspace,
+  open,
+  onClose,
+}: {
+  workspace: ReviewWorkspaceViewModel;
+  open: boolean;
+  onClose: () => void;
+}) {
   return (
-    <section className="review-bottom-grid">
-      <LogCard workspace={workspace} />
-      <RuntimeCard workspace={workspace} />
-    </section>
+    <Drawer title="审查运行信息" width={600} open={open} onClose={onClose} destroyOnHidden>
+      <div className="runtime-drawer-content">
+        <ReviewLogSection workspace={workspace} />
+        <RuleRuntimeSection workspace={workspace} />
+      </div>
+    </Drawer>
   );
 }
 
 function ManualReviewModal({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   return (
     <Modal
-      title="人工复核"
+      title="人工复核备注"
       open={workspace.manualReviewOpen}
       onOk={workspace.handleManualReviewSubmit}
       onCancel={workspace.closeManualReview}
       confirmLoading={workspace.manualSaving}
       okText="保存"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={workspace.manualForm} layout="vertical">
-        <Form.Item
-          name="finalStatus"
-          label="最终判定"
-          rules={[{ required: true, message: '请选择最终判定' }]}
-        >
-          <Select
-            options={[
-              { label: '通过', value: 'Pass' },
-              { label: '不通过', value: 'Fail' },
-              { label: '待复核', value: 'Review' },
-            ]}
-          />
+        <Form.Item name="finalStatus" label="最终判定" rules={[{ required: true, message: '请选择最终判定' }]}>
+          <Select options={[
+            { label: '通过', value: 'Pass' },
+            { label: '不通过', value: 'Fail' },
+            { label: '待复核', value: 'Review' },
+          ]} />
         </Form.Item>
         <Form.Item name="accepted" label="是否接受系统意见">
-          <Select
-            allowClear
-            placeholder="请选择"
-            options={[
-              { label: '接受', value: 'true' },
-              { label: '不接受', value: 'false' },
-            ]}
-          />
+          <Select allowClear placeholder="请选择" options={[
+            { label: '接受', value: 'true' },
+            { label: '不接受', value: 'false' },
+          ]} />
         </Form.Item>
         <Form.Item name="comment" label="复核备注">
           <Input.TextArea rows={4} placeholder="填写人工复核依据、改判原因或处理意见" />
@@ -616,15 +787,14 @@ function ManualReviewModal({ workspace }: { workspace: ReviewWorkspaceViewModel 
 }
 
 export function ReviewWorkspaceContent({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  const [runtimeOpen, setRuntimeOpen] = useState(false);
+
   return (
     <div className="review-page">
-      <ReviewPageHeader workspace={workspace} />
-      <div className="review-workspace">
-        <OverviewStrip workspace={workspace} />
-        <ProgressLine workspace={workspace} />
-        <MainGrid workspace={workspace} />
-        <BottomGrid workspace={workspace} />
-      </div>
+      <ReviewPageHeader workspace={workspace} onOpenRuntime={() => setRuntimeOpen(true)} />
+      <ExecutionStrip workspace={workspace} />
+      <ReviewMainSurface workspace={workspace} />
+      <RuntimeDrawer workspace={workspace} open={runtimeOpen} onClose={() => setRuntimeOpen(false)} />
       <ManualReviewModal workspace={workspace} />
     </div>
   );
