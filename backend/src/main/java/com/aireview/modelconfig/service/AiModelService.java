@@ -23,6 +23,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -33,7 +34,13 @@ public class AiModelService {
     public static final String MODEL_TYPE_CHAT = "chat";
     public static final String MODEL_TYPE_EMBEDDING = "embedding";
     public static final String MODEL_TYPE_RERANKER = "reranker";
+    public static final String RESPONSE_FORMAT_AUTO = "auto";
+    public static final String RESPONSE_FORMAT_JSON_SCHEMA = "json_schema";
+    public static final String RESPONSE_FORMAT_JSON_OBJECT = "json_object";
+    public static final String RESPONSE_FORMAT_PROMPT_ONLY = "prompt_only";
     private static final int MAX_PGVECTOR_DIMENSIONS = 16000;
+
+    private final Map<String, String> autoResponseFormatCache = new ConcurrentHashMap<>();
 
     private final AiModelConfigMapper aiModelConfigMapper;
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -72,6 +79,9 @@ public class AiModelService {
         if (dto.getTimeout() != null) config.setTimeout(dto.getTimeout());
         if (dto.getEnabled() != null) config.setIsEnabled(dto.getEnabled());
         if (dto.getThinkingMode() != null) config.setThinkingMode(dto.getThinkingMode());
+        if (dto.getResponseFormatMode() != null) {
+            config.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
+        }
         validateEmbeddingDimension(config);
         config.setUpdatedAt(LocalDateTime.now());
         aiModelConfigMapper.updateById(config);
@@ -259,6 +269,13 @@ public class AiModelService {
         } else if (persistedFallback != null && persistedFallback.getThinkingMode() != null) {
             probe.setThinkingMode(persistedFallback.getThinkingMode());
         }
+        if (dto.getResponseFormatMode() != null) {
+            probe.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
+        } else if (persistedFallback != null) {
+            probe.setResponseFormatMode(normalizeResponseFormatMode(persistedFallback.getResponseFormatMode()));
+        } else {
+            probe.setResponseFormatMode(RESPONSE_FORMAT_AUTO);
+        }
         // Thinking models share max_tokens between reasoning_content and content.
         // The probe needs a budget large enough for the model to finish its chain
         // of thought AND produce the single-character reply, otherwise the
@@ -301,12 +318,52 @@ public class AiModelService {
         if (MODEL_TYPE_RERANKER.equals(type)) {
             return testRerankerConnection(probe);
         }
-        String reply = callAiModel(probe, "你是一个用于连接性测试的助手，请用一个汉字回答 \"好\"。",
-                "ping");
+        return testChatReviewCompatibility(probe);
+    }
+    /**
+     * Exercise the same structured-output capability used by document review.
+     * A plain ping only proves that the endpoint and key are reachable.
+     */
+    private Map<String, Object> testChatReviewCompatibility(AiModelConfig probe) throws Exception {
+        JSONObject booleanProperty = new JSONObject();
+        booleanProperty.put("type", "boolean");
+        JSONObject properties = new JSONObject();
+        properties.put("ok", booleanProperty);
+        JSONArray required = new JSONArray();
+        required.add("ok");
+        JSONObject schema = new JSONObject();
+        schema.put("type", "object");
+        schema.put("properties", properties);
+        schema.put("required", required);
+        schema.put("additionalProperties", false);
+
+        AiCallOptions.AiCallOptionsBuilder options = AiCallOptions.builder()
+                .structuredSchema(schema)
+                .structuredSchemaName("connection_test")
+                .maxTokensOverride(isThinkingModel(probe) ? null : 64);
+        if (!isThinkingModel(probe)) {
+            options.temperature(0.0).topP(1.0);
+        }
+        String reply = callAiModel(probe,
+                "This is a document-review compatibility test. Return JSON only and follow the requested schema.",
+                "Return {\"ok\":true}.", options.build());
+
+        String json = reply == null ? "" : reply.trim();
+        int objectStart = json.indexOf('{');
+        int objectEnd = json.lastIndexOf('}');
+        if (objectStart < 0 || objectEnd < objectStart) {
+            throw new IllegalArgumentException("Model is reachable but did not return JSON during the review compatibility test");
+        }
+        JSONObject parsed = JSON.parseObject(json.substring(objectStart, objectEnd + 1));
+        if (!Boolean.TRUE.equals(parsed.getBoolean("ok"))) {
+            throw new IllegalArgumentException("Model is reachable but failed the structured review compatibility test");
+        }
+
         Map<String, Object> result = new java.util.LinkedHashMap<>();
         result.put("modelType", MODEL_TYPE_CHAT);
-        String snippet = reply == null ? "" : reply.trim();
-        if (snippet.length() > 80) snippet = snippet.substring(0, 80) + "...";
+        result.put("responseFormatMode", resolveResponseFormatMode(probe));
+        String snippet = reply.trim();
+        if (snippet.length() > 200) snippet = snippet.substring(0, 200) + "...";
         result.put("reply", snippet);
         return result;
     }
@@ -508,8 +565,8 @@ public class AiModelService {
      * <ol>
      *   <li>统一参数：temperature / top_p / seed / max_tokens 全部按 {@link AiCallOptions} 强制；
      *       思维模型仍 omit temperature 以避免 Moonshot/GLM 的 400 拒绝。</li>
-     *   <li>结构化输出：有 schema 走 {@code response_format=json_schema}，
-     *       否则 fallback 到 {@code response_format=json_object} 或仅 prompt 约束。</li>
+     *   <li>结构化输出：根据模型配置选择 json_schema / json_object / prompt-only，
+     *       auto 模式会按供应商能力选择，并在 response_format 不兼容时降级。</li>
      * </ol>
      */
     public String callAiModel(AiModelConfig config, String systemPrompt, String userContent,
@@ -528,39 +585,139 @@ public class AiModelService {
 
         boolean thinking = isThinkingModel(config);
         String provider = config.getProvider() != null ? config.getProvider().toLowerCase(Locale.ROOT) : "openai";
-
         int timeoutSec = config.getTimeout() != null ? config.getTimeout() : 180;
         int maxTokens = resolveMaxTokens(config, options, thinking);
+        List<String> responseFormatCandidates = resolveResponseFormatCandidates(config, options);
+        boolean automaticMode = RESPONSE_FORMAT_AUTO.equals(
+                normalizeResponseFormatMode(config.getResponseFormatMode()));
 
-        JSONObject requestBody = buildOpenAiRequestBody(config, systemPrompt, userContent, options, thinking, maxTokens);
+        for (int formatIndex = 0; formatIndex < responseFormatCandidates.size(); formatIndex++) {
+            String responseFormatMode = responseFormatCandidates.get(formatIndex);
+            String effectiveSystemPrompt = buildStructuredOutputPrompt(systemPrompt, options, responseFormatMode);
+            JSONObject requestBody = buildOpenAiRequestBody(config, effectiveSystemPrompt, userContent,
+                    options, thinking, maxTokens, responseFormatMode);
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(fullUrl))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + config.getApiKey())
-                .timeout(Duration.ofSeconds(timeoutSec))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
-                .build();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(fullUrl))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + config.getApiKey())
+                    .timeout(Duration.ofSeconds(timeoutSec))
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
+                    .build();
 
-        log.debug("AI request body (truncated): provider={}, model={}, thinking={}, structured={}, seed={}, contentLen={}",
-                provider, requestBody.getString("model"), thinking,
-                options.getStructuredSchema() != null, options.getSeed(), userContent.length());
+            log.debug("AI request body (truncated): provider={}, model={}, thinking={}, responseFormat={}, seed={}, contentLen={}",
+                    provider, requestBody.getString("model"), thinking,
+                    responseFormatMode, options.getSeed(), userContent.length());
 
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                boolean canDowngrade = automaticMode
+                        && formatIndex + 1 < responseFormatCandidates.size()
+                        && isResponseFormatCompatibilityError(response.statusCode(), response.body());
+                if (canDowngrade) {
+                    String fallbackMode = responseFormatCandidates.get(formatIndex + 1);
+                    autoResponseFormatCache.put(responseFormatCacheKey(config), fallbackMode);
+                    log.warn("Model {} rejected response_format mode {}; retrying once with {}",
+                            config.getModelName(), responseFormatMode, fallbackMode);
+                    continue;
+                }
+                log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
+                throw new AiApiException(response.statusCode(), response.body(),
+                        "AI API HTTP " + response.statusCode() + ": " + response.body(),
+                        parseRetryAfterSeconds(response));
+            }
 
-        if (response.statusCode() != 200) {
-            log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
-            throw new AiApiException(response.statusCode(), response.body(),
-                    "AI API HTTP " + response.statusCode() + ": " + response.body(),
-                    parseRetryAfterSeconds(response));
+            String content = parseOpenAiResponse(response.body());
+            log.info("AI model response received, length: {}, responseFormat={}", content.length(), responseFormatMode);
+            return content;
         }
-
-        String content = parseOpenAiResponse(response.body());
-        log.info("AI model response received, length: {}", content.length());
-        return content;
+        throw new IllegalStateException("No compatible structured-output mode is available for " + config.getModelName());
     }
 
-    /** 解析 max_tokens：optional 覆盖 → 思维模型最小 16000 → 配置默认 → 4096 兜底。 */
+    private List<String> resolveResponseFormatCandidates(AiModelConfig config, AiCallOptions options) {
+        boolean structuredOutputRequested = options.getStructuredSchema() != null
+                || options.isForceJsonObjectFallback();
+        if (!structuredOutputRequested) {
+            return List.of(RESPONSE_FORMAT_PROMPT_ONLY);
+        }
+        String configuredMode = normalizeResponseFormatMode(config.getResponseFormatMode());
+        if (!RESPONSE_FORMAT_AUTO.equals(configuredMode)) {
+            return List.of(configuredMode);
+        }
+        String primary = resolveResponseFormatMode(config);
+        return switch (primary) {
+            case RESPONSE_FORMAT_JSON_SCHEMA -> List.of(
+                    RESPONSE_FORMAT_JSON_SCHEMA, RESPONSE_FORMAT_JSON_OBJECT, RESPONSE_FORMAT_PROMPT_ONLY);
+            case RESPONSE_FORMAT_JSON_OBJECT -> List.of(
+                    RESPONSE_FORMAT_JSON_OBJECT, RESPONSE_FORMAT_PROMPT_ONLY);
+            default -> List.of(RESPONSE_FORMAT_PROMPT_ONLY);
+        };
+    }
+
+    private String resolveResponseFormatMode(AiModelConfig config) {
+        String configuredMode = normalizeResponseFormatMode(config.getResponseFormatMode());
+        if (!RESPONSE_FORMAT_AUTO.equals(configuredMode)) {
+            return configuredMode;
+        }
+        String cached = autoResponseFormatCache.get(responseFormatCacheKey(config));
+        if (cached != null) {
+            return cached;
+        }
+        String provider = config.getProvider() == null ? "" : config.getProvider().toLowerCase(Locale.ROOT);
+        String endpoint = config.getEndpoint() == null ? "" : config.getEndpoint().toLowerCase(Locale.ROOT);
+        if (provider.contains("deepseek") || endpoint.contains("api.deepseek.com")) {
+            return RESPONSE_FORMAT_JSON_OBJECT;
+        }
+        if ("openai".equals(provider) || endpoint.contains("api.openai.com")) {
+            return RESPONSE_FORMAT_JSON_SCHEMA;
+        }
+        return RESPONSE_FORMAT_PROMPT_ONLY;
+    }
+
+    private String normalizeResponseFormatMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return RESPONSE_FORMAT_AUTO;
+        }
+        String normalized = mode.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        return switch (normalized) {
+            case RESPONSE_FORMAT_AUTO, RESPONSE_FORMAT_JSON_SCHEMA,
+                    RESPONSE_FORMAT_JSON_OBJECT, RESPONSE_FORMAT_PROMPT_ONLY -> normalized;
+            default -> throw new IllegalArgumentException("Unsupported response format mode: " + mode);
+        };
+    }
+
+    private String responseFormatCacheKey(AiModelConfig config) {
+        return String.join("|",
+                config.getProvider() == null ? "" : config.getProvider(),
+                config.getEndpoint() == null ? "" : config.getEndpoint(),
+                config.getModelKey() == null ? "" : config.getModelKey());
+    }
+
+    private boolean isResponseFormatCompatibilityError(int statusCode, String responseBody) {
+        if (statusCode != 400 || responseBody == null) {
+            return false;
+        }
+        String lower = responseBody.toLowerCase(Locale.ROOT);
+        return lower.contains("response_format") || lower.contains("response format");
+    }
+
+    private String buildStructuredOutputPrompt(String systemPrompt, AiCallOptions options,
+                                               String responseFormatMode) {
+        String base = systemPrompt == null ? "" : systemPrompt;
+        if (options.getStructuredSchema() == null) {
+            return options.isForceJsonObjectFallback() && RESPONSE_FORMAT_PROMPT_ONLY.equals(responseFormatMode)
+                    ? base + "\n\nReturn only a valid JSON object. Do not use Markdown fences or explanatory text."
+                    : base;
+        }
+        if (RESPONSE_FORMAT_JSON_SCHEMA.equals(responseFormatMode)) {
+            return base;
+        }
+        return base
+                + "\n\nReturn only one valid JSON object. Do not use Markdown fences or explanatory text."
+                + " The output must conform to this JSON Schema:\n"
+                + options.getStructuredSchema().toJSONString();
+    }
+
     private int resolveMaxTokens(AiModelConfig config, AiCallOptions options, boolean thinking) {
         int maxTokens = options.getMaxTokensOverride() != null
                 ? options.getMaxTokensOverride()
@@ -575,7 +732,8 @@ public class AiModelService {
 
     /** OpenAI / Moonshot / GLM / Qwen / DeepSeek 等兼容协议的请求体。 */
     private JSONObject buildOpenAiRequestBody(AiModelConfig config, String systemPrompt, String userContent,
-                                               AiCallOptions options, boolean thinking, int maxTokens) {
+                                               AiCallOptions options, boolean thinking, int maxTokens,
+                                               String responseFormatMode) {
         JSONObject body = new JSONObject();
         body.put("model", resolveModelId(config));
         // Thinking-mode models lock temperature server-side (Moonshot 拒绝 ≠ 1 / GLM 也是),
@@ -608,19 +766,26 @@ public class AiModelService {
         messages.add(userMsg);
         body.put("messages", messages);
 
-        // 结构化输出：优先用 json_schema，没有 schema 但要求 JSON 时回退 json_object。
+        // Structured output is provider-specific; responseFormatMode has already been resolved.
         if (options.getStructuredSchema() != null) {
+            if (RESPONSE_FORMAT_JSON_SCHEMA.equals(responseFormatMode)) {
+                JSONObject responseFormat = new JSONObject();
+                responseFormat.put("type", RESPONSE_FORMAT_JSON_SCHEMA);
+                JSONObject jsonSchema = new JSONObject();
+                jsonSchema.put("name", options.getStructuredSchemaName());
+                jsonSchema.put("strict", true);
+                jsonSchema.put("schema", options.getStructuredSchema());
+                responseFormat.put(RESPONSE_FORMAT_JSON_SCHEMA, jsonSchema);
+                body.put("response_format", responseFormat);
+            } else if (RESPONSE_FORMAT_JSON_OBJECT.equals(responseFormatMode)) {
+                JSONObject responseFormat = new JSONObject();
+                responseFormat.put("type", RESPONSE_FORMAT_JSON_OBJECT);
+                body.put("response_format", responseFormat);
+            }
+        } else if (options.isForceJsonObjectFallback()
+                && !RESPONSE_FORMAT_PROMPT_ONLY.equals(responseFormatMode)) {
             JSONObject responseFormat = new JSONObject();
-            responseFormat.put("type", "json_schema");
-            JSONObject jsonSchema = new JSONObject();
-            jsonSchema.put("name", options.getStructuredSchemaName());
-            jsonSchema.put("strict", true);
-            jsonSchema.put("schema", options.getStructuredSchema());
-            responseFormat.put("json_schema", jsonSchema);
-            body.put("response_format", responseFormat);
-        } else if (options.isForceJsonObjectFallback()) {
-            JSONObject responseFormat = new JSONObject();
-            responseFormat.put("type", "json_object");
+            responseFormat.put("type", RESPONSE_FORMAT_JSON_OBJECT);
             body.put("response_format", responseFormat);
         }
         return body;
@@ -719,6 +884,7 @@ public class AiModelService {
         dto.setEnabled(config.getIsEnabled());
         boolean isThinking = isThinkingModel(config);
         dto.setThinkingMode(isThinking);
+        dto.setResponseFormatMode(normalizeResponseFormatMode(config.getResponseFormatMode()));
         // 思维模型不能参与跨模型对比：温度服务器锁、seed 通常不支持、采样不收敛。
         dto.setCrossModelEligible(!isThinking);
         dto.setCreatedAt(config.getCreatedAt());
@@ -745,6 +911,7 @@ public class AiModelService {
         config.setThinkingMode(dto.getThinkingMode() != null
                 ? dto.getThinkingMode()
                 : matchesThinkingPattern(dto.getModelKey() != null ? dto.getModelKey() : dto.getName()));
+        config.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
         return config;
     }
 

@@ -2,6 +2,7 @@ import request, { ApiResponse } from '../../../shared/api/request';
 import { PaginatedResult } from '../../rules/api/rules';
 
 export type ModelType = 'chat' | 'embedding' | 'reranker';
+export type ResponseFormatMode = 'auto' | 'json_schema' | 'json_object' | 'prompt_only';
 
 export interface AIModel {
   id: number;
@@ -23,6 +24,7 @@ export interface AIModel {
    * has room to finish.
    */
   thinkingMode: boolean;
+  responseFormatMode: ResponseFormatMode;
   createdAt: string;
   updatedAt: string;
 }
@@ -40,6 +42,7 @@ export interface CreateModelParams {
   timeout: number;
   enabled: boolean;
   thinkingMode: boolean;
+  responseFormatMode: ResponseFormatMode;
 }
 
 export interface ModelListParams {
@@ -88,6 +91,7 @@ export interface TestConnectionResult {
   reply: string;
   modelType?: ModelType;
   embeddingDimension?: number;
+  responseFormatMode?: ResponseFormatMode;
 }
 
 export interface TestConnectionParams extends Partial<CreateModelParams> {

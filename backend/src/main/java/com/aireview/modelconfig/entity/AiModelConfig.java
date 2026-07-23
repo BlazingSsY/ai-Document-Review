@@ -39,6 +39,12 @@ public class AiModelConfig {
     /** See {@link com.aireview.modelconfig.dto.AiModelConfigDTO#thinkingMode}. */
     private Boolean thinkingMode;
 
+    /**
+     * Structured-output capability used by document review:
+     * auto / json_schema / json_object / prompt_only.
+     */
+    private String responseFormatMode;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 

@@ -31,6 +31,11 @@ public class AiModelConfigDTO {
      */
     private Boolean thinkingMode;
     /**
+     * Structured-output mode for chat models:
+     * auto / json_schema / json_object / prompt_only.
+     */
+    private String responseFormatMode;
+    /**
      * 是否可参与"跨模型对比"。思维模型温度由服务器锁定、不支持 seed、参数对齐不完整，
      * 因此跨模型对比时结果不可比，前端应在选择列表里给出"仅单模型"角标。
      * 由后端基于 thinkingMode 自动派生，前端不需要写。

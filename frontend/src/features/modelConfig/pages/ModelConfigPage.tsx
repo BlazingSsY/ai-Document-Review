@@ -30,6 +30,7 @@ import {
   AIModel,
   CreateModelParams,
   ModelType,
+  ResponseFormatMode,
 } from '../api/models';
 import { MODEL_PROVIDERS, MODEL_TYPES, PAGE_SIZE } from '../../../shared/utils/constants';
 
@@ -159,6 +160,7 @@ function ModelConfigPage() {
       timeout: 180,
       enabled: true,
       thinkingMode: false,
+      responseFormatMode: 'auto',
     });
     setModalOpen(true);
   };
@@ -184,6 +186,7 @@ function ModelConfigPage() {
       timeout: model.timeout || 180,
       enabled: model.enabled,
       thinkingMode: !!model.thinkingMode,
+      responseFormatMode: model.responseFormatMode || 'auto',
     });
     setModalOpen(true);
   };
@@ -228,6 +231,9 @@ function ModelConfigPage() {
       timeout: values.timeout as number,
       enabled: values.enabled as boolean,
       thinkingMode: ((values.modelType as ModelType) || activeModelType) === 'chat' ? !!values.thinkingMode : false,
+      responseFormatMode: ((values.modelType as ModelType) || activeModelType) === 'chat'
+        ? ((values.responseFormatMode as ResponseFormatMode) || 'auto')
+        : 'auto',
     };
     setSaving(true);
     try {
@@ -272,7 +278,7 @@ function ModelConfigPage() {
   const handleTestInForm = async () => {
     try {
       const values = await form.validateFields([
-        'name', 'modelType', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature', 'timeout',
+        'name', 'modelType', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature', 'timeout', 'responseFormatMode',
       ]);
       const provider = values.providerSelect === '__custom__'
         ? (values.providerCustom as string)
@@ -289,6 +295,9 @@ function ModelConfigPage() {
         temperature: values.temperature as number,
         timeout: values.timeout as number,
         thinkingMode: ((values.modelType as ModelType) || activeModelType) === 'chat' ? !!form.getFieldValue('thinkingMode') : false,
+        responseFormatMode: ((values.modelType as ModelType) || activeModelType) === 'chat'
+          ? ((form.getFieldValue('responseFormatMode') as ResponseFormatMode) || 'auto')
+          : 'auto',
       });
       const data = res.data?.data;
       Modal.success({
@@ -297,6 +306,9 @@ function ModelConfigPage() {
           <div style={{ fontSize: 13 }}>
             <div>解析后的请求地址：<code>{data?.resolvedUrl}</code></div>
             <div style={{ marginTop: 6 }}>响应耗时：{data?.latencyMs} ms</div>
+            {data?.responseFormatMode && (
+              <div style={{ marginTop: 6 }}>结构化输出：{data.responseFormatMode}</div>
+            )}
             {data?.reply && (
               <div style={{ marginTop: 6 }}>模型回复（截断）：{data.reply}</div>
             )}
@@ -493,7 +505,7 @@ function ModelConfigPage() {
           form={form}
           onFinish={handleSave}
           layout="vertical"
-          initialValues={{ modelType: 'chat', temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false }}
+          initialValues={{ modelType: 'chat', temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false, responseFormatMode: 'auto' }}
         >
           <Form.Item name="modelType" hidden>
             <Input />
@@ -558,6 +570,30 @@ function ModelConfigPage() {
           >
             <Input placeholder={isLocalProvider ? '例：http://192.168.1.10:8000/v1/chat/completions' : '例：https://api.minimaxi.com/v1'} />
           </Form.Item>
+          {isChatModel && (
+            <Form.Item
+              name="responseFormatMode"
+              label={
+                <span>
+                  结构化输出&nbsp;
+                  <Tooltip title="不同供应商支持的 response_format 不同。自动模式会为 DeepSeek 使用 JSON Object、为 OpenAI 使用 JSON Schema，其他供应商使用兼容性最高的仅提示词模式；遇到格式不兼容的 HTTP 400 时还会自动降级。">
+                    <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                  </Tooltip>
+                </span>
+              }
+              rules={[{ required: true, message: '请选择结构化输出模式' }]}
+              extra="通常保持自动即可；只有供应商文档明确说明支持类型时才手动指定。"
+            >
+              <Select
+                options={[
+                  { label: '自动兼容（推荐）', value: 'auto' },
+                  { label: 'JSON Schema（严格模式）', value: 'json_schema' },
+                  { label: 'JSON Object（通用 JSON 模式）', value: 'json_object' },
+                  { label: '仅提示词约束（兼容性最高）', value: 'prompt_only' },
+                ]}
+              />
+            </Form.Item>
+          )}
           <Form.Item
             name="apiKey"
             label="API Key"

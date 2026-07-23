@@ -149,6 +149,10 @@ CREATE TABLE IF NOT EXISTS ai_model_config (
     -- need a much larger max_tokens budget for the chain-of-thought. When true the
     -- backend omits temperature from the API call and ensures max_tokens >= 16000.
     thinking_mode   BOOLEAN         NOT NULL DEFAULT FALSE,
+    -- Structured-output compatibility: auto / json_schema / json_object / prompt_only.
+    -- "auto" selects a provider-safe mode and can downgrade when an API rejects
+    -- response_format. Existing rows default to auto for backward compatibility.
+    response_format_mode VARCHAR(32) NOT NULL DEFAULT 'auto',
     created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP       NOT NULL DEFAULT NOW()
 );
@@ -157,6 +161,7 @@ CREATE TABLE IF NOT EXISTS ai_model_config (
 ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS model_type VARCHAR(32) NOT NULL DEFAULT 'chat';
 ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER;
 ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS thinking_mode BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS response_format_mode VARCHAR(32) NOT NULL DEFAULT 'auto';
 ALTER TABLE ai_model_config ALTER COLUMN timeout SET DEFAULT 180;
 UPDATE ai_model_config SET timeout = 180 WHERE timeout = 60;
 

@@ -283,18 +283,32 @@ function ExecutionStrip({ workspace }: { workspace: ReviewWorkspaceViewModel }) 
   const progress = workspace.status === 'completed'
     ? 100
     : Math.max(0, Math.min(100, workspace.wsProgress || Number(workspace.task?.progress || 0)));
-  const completedStages = workspace.status === 'completed' ? 5 : Math.floor(progress / 20);
-  const activeStage = workspace.isProcessing ? Math.min(completedStages, 4) : -1;
-  const stageLabels = ['文档解析', '章节切片', '规则调度', '模型审查', '结果复核'];
+  // Keep these boundaries aligned with ReviewService's progress events. The stages
+  // are intentionally not equal 20% buckets: model review starts at 35% and then
+  // occupies most of the runtime. Equal buckets incorrectly showed "章节切片"
+  // while the backend was already waiting for the first model responses.
+  const stages = [
+    { label: '文档解析', startsAt: 0 },
+    { label: '规则加载', startsAt: 20 },
+    { label: '章节切片', startsAt: 25 },
+    { label: '模型审查', startsAt: 35 },
+    { label: '结果汇总', startsAt: 92 },
+  ];
+  let currentStage = 0;
+  stages.forEach((stage, index) => {
+    if (progress >= stage.startsAt) currentStage = index;
+  });
+  const completedStages = workspace.status === 'completed' ? stages.length : currentStage;
+  const activeStage = workspace.isProcessing ? currentStage : -1;
 
   return (
     <section className="review-status-strip" aria-label="审查执行状态">
       <div className="review-workflow">
-        {stageLabels.map((label, index) => (
+        {stages.map((stage, index) => (
           <WorkflowStep
-            key={label}
-            label={label}
-            last={index === stageLabels.length - 1}
+            key={stage.label}
+            label={stage.label}
+            last={index === stages.length - 1}
             state={index < completedStages ? 'done' : index === activeStage ? 'current' : 'waiting'}
           />
         ))}
