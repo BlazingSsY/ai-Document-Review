@@ -10,18 +10,18 @@
   height: calc(100vh - 112px);
   min-height: 640px;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   overflow: hidden;
   color: #1f2937;
 }
 
 .review-page-header {
   display: flex;
-  min-height: 58px;
+  min-height: 44px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 }
 
 .review-heading-main {
@@ -29,13 +29,13 @@
   min-width: 0;
   flex: 1;
   align-items: center;
-  gap: 11px;
+  gap: 9px;
 }
 
 .review-back-button {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
 }
 
 .review-heading-copy {
@@ -47,7 +47,7 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
 }
 
 .review-title-line h1 {
@@ -55,9 +55,9 @@
   margin: 0;
   overflow: hidden;
   color: #101828;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 650;
-  line-height: 28px;
+  line-height: 24px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -67,14 +67,20 @@
   margin-inline-end: 0;
 }
 
+.review-title-line .ant-tag {
+  padding-inline: 6px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
 .review-heading-copy p {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 3px 0 0;
+  gap: 6px;
+  margin: 1px 0 0;
   color: #667085;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .review-heading-copy p i {
@@ -87,6 +93,17 @@
 .review-heading-actions {
   flex: 0 0 auto;
   justify-content: flex-end;
+}
+
+.review-heading-actions .ant-space-item {
+  display: flex;
+}
+
+.review-heading-actions .ant-btn {
+  height: 30px;
+  padding-inline: 10px;
+  border-radius: 6px;
+  font-size: 12px;
 }
 
 .review-status-strip {
@@ -490,7 +507,7 @@
 }
 
 .finding-detail-panel {
-  padding: 12px 13px 14px;
+  padding: 9px 11px 10px;
   border-top: 1px solid #d6e4ff;
   background: #fff;
   animation: finding-detail-reveal 180ms cubic-bezier(0.2, 0, 0, 1);
@@ -507,7 +524,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .finding-detail-heading strong {
@@ -526,12 +543,12 @@
 }
 
 .finding-detail-section + .finding-detail-section {
-  margin-top: 10px;
+  margin-top: 7px;
 }
 
 .finding-detail-section > span {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: #667085;
   font-size: 11px;
   font-weight: 600;
@@ -543,13 +560,13 @@
   margin: 0;
   color: #344054;
   font-size: 13px;
-  line-height: 20px;
+  line-height: 19px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .finding-detail-section blockquote {
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: 1px solid #fedf89;
   border-left: 3px solid #f79009;
   border-radius: 6px;
@@ -557,7 +574,7 @@
 }
 
 .finding-detail-section.suggestion p {
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-radius: 6px;
   background: #ecfdf3;
   color: #05603a;
@@ -731,19 +748,20 @@
 
 .manual-review-bar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 12px;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid #e5e7eb;
 }
 
 .manual-decision-control {
-  display: grid;
+  display: flex;
   min-width: 0;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
 }
 
 .manual-decision-control .review-section-label {
@@ -752,11 +770,13 @@
 }
 
 .manual-review-bar .ant-radio-button-wrapper {
-  padding-inline: 9px;
+  height: 30px;
+  padding-inline: 8px;
+  line-height: 28px;
 }
 
 .manual-review-bar .ant-btn {
-  min-height: 32px;
+  min-height: 30px;
 }
 
 .runtime-drawer-content {

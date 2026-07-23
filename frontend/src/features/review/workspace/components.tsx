@@ -222,7 +222,7 @@ function ReviewPageHeader({
         </div>
       </div>
 
-      <Space className="review-heading-actions" size={8} wrap>
+      <Space className="review-heading-actions" size={6} wrap>
         <Badge count={workspace.failedChunkCount} size="small" offset={[-2, 2]}>
           <Button
             icon={workspace.isProcessing ? <LoadingOutlined spin /> : <InfoCircleOutlined />}
@@ -333,6 +333,7 @@ function FindingItem({
   expanded,
   hasCheckMatrix,
   item,
+  itemRef,
   onSelect,
 }: {
   active: boolean;
@@ -340,6 +341,7 @@ function FindingItem({
   expanded: boolean;
   hasCheckMatrix: boolean;
   item: Record<string, unknown>;
+  itemRef?: (element: HTMLElement | null) => void;
   onSelect: () => void;
 }) {
   const status = itemThreeState(item, hasCheckMatrix);
@@ -365,7 +367,7 @@ function FindingItem({
   const evidenceCount = Array.isArray(sourceRefs) ? sourceRefs.length : evidence ? 1 : 0;
 
   return (
-    <article className={`review-finding-item status-${status} ${active ? 'active' : ''}`}>
+    <article ref={itemRef} className={`review-finding-item status-${status} ${active ? 'active' : ''}`}>
       <button
         type="button"
         className="finding-item-trigger"
@@ -426,6 +428,8 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const [filter, setFilter] = useState<ResultFilter>(() => workspace.hasCheckMatrix && counts.Fail > 0 ? 'Fail' : 'all');
   const [search, setSearch] = useState('');
   const [expandedFindingIndex, setExpandedFindingIndex] = useState<number | null>(null);
+  const findingsScrollerRef = useRef<HTMLElement | Window | null>(null);
+  const findingItemRefs = useRef(new Map<number, HTMLElement>());
 
   useEffect(() => {
     setExpandedFindingIndex((current) => current === workspace.activeIndex ? current : null);
@@ -445,6 +449,24 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
         textField(item, ['evidence', 'reason']),
       ].join(' ').toLowerCase().includes(normalizedSearch);
     }), [filter, normalizedSearch, workspace.hasCheckMatrix, workspace.reviewItems]);
+
+  useEffect(() => {
+    if (expandedFindingIndex === null) return undefined;
+
+    const frameId = window.requestAnimationFrame(() => {
+      const scroller = findingsScrollerRef.current;
+      const findingItem = findingItemRefs.current.get(expandedFindingIndex);
+      if (!(scroller instanceof HTMLElement) || !findingItem) return;
+
+      const offsetToTop = findingItem.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTo({
+        top: scroller.scrollTop + offsetToTop,
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [expandedFindingIndex]);
 
   const handleFilterChange = (value: string | number) => {
     const nextFilter = value as ResultFilter;
@@ -506,6 +528,9 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
           className="review-findings-list"
           data={filteredItems}
           increaseViewportBy={240}
+          scrollerRef={(element) => {
+            findingsScrollerRef.current = element;
+          }}
           computeItemKey={(_, entry) => textField(entry.item, ['finding_id', 'findingId']) || entry.originalIndex}
           itemContent={(_, entry) => (
             <div className="review-finding-wrapper">
@@ -517,6 +542,10 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
                 expanded={entry.originalIndex === workspace.activeIndex && expandedFindingIndex === entry.originalIndex}
                 hasCheckMatrix={workspace.hasCheckMatrix}
                 item={entry.item}
+                itemRef={(element) => {
+                  if (element) findingItemRefs.current.set(entry.originalIndex, element);
+                  else findingItemRefs.current.delete(entry.originalIndex);
+                }}
                 onSelect={() => handleFindingSelect(entry.originalIndex)}
               />
             </div>
