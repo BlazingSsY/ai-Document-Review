@@ -136,9 +136,12 @@ review:
       per-chapter-max-chars: 4800    # 单章最多进入一致性模型的字符数
       windows-per-chapter: 4         # 长章节从头/中/尾等位置均匀取样
     quality:
+      call-timeout-seconds: 120      # 文字质量单次模型调用上限；不超过模型自身 timeout
       full-scan:
         enabled: true                # 文字质量主线：全文切片扫描（错别字、病句、标点等局部问题）
         batch-blocks: 4              # 每次模型调用扫描多少个原文块
+        concurrency: 2               # 单个任务的扫描并发；两个同时审查时避免串行超时累积
+        failure-threshold: 4         # 累计失败达到阈值后停止继续调用，剩余批次标记人工复核
         max-blocks: 0                # 0=扫描全部；大文档压测时可临时限流
       structure-index:
         enabled: true                # 图号/表号唯一性、引用、顺序、完整性等确定性索引检查

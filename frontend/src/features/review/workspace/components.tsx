@@ -28,6 +28,7 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   DownloadOutlined,
+  DownOutlined,
   FileSearchOutlined,
   FilterOutlined,
   InfoCircleOutlined,
@@ -328,11 +329,15 @@ function ExecutionStrip({ workspace }: { workspace: ReviewWorkspaceViewModel }) 
 
 function FindingItem({
   active,
+  detailsFooter,
+  expanded,
   hasCheckMatrix,
   item,
   onSelect,
 }: {
   active: boolean;
+  detailsFooter?: ReactNode;
+  expanded: boolean;
   hasCheckMatrix: boolean;
   item: Record<string, unknown>;
   onSelect: () => void;
@@ -344,7 +349,10 @@ function FindingItem({
   const title = hasCheckMatrix
     ? textField(item, ['check_question', 'question', 'description'])
     : textField(item, ['description', 'explanation', 'issue', 'problem', 'summary']);
-  const excerpt = textField(item, ['reason', 'evidence', 'originalText', 'suggestion', 'recommendation']);
+  const reason = textField(item, ['reason', 'explanation']);
+  const evidence = textField(item, ['evidence', 'originalText']);
+  const suggestion = textField(item, ['suggestion', 'recommendation']);
+  const excerpt = reason || evidence || suggestion;
   const rule = textField(item, ['ruleName', 'rule_name', 'rule']);
   const ruleCode = textField(item, ['rule_code', 'ruleCode']);
   const checkCode = textField(item, ['check_code', 'checkCode']);
@@ -353,26 +361,59 @@ function FindingItem({
   const sourceChunk = numericField(item, ['sourceChunk', 'chunk']);
   const location = chapter || (sourceChunk ? `切片 ${sourceChunk}` : '点击查看定位证据');
   const itemCode = checkCode || ruleCode;
+  const sourceRefs = item.sourceRefs;
+  const evidenceCount = Array.isArray(sourceRefs) ? sourceRefs.length : evidence ? 1 : 0;
 
   return (
-    <button type="button" className={`review-finding-item status-${status} ${active ? 'active' : ''}`} onClick={onSelect}>
-      <div className="finding-item-heading">
-        <Space size={5} wrap>
-          <Tag color={checkStatusColor(status)}>{CHECK_STATUS_LABELS[status]}</Tag>
-          {category && <Tag>{category}</Tag>}
-          {itemCode && <span className="finding-code">{itemCode}</span>}
-          {manualStatus && <Tag color="geekblue">人工：{CHECK_STATUS_LABELS[normalizeThreeState(manualStatus)]}</Tag>}
-        </Space>
-        <RightOutlined className="finding-arrow" />
-      </div>
-      <h3>{title || rule || '未命名检查项'}</h3>
-      {excerpt && <p>{excerpt}</p>}
-      <div className="finding-item-footer">
-        <span><FileSearchOutlined />{location}</span>
-        {confidence && <span className="finding-confidence">{confidenceLabel(confidence)}</span>}
-        {!confidence && rawStatus === 'Partial' && <span className="finding-confidence">部分满足</span>}
-      </div>
-    </button>
+    <article className={`review-finding-item status-${status} ${active ? 'active' : ''}`}>
+      <button
+        type="button"
+        className="finding-item-trigger"
+        aria-expanded={expanded}
+        onClick={onSelect}
+      >
+        <div className="finding-item-heading">
+          <Space size={5} wrap>
+            <Tag color={checkStatusColor(status)}>{CHECK_STATUS_LABELS[status]}</Tag>
+            {category && <Tag>{category}</Tag>}
+            {itemCode && <span className="finding-code">{itemCode}</span>}
+            {manualStatus && <Tag color="geekblue">人工：{CHECK_STATUS_LABELS[normalizeThreeState(manualStatus)]}</Tag>}
+          </Space>
+          {expanded ? <DownOutlined className="finding-arrow active" /> : <RightOutlined className="finding-arrow" />}
+        </div>
+        <h3>{title || rule || '未命名检查项'}</h3>
+        {!expanded && excerpt && <p className="finding-summary-preview">{excerpt}</p>}
+        <div className="finding-item-footer">
+          <span><FileSearchOutlined />{location}</span>
+          {confidence && <span className="finding-confidence">{confidenceLabel(confidence)}</span>}
+          {!confidence && rawStatus === 'Partial' && <span className="finding-confidence">部分满足</span>}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="finding-detail-panel" aria-label="当前检查项审查详情">
+          <div className="finding-detail-heading">
+            <strong>审查详情</strong>
+            <span>{[ruleCode || rule, `${evidenceCount} 处证据`].filter(Boolean).join(' · ')}</span>
+          </div>
+          <div className="finding-detail-section">
+            <span>判定结论</span>
+            <p>{reason || '系统未返回补充判定理由，请结合右侧定位原文进行人工复核。'}</p>
+          </div>
+          {evidence && status !== 'Pass' && (
+            <div className="finding-detail-section evidence">
+              <span>问题原文</span>
+              <blockquote>{evidenceForDisplay(evidence)}</blockquote>
+            </div>
+          )}
+          <div className="finding-detail-section suggestion">
+            <span>修改建议</span>
+            <p>{suggestion || (status === 'Pass' ? '当前检查项无需修改。' : '系统未提供修改建议，请结合判定依据处理。')}</p>
+          </div>
+          {detailsFooter}
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -384,6 +425,11 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const counts = summarizeReviewItems(workspace);
   const [filter, setFilter] = useState<ResultFilter>(() => workspace.hasCheckMatrix && counts.Fail > 0 ? 'Fail' : 'all');
   const [search, setSearch] = useState('');
+  const [expandedFindingIndex, setExpandedFindingIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setExpandedFindingIndex((current) => current === workspace.activeIndex ? current : null);
+  }, [workspace.activeIndex]);
   const normalizedSearch = search.trim().toLowerCase();
 
   const filteredItems = useMemo(() => workspace.reviewItems
@@ -403,8 +449,14 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const handleFilterChange = (value: string | number) => {
     const nextFilter = value as ResultFilter;
     setFilter(nextFilter);
+    setExpandedFindingIndex(null);
     const firstMatch = workspace.reviewItems.findIndex((item) => matchesFilter(item, nextFilter, workspace.hasCheckMatrix));
     if (firstMatch >= 0) workspace.selectIssue(firstMatch);
+  };
+
+  const handleFindingSelect = (index: number) => {
+    workspace.selectIssue(index);
+    setExpandedFindingIndex((current) => current === index ? null : index);
   };
 
   return (
@@ -459,9 +511,13 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
             <div className="review-finding-wrapper">
               <FindingItem
                 active={entry.originalIndex === workspace.activeIndex}
+                detailsFooter={entry.originalIndex === workspace.activeIndex && expandedFindingIndex === entry.originalIndex
+                  ? <ManualReviewBar workspace={workspace} />
+                  : undefined}
+                expanded={entry.originalIndex === workspace.activeIndex && expandedFindingIndex === entry.originalIndex}
                 hasCheckMatrix={workspace.hasCheckMatrix}
                 item={entry.item}
-                onSelect={() => workspace.selectIssue(entry.originalIndex)}
+                onSelect={() => handleFindingSelect(entry.originalIndex)}
               />
             </div>
           )}
@@ -488,44 +544,6 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
         </Space>
       </div>
     </aside>
-  );
-}
-
-function DecisionSummary({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
-  const item = workspace.activeItem;
-  if (!item) return null;
-
-  const title = workspace.hasCheckMatrix
-    ? textField(item, ['check_question', 'question', 'description'])
-    : textField(item, ['description', 'explanation', 'issue', 'problem', 'summary']);
-  const reason = textField(item, ['reason', 'explanation']);
-  const evidence = textField(item, ['evidence', 'originalText']);
-  const suggestion = textField(item, ['suggestion', 'recommendation']);
-  const rule = textField(item, ['ruleName', 'rule_name', 'rule']);
-  const ruleCode = textField(item, ['rule_code', 'ruleCode']);
-  const evidenceCount = workspace.sourceCandidates.length || (workspace.activeLocator ? 1 : 0);
-
-  return (
-    <section className="review-decision-summary">
-      <div className="decision-copy">
-        <span className="review-section-label">判定结论</span>
-        <h3>{title || rule || '当前检查项'}</h3>
-        <p>{reason || workspace.activeLocator || '系统未返回补充判定理由，请结合右侧原文进行人工复核。'}</p>
-        {evidence && itemThreeState(item, workspace.hasCheckMatrix) !== 'Pass' && (
-          <div className="decision-evidence">
-            <strong>问题原文：</strong>
-            <q>{evidenceForDisplay(evidence)}</q>
-          </div>
-        )}
-        {suggestion && <div className="decision-suggestion"><strong>修改建议</strong>{suggestion}</div>}
-      </div>
-      <div className="decision-metadata">
-        <div><span>规则来源</span><strong>{ruleCode || rule || '系统规则'}</strong></div>
-        <div><span>定位结果</span><strong>{evidenceCount} 处原文证据</strong></div>
-        {workspace.activeSourceScore !== undefined && <div><span>召回分数</span><strong>{workspace.activeSourceScore.toFixed(3)}</strong></div>}
-        {workspace.activeSourceLength !== undefined && <div><span>原文长度</span><strong>{workspace.activeSourceLength} 字</strong></div>}
-      </div>
-    </section>
   );
 }
 
@@ -598,63 +616,45 @@ function ManualReviewBar({ workspace }: { workspace: ReviewWorkspaceViewModel })
 
 function EvidencePanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const item = workspace.activeItem;
-  const status = item ? itemThreeState(item, workspace.hasCheckMatrix) : 'Review';
-  const confidence = textField(item, ['confidence']);
-  const checkCode = textField(item, ['check_code', 'checkCode']);
-  const ruleCode = textField(item, ['rule_code', 'ruleCode']);
 
   return (
     <main className="review-evidence-pane">
-      <div className="review-pane-header evidence-heading">
+      <div className="review-pane-header evidence-heading source-only-heading">
         <div>
-          <h2>审查详情</h2>
-          <span>{[checkCode || ruleCode, workspace.activeSourceTitle].filter(Boolean).join(' · ') || '选择左侧检查项查看详情'}</span>
+          <h2>原文定位</h2>
+          <span>{workspace.activeSourceTitle || (item ? '完整章节原文' : '选择左侧检查项查看定位原文')}</span>
         </div>
         {item && (
-          <Space size={5} wrap>
-            <Tag color={checkStatusColor(status)}>{CHECK_STATUS_LABELS[status]}</Tag>
-            {confidence && <Tag color={confidence === 'high' ? 'blue' : confidence === 'medium' ? 'geekblue' : 'gold'}>{confidenceLabel(confidence)}</Tag>}
+          <Space className="source-heading-actions" size={5} wrap>
+            {workspace.activeSourceChapterLabel && <Tag color="blue">{workspace.activeSourceChapterLabel}</Tag>}
+            {workspace.activeSourceReason && <Tag>{sourceReasonLabel(workspace.activeSourceReason)}</Tag>}
+            {workspace.sourceCandidates.length > 0 && (
+              <Tag color="processing">证据 {workspace.activeSourceSafeIndex + 1} / {workspace.sourceCandidates.length}</Tag>
+            )}
+            <Tooltip title="上一处证据">
+              <Button
+                size="small"
+                aria-label="上一处证据"
+                icon={<LeftOutlined />}
+                disabled={workspace.activeSourceSafeIndex <= 0}
+                onClick={() => workspace.setActiveSourceIndex(workspace.activeSourceSafeIndex - 1)}
+              />
+            </Tooltip>
+            <Tooltip title="下一处证据">
+              <Button
+                size="small"
+                aria-label="下一处证据"
+                icon={<RightOutlined />}
+                disabled={workspace.activeSourceSafeIndex < 0 || workspace.activeSourceSafeIndex >= workspace.sourceCandidates.length - 1}
+                onClick={() => workspace.setActiveSourceIndex(workspace.activeSourceSafeIndex + 1)}
+              />
+            </Tooltip>
           </Space>
         )}
       </div>
 
       {item ? (
-        <>
-          <DecisionSummary workspace={workspace} />
-          <div className="review-source-toolbar">
-            <div>
-              <h3>原文定位</h3>
-              <span>{workspace.activeSourceTitle || '完整章节原文'}</span>
-            </div>
-            <Space size={5} wrap>
-              {workspace.activeSourceChapterLabel && <Tag color="blue">{workspace.activeSourceChapterLabel}</Tag>}
-              {workspace.activeSourceReason && <Tag>{sourceReasonLabel(workspace.activeSourceReason)}</Tag>}
-              {workspace.sourceCandidates.length > 0 && (
-                <Tag color="processing">定位证据 {workspace.activeSourceSafeIndex + 1} / {workspace.sourceCandidates.length}</Tag>
-              )}
-              <Tooltip title="上一处证据">
-                <Button
-                  size="small"
-                  aria-label="上一处证据"
-                  icon={<LeftOutlined />}
-                  disabled={workspace.activeSourceSafeIndex <= 0}
-                  onClick={() => workspace.setActiveSourceIndex(workspace.activeSourceSafeIndex - 1)}
-                />
-              </Tooltip>
-              <Tooltip title="下一处证据">
-                <Button
-                  size="small"
-                  aria-label="下一处证据"
-                  icon={<RightOutlined />}
-                  disabled={workspace.activeSourceSafeIndex < 0 || workspace.activeSourceSafeIndex >= workspace.sourceCandidates.length - 1}
-                  onClick={() => workspace.setActiveSourceIndex(workspace.activeSourceSafeIndex + 1)}
-                />
-              </Tooltip>
-            </Space>
-          </div>
-          <SourceEvidence workspace={workspace} />
-          <ManualReviewBar workspace={workspace} />
-        </>
+        <SourceEvidence workspace={workspace} />
       ) : (
         <div className="review-source-empty">
           {workspace.isProcessing ? <><Spin /><Text type="secondary">AI 正在生成审查结果</Text></> : <Empty description="暂无审查结果" />}

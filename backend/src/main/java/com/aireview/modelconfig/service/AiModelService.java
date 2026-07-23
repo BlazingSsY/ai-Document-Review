@@ -586,6 +586,9 @@ public class AiModelService {
         boolean thinking = isThinkingModel(config);
         String provider = config.getProvider() != null ? config.getProvider().toLowerCase(Locale.ROOT) : "openai";
         int timeoutSec = config.getTimeout() != null ? config.getTimeout() : 180;
+        if (options.getTimeoutSecondsOverride() != null && options.getTimeoutSecondsOverride() > 0) {
+            timeoutSec = Math.min(timeoutSec, options.getTimeoutSecondsOverride());
+        }
         int maxTokens = resolveMaxTokens(config, options, thinking);
         List<String> responseFormatCandidates = resolveResponseFormatCandidates(config, options);
         boolean automaticMode = RESPONSE_FORMAT_AUTO.equals(

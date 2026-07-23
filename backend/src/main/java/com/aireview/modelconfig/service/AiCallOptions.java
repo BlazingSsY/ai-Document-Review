@@ -35,6 +35,12 @@ public class AiCallOptions {
     /** 覆盖 max_tokens。null 表示沿用配置默认。 */
     private final Integer maxTokensOverride;
 
+    /**
+     * 覆盖单次请求超时（秒）。null 表示沿用模型配置；
+     * 场景级覆盖只允许缩短模型配置的超时，避免后台批处理长期占用工作线程。
+     */
+    private final Integer timeoutSecondsOverride;
+
     /** 结构化输出的 JSON Schema；null 表示不强制结构化。 */
     private final JSONObject structuredSchema;
 

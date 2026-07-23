@@ -8,6 +8,7 @@ import com.aireview.review.sar.entity.SarDocumentBlock;
 import com.aireview.review.sar.entity.SarReviewAuditLog;
 import com.aireview.review.sar.entity.SarReviewTask;
 import com.aireview.rule.engine.RuleDispatcher;
+import com.aireview.rule.engine.RuleMetadata;
 import com.aireview.rule.entity.Rule;
 import com.aireview.rule.entity.RuleCheck;
 import com.aireview.rule.entity.SarRule;
@@ -57,6 +58,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -69,6 +71,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -209,8 +212,17 @@ public class SarReviewService {
     @Value("${review.sar.quality.full-scan.batch-blocks:4}")
     private int qualityFullScanBatchBlocks;
 
+    @Value("${review.sar.quality.full-scan.concurrency:2}")
+    private int qualityFullScanConcurrency;
+
+    @Value("${review.sar.quality.full-scan.failure-threshold:4}")
+    private int qualityFullScanFailureThreshold;
+
     @Value("${review.sar.quality.full-scan.max-blocks:0}")
     private int qualityFullScanMaxBlocks;
+
+    @Value("${review.sar.quality.call-timeout-seconds:120}")
+    private int qualityCallTimeoutSeconds;
 
     @Value("${review.sar.quality.structure-index.enabled:true}")
     private boolean qualityStructureIndexEnabled;
@@ -903,10 +915,12 @@ public class SarReviewService {
 
         webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
                 "SAR: 正在加载检查规则...", 38);
-        List<CheckPlan> plans = buildCheckPlans(task.getScenarioId());
-        if (plans.isEmpty()) {
+        List<CheckPlan> configuredPlans = buildCheckPlans(task.getScenarioId());
+        if (configuredPlans.isEmpty()) {
             throw new RuntimeException("No active rule checks found for scenario: " + task.getScenarioId());
         }
+        List<CheckPlan> plans = filterPlansByApplicableScope(taskId, configuredPlans, blocks);
+        int scopedOutCheckCount = configuredPlans.size() - plans.size();
 
         List<IndexedPlan> indexedPlans = new ArrayList<>();
         for (int i = 0; i < plans.size(); i++) {
@@ -917,7 +931,9 @@ public class SarReviewService {
         // "首轮审查 1/N"——召回优先下每个检查项要做召回+多批模型调用，慢模型上首个返回可能
         // 要数十秒，用户会误以为卡死。这里先告知总量与并发，给出明确等待预期。
         webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
-                "已加载 " + plans.size() + " 个检查项，开始逐项调用模型审查（并发 "
+                "已加载 " + configuredPlans.size() + " 个检查项"
+                        + (scopedOutCheckCount > 0 ? "，按适用范围排除 " + scopedOutCheckCount + " 项" : "")
+                        + "，执行 " + plans.size() + " 项模型审查（并发 "
                         + Math.max(1, checkConcurrency) + "，首批结果返回前请稍候）...", 39);
 
         List<CheckAttempt> finalAttempts = new ArrayList<>(runCheckPass(
@@ -1015,7 +1031,7 @@ public class SarReviewService {
                     .toList();
             if (!toVerify.isEmpty()) {
                 webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
-                        "开始两阶段复核 " + toVerify.size() + " 条疑似问题...", 93);
+                        "开始两阶段复核 " + toVerify.size() + " 条疑似问题...", 98);
                 Map<String, Map<String, Object>> verdicts =
                         runVerifyPass(taskId, toVerify, chatModel);
                 for (Map.Entry<String, Map<String, Object>> e : verdicts.entrySet()) {
@@ -1049,6 +1065,8 @@ public class SarReviewService {
         retrievalStats.put("embeddingDimension", preparedDocument.embeddingDimension());
         retrievalStats.put("blockCount", blocks.size());
         retrievalStats.put("checkCount", plans.size());
+        retrievalStats.put("configuredCheckCount", configuredPlans.size());
+        retrievalStats.put("scopedOutCheckCount", scopedOutCheckCount);
         retrievalStats.put("checkConcurrency", checkConcurrency);
         retrievalStats.put("recallTopK", recallTopK);
         retrievalStats.put("hnswEfSearch", hnswEfSearch);
@@ -1070,6 +1088,8 @@ public class SarReviewService {
         retrievalStats.put("consistencyFindings", qualityResult.consistencyFindings());
         aiResult.put("retrievalStats", retrievalStats);
 
+        webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
+                "SAR: 正在汇总并保存审查结果...", 99);
         completeTaskIfProcessing(task, aiResult);
         webSocketService.sendTaskUpdate(taskId, SarReviewTask.STATUS_COMPLETED,
                 remainingFailedCount == 0
@@ -1166,7 +1186,12 @@ public class SarReviewService {
      * 每个 item 的业务逻辑与进度上报由 {@code work} 自行处理（异常应在 work 内消化）。
      */
     private <T> void runBounded(String taskId, Iterable<T> items, Consumer<? super T> work) {
-        Semaphore slots = new Semaphore(Math.max(1, checkConcurrency));
+        runBounded(taskId, items, checkConcurrency, work);
+    }
+
+    private <T> void runBounded(String taskId, Iterable<T> items, int concurrency,
+                                Consumer<? super T> work) {
+        Semaphore slots = new Semaphore(Math.max(1, concurrency));
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (T item : items) {
             throwIfCancelled(taskId);
@@ -1225,8 +1250,8 @@ public class SarReviewService {
     /**
      * 阶段 1：三路并联路由 + 区域级取证。对单个检查项用「结构(applies_to.sections/keywords) +
      * 词法(检查问题/通过标准 的术语命中) + 语义(向量召回落点)」三路打分，选出最匹配的区域，
-     * 取该区域完整块（阅读顺序、封顶 regionMaxBlocks）作为证据。三路皆未命中时回退向量 top-N，
-     * 保证不因路由失败而漏判。返回的 routeConfidence = best/total，用于降级置信度与自适应复核。
+     * 取该区域完整块（阅读顺序、封顶 regionMaxBlocks）作为证据。section_specific 规则先建立
+     * 章节硬边界，词法、语义与兜底均不得越过适用范围；通用规则三路皆未命中时才回退向量 top-N。
      */
     private RetrievedCheck routeCheck(String taskId, IndexedPlan indexed,
                                       AiModelConfig embeddingModel, AiModelConfig rerankerModel,
@@ -1234,13 +1259,21 @@ public class SarReviewService {
         CheckPlan plan = indexed.plan();
         Map<String, Double> score = new HashMap<>();
         Set<String> structuralKeys = new HashSet<>();
+        boolean hardScoped = isSectionSpecific(plan);
+        Set<String> eligibleKeys = hardScoped
+                ? matchingScopeKeys(plan, sectionIndex)
+                : new LinkedHashSet<>(sectionIndex.bySection().keySet());
+        if (hardScoped && eligibleKeys.isEmpty()) {
+            throw new IllegalStateException("section-specific rule has no matching document section: "
+                    + plan.ruleCode());
+        }
 
-        // 1) 结构：applies_to.sections 命中章节号；keywords 命中 section_path
+        // 1) 结构：applies_to.sections / keywords 既负责加权，也是专项规则的硬准入边界。
         List<String> ruleSections = plan.rule() == null || plan.rule().getSections() == null
                 ? List.of() : plan.rule().getSections();
         List<String> ruleKeywords = plan.rule() == null || plan.rule().getKeywords() == null
                 ? List.of() : plan.rule().getKeywords();
-        for (String key : sectionIndex.bySection().keySet()) {
+        for (String key : eligibleKeys) {
             String sp = key.startsWith("S:") ? key.substring(2) : key;
             double s = 0;
             for (String sec : ruleSections) if (sectionMatches(sp, sec)) s += 3.0;
@@ -1251,10 +1284,11 @@ public class SarReviewService {
             if (s > 0) { score.merge(key, s, Double::sum); structuralKeys.add(key); }
         }
 
-        // 2) 词法：检查问题 + 通过标准 的关键词在各区域文本中的命中（轻量 BM25 近似）
+        // 2) 词法：专项规则只在 eligibleKeys 内评分，禁止相似术语把规则带到其他章节。
         List<String> terms = lexicalTerms(plan.checkQuestion() + " " + plan.passCriteria());
         if (!terms.isEmpty()) {
             for (Map.Entry<String, List<SarDocumentBlock>> e : sectionIndex.bySection().entrySet()) {
+                if (!eligibleKeys.contains(e.getKey())) continue;
                 String hay = sectionText(e.getValue()).toLowerCase(Locale.ROOT);
                 int hit = 0;
                 for (String t : terms) if (hay.contains(t)) hit++;
@@ -1262,10 +1296,21 @@ public class SarReviewService {
             }
         }
 
-        // 3) 语义：向量召回，按召回块落到的区域累计（召回分加权）
-        List<ScoredBlock> recalled = recall(taskId, buildRetrievalQuery(plan), embeddingModel, recallTopK);
+        // 3) 语义：召回结果同样必须经过适用范围过滤；专项规则的向量失败则保留结构路由。
+        List<ScoredBlock> recalled;
+        try {
+            recalled = recall(taskId, buildRetrievalQuery(plan), embeddingModel, recallTopK);
+        } catch (Exception e) {
+            if (!hardScoped) throw e;
+            recalled = List.of();
+            log.warn("SAR semantic recall failed inside hard scope: task={}, check={}, err={}",
+                    taskId, plan.checkCode(), rootErrorMessage(e));
+        }
         for (ScoredBlock sb : recalled) {
-            score.merge(blockSectionKey(sb.block()), Math.max(0.0, sb.score()) * 2.0, Double::sum);
+            String key = blockSectionKey(sb.block());
+            if (eligibleKeys.contains(key)) {
+                score.merge(key, Math.max(0.0, sb.score()) * 2.0, Double::sum);
+            }
         }
 
         String bestKey = null;
@@ -1371,6 +1416,57 @@ public class SarReviewService {
         if (sp.contains("第" + s + "章")) return true;
         String head = sp.split("[\\s>　]", 2)[0];
         return head.equals(s) || head.startsWith(s + ".");
+    }
+
+    /**
+     * 在进入模型前按规则的显式适用范围做一次文档级过滤。专项规则没有任何匹配章节时直接跳过，
+     * 不能再通过“全文语义兜底”被应用到无关章节。
+     */
+    private List<CheckPlan> filterPlansByApplicableScope(String taskId,
+                                                         List<CheckPlan> plans,
+                                                         List<SarDocumentBlock> blocks) {
+        SectionIndex sectionIndex = buildSectionIndex(blocks);
+        List<CheckPlan> applicable = new ArrayList<>(plans.size());
+        for (CheckPlan plan : plans) {
+            if (!isSectionSpecific(plan) || !matchingScopeKeys(plan, sectionIndex).isEmpty()) {
+                applicable.add(plan);
+                continue;
+            }
+            log.info("SAR check skipped by hard scope: task={}, rule={}, check={}, sections={}, keywords={}",
+                    taskId, plan.ruleCode(), plan.checkCode(),
+                    plan.rule() == null ? List.of() : plan.rule().getSections(),
+                    plan.rule() == null ? List.of() : plan.rule().getKeywords());
+        }
+        return applicable;
+    }
+
+    private boolean isSectionSpecific(CheckPlan plan) {
+        return plan.rule() != null
+                && RuleMetadata.TYPE_SECTION_SPECIFIC.equalsIgnoreCase(
+                        Objects.toString(plan.rule().getRuleType(), ""));
+    }
+
+    private Set<String> matchingScopeKeys(CheckPlan plan, SectionIndex sectionIndex) {
+        if (!isSectionSpecific(plan) || plan.rule() == null) return Set.of();
+        List<String> sections = plan.rule().getSections() == null
+                ? List.of() : plan.rule().getSections();
+        List<String> keywords = plan.rule().getKeywords() == null
+                ? List.of() : plan.rule().getKeywords();
+        Set<String> matches = new LinkedHashSet<>();
+        for (String key : sectionIndex.bySection().keySet()) {
+            String sectionPath = key.startsWith("S:") ? key.substring(2) : key;
+            boolean sectionMatched = sections.stream()
+                    .anyMatch(section -> sectionMatches(sectionPath, section));
+            String lowerPath = sectionPath.toLowerCase(Locale.ROOT);
+            boolean keywordMatched = keywords.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(keyword -> !keyword.isEmpty())
+                    .map(keyword -> keyword.toLowerCase(Locale.ROOT))
+                    .anyMatch(lowerPath::contains);
+            if (sectionMatched || keywordMatched) matches.add(key);
+        }
+        return matches;
     }
 
     /** 轻量分词：ASCII 词(≥3) + 中文 2-gram（去重、封顶 24），用于词法路由。 */
@@ -1673,7 +1769,7 @@ public class SarReviewService {
             try {
                 throwIfCancelled(taskId);
                 webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
-                        "文字质量审查：图表/章节结构索引检查...", 94);
+                        "文字质量审查：图表/章节结构索引检查...", 95);
                 List<Map<String, Object>> structureRows =
                         runStructureIndexQualityReview(blocks, templates);
                 rows.addAll(structureRows);
@@ -1697,7 +1793,7 @@ public class SarReviewService {
             try {
                 throwIfCancelled(taskId);
                 webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
-                        "文字质量审查：全文术语一致性审查...", 95);
+                        "文字质量审查：全文术语一致性审查...", 96);
                 List<Map<String, Object>> terminologyRows =
                         runTerminologyQualityReview(taskId, blocks, chatModel, templates);
                 rows.addAll(terminologyRows);
@@ -1722,7 +1818,7 @@ public class SarReviewService {
             try {
                 throwIfCancelled(taskId);
                 webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
-                        "文字质量审查：跨章一致性核对...", 96);
+                        "文字质量审查：跨章一致性核对...", 97);
                 List<Map<String, Object>> consistencyRows = runConsistencyPass(taskId, chapters, chatModel);
                 for (Map<String, Object> row : consistencyRows) {
                     annotateTextQualityRow(row, "CROSS_CHAPTER_CONSISTENCY", "跨章一致性审查");
@@ -1771,35 +1867,72 @@ public class SarReviewService {
                 ? Math.min(blocks.size(), qualityFullScanMaxBlocks)
                 : blocks.size();
         int batchSize = Math.max(1, qualityFullScanBatchBlocks);
-        List<Map<String, Object>> rows = new ArrayList<>();
+        List<Integer> batchStarts = new ArrayList<>();
         for (int start = 0; start < limit; start += batchSize) {
-            throwIfCancelled(taskId);
+            batchStarts.add(start);
+        }
+
+        Map<Integer, List<Map<String, Object>>> rowsByBatch = new ConcurrentHashMap<>();
+        AtomicInteger completedBatches = new AtomicInteger();
+        AtomicInteger failedBatches = new AtomicInteger();
+        AtomicBoolean scanCircuitOpen = new AtomicBoolean();
+        int totalBatches = batchStarts.size();
+        int failureThreshold = Math.max(1, qualityFullScanFailureThreshold);
+        runBounded(taskId, batchStarts, qualityFullScanConcurrency, start -> {
             int end = Math.min(limit, start + batchSize);
             List<ScoredBlock> evidence = blocks.subList(start, end).stream()
                     .map(block -> new ScoredBlock(block, 1.0, "full_scan"))
                     .toList();
-            try {
-                Map<String, Map<String, Object>> byCode = callQualityChecks(
-                        taskId,
-                        chatModel,
-                        checks,
-                        evidence,
-                        "FULL_SCAN",
-                        "请逐块检查错别字、漏字、多字、重复词、明显标点错误、语病、语序不当和歧义。"
-                                + "只报告能用原文证据定位的问题；未发现问题的检查项返回 Pass 且 findings 为空。",
-                        300000 + start);
-                for (QualityCheckTemplate check : checks) {
-                    rows.addAll(buildRowsFromQualityResult(check, byCode.get(check.checkCode()),
-                            evidence, "FULL_SCAN", "全文切片扫描"));
+            List<Map<String, Object>> batchRows = new ArrayList<>();
+            if (scanCircuitOpen.get()) {
+                batchRows.addAll(buildQualityExecutionErrorRows(checks, evidence,
+                        "FULL_SCAN", "全文切片扫描", "模型批次重复失败，已停止后续全文扫描调用"));
+            } else {
+                try {
+                    Map<String, Map<String, Object>> byCode = callQualityChecks(
+                            taskId,
+                            chatModel,
+                            checks,
+                            evidence,
+                            "FULL_SCAN",
+                            "请逐块检查错别字、漏字、多字、重复词、明显标点错误、语病、语序不当和歧义。"
+                                    + "只报告能用原文证据定位的问题；未发现问题的检查项返回 Pass 且 findings 为空。",
+                            300000 + start);
+                    for (QualityCheckTemplate check : checks) {
+                        batchRows.addAll(buildRowsFromQualityResult(check, byCode.get(check.checkCode()),
+                                evidence, "FULL_SCAN", "全文切片扫描"));
+                    }
+                } catch (TaskCancelledException e) {
+                    throw e;
+                } catch (Exception e) {
+                    log.warn("SAR text quality batch failed: task={}, blocks={}-{}, err={}",
+                            taskId, start, end - 1, rootErrorMessage(e));
+                    batchRows.addAll(buildQualityExecutionErrorRows(checks, evidence,
+                            "FULL_SCAN", "全文切片扫描", rootErrorMessage(e)));
+                    int failures = failedBatches.incrementAndGet();
+                    if (failures >= failureThreshold && scanCircuitOpen.compareAndSet(false, true)) {
+                        log.warn("SAR text quality full scan circuit opened: task={}, failedBatches={}, totalBatches={}",
+                                taskId, failures, totalBatches);
+                    }
                 }
-            } catch (TaskCancelledException e) {
-                throw e;
-            } catch (Exception e) {
-                log.warn("SAR text quality batch failed: task={}, blocks={}-{}, err={}",
-                        taskId, start, end - 1, rootErrorMessage(e));
-                rows.addAll(buildQualityExecutionErrorRows(checks, evidence,
-                        "FULL_SCAN", "全文切片扫描", rootErrorMessage(e)));
             }
+
+            rowsByBatch.put(start, batchRows);
+            synchronized (completedBatches) {
+                int completed = completedBatches.incrementAndGet();
+                int progress = 92 + (int) Math.ceil((double) completed / totalBatches * 2);
+                try {
+                    webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
+                            "文字质量审查：全文切片扫描 " + completed + "/" + totalBatches, progress);
+                } catch (Exception ignore) {
+                    // progress is best-effort
+                }
+            }
+        });
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Integer start : batchStarts) {
+            rows.addAll(rowsByBatch.getOrDefault(start, List.of()));
         }
         return rows;
     }
@@ -1982,6 +2115,7 @@ public class SarReviewService {
                 .temperature(0.0)
                 .topP(1.0)
                 .maxTokensOverride(8192)
+                .timeoutSecondsOverride(qualityCallTimeoutSeconds)
                 .seed(stableSeed(taskId, seed))
                 .enablePromptCache(true)
                 .structuredSchema(com.alibaba.fastjson2.JSON.parseObject(
@@ -2929,9 +3063,9 @@ public class SarReviewService {
                 verdicts.put(Objects.toString(row.get("finding_id"),
                         Objects.toString(row.get("check_code"), "")), verdict);
             } finally {
-                // 复核阶段也给增量进度（93→99），否则会一直停在 93% 直到全部复核完。
+                // 复核阶段也给增量进度（98→99），避免直到全部复核完都没有反馈。
                 int n = done.incrementAndGet();
-                int progress = 93 + (int) Math.round((double) n / total * 6);
+                int progress = 98 + (int) Math.round((double) n / total);
                 try {
                     webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
                             "两阶段复核：" + n + "/" + total, progress);
