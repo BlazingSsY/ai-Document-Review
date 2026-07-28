@@ -19,6 +19,7 @@ import com.aireview.rule.service.RuleService;
 import com.aireview.rule.repository.RuleCheckMapper;
 import com.aireview.rule.repository.RuleMapper;
 import com.aireview.review.core.ReviewResultSchema;
+import com.aireview.review.core.DocumentRuleReviewSupport;
 import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.document.ChapterReferenceResolver;
 import com.aireview.document.ChunkUtils;
@@ -806,35 +807,70 @@ public class ReviewService {
                 if (r != null) chunkResults.add(r);
             }
 
-            // 5.5 Document-level pass (only if there are document_specific rules to apply)
+            // 5.5 文档级规则：完整目录 + 关键词候选原文，按规则预算分批执行。
+            // 与逐章规则不同，文档级规则即使目标章节缺失、模型漏项或调用失败，也必须
+            // 为每条规则保留一条 check_results。缺失模型结果统一补为 Review，不伪造 Pass/Fail。
             List<RuleDispatcher.PreparedRule> docRules = RuleDispatcher.documentLevelRules(preparedRules);
             if (!docRules.isEmpty()) {
+                List<RuleParser.RuleEntry> allDocEntries = buildDocumentRuleEntries(docRules);
+                List<List<RuleParser.RuleEntry>> docBatches = partitionDocumentRuleEntries(allDocEntries);
+                DocumentRuleReviewSupport.EvidenceBundle evidence =
+                        DocumentRuleReviewSupport.buildEvidence(rawChapters, docRules,
+                                DocumentRuleReviewSupport.DEFAULT_MAX_EVIDENCE_CHARS);
                 webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                        "正在进行文档级综合审查 (" + docRules.size() + " 条)...", 92);
-                String docSystemPrompt = buildPromptForRules(docRules);
-                String docUserContent = buildDocumentLevelInput(chapters, chunkResults);
-                try {
-                    AiCallOptions docOptions = buildConvergenceOptions(modelConfig,
-                            stableSeed(taskId, /*chunkIdx*/ -1, /*sampleIdx*/ 0));
-                    String docResponse = callWithRetry(modelConfig, docSystemPrompt, docUserContent, docOptions);
-                    Map<String, Object> docParsed = tryParseAiJson(docResponse);
-                    if (docParsed == null) {
-                        docParsed = buildFallbackResult("全文综合审查", docResponse);
+                        "正在进行文档级综合审查（" + docRules.size() + " 条，"
+                                + docBatches.size() + " 批）...", 92);
+
+                for (int batchIdx = 0; batchIdx < docBatches.size(); batchIdx++) {
+                    List<RuleParser.RuleEntry> batch = docBatches.get(batchIdx);
+                    String docSystemPrompt = RuleParser.buildStructuredSystemPrompt(batch);
+                    String fallbackReason = null;
+                    Map<String, Object> docParsed = null;
+                    String errorMessage = null;
+                    try {
+                        int minChecks = RuleParser.expectedCheckCount(batch);
+                        AiCallOptions docOptions = buildConvergenceOptions(modelConfig,
+                                stableSeed(taskId, /*chunkIdx*/ -1, batchIdx), minChecks);
+                        String docResponse = callWithRetry(modelConfig, docSystemPrompt,
+                                evidence.content(), docOptions);
+                        docParsed = tryParseAiJson(docResponse);
+                        if (docParsed == null) {
+                            fallbackReason = "文档级审查模型响应无法解析，系统已保留该规则并转为待复核。";
+                        }
+                    } catch (Exception docEx) {
+                        errorMessage = docEx.getMessage();
+                        fallbackReason = "文档级审查调用失败（" + errorMessage
+                                + "），系统已保留该规则并转为待复核。";
+                        log.warn("Document-level review batch {}/{} failed: {}",
+                                batchIdx + 1, docBatches.size(), errorMessage);
                     }
-                    Map<String, Object> docChunk = new HashMap<>();
+
+                    docParsed = DocumentRuleReviewSupport.ensureRuleCoverage(
+                            docParsed, batch, "全文综合审查", fallbackReason);
+                    if (Objects.toString(docParsed.get("summary"), "").isBlank()) {
+                        docParsed.put("summary", fallbackReason == null
+                                ? "文档级规则审查完成。"
+                                : "文档级规则审查降级完成，缺失结果已转为待复核。");
+                    }
+
+                    Map<String, Object> docChunk = new LinkedHashMap<>();
                     docChunk.put("chunk", chunkResults.size() + 1);
-                    docChunk.put("chapterTitle", "全文综合审查（文档级规则）");
-                    docChunk.put("totalChunks", chunks.size() + 1);
-                    docChunk.put("estimatedTokens", ChunkUtils.estimateTokens(docUserContent));
-                    docChunk.put("appliedRules", docRules.stream()
-                            .map(r -> r.getRule().getRuleName()).toList());
+                    docChunk.put("chapterTitle", docBatches.size() == 1
+                            ? "全文综合审查（文档级规则）"
+                            : "全文综合审查（文档级规则 " + (batchIdx + 1) + "/" + docBatches.size() + "）");
+                    docChunk.put("totalChunks", chunks.size() + docBatches.size());
+                    docChunk.put("estimatedTokens", ChunkUtils.estimateTokens(evidence.content()));
+                    docChunk.put("appliedRules", batch.stream().map(e -> e.name).toList());
+                    docChunk.put("sourceRefs", buildDocumentRuleSourceRefs(evidence, rawChapters));
+                    docChunk.put("reviewProfile", "document_rules");
+                    if (errorMessage != null) {
+                        docChunk.put("degraded", true);
+                        docChunk.put("error", errorMessage);
+                    }
                     docChunk.put("result", docParsed);
                     chunkResults.add(docChunk);
-                } catch (Exception docEx) {
-                    log.warn("Document-level review pass failed: {}", docEx.getMessage());
                 }
             }
-
             // 6. Aggregate results
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在汇总审查结果...", 95);
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
@@ -845,7 +881,7 @@ public class ReviewService {
             aggregatedResult.put("samplingStrategy", "single");
             aggregatedResult.put("modelName", modelConfig.getModelName());
             aggregatedResult.put("modelKey", modelConfig.getModelKey());
-            aggregatedResult.put("originalSources", buildOriginalSources(chapters, chunks));
+            aggregatedResult.put("originalSources", buildOriginalSources(rawChapters, chunks));
             aggregatedResult.put("sourceTextMode", "structured_json_markdown_review_html_display");
 
             // 6.5 Persist the aggregated AI result to ./output/审查结果_<file>_<model>_<ts>.json
@@ -1057,19 +1093,65 @@ public class ReviewService {
         return s.replaceAll("[\\\\/:*?\"<>|\\s]+", "_").trim();
     }
 
+    /** Convert every document-level rule without token trimming; batching happens afterwards. */
+    private List<RuleParser.RuleEntry> buildDocumentRuleEntries(
+            List<RuleDispatcher.PreparedRule> documentRules) {
+        List<RuleParser.RuleEntry> entries = new ArrayList<>();
+        int autoSeq = 1;
+        for (RuleDispatcher.PreparedRule pr : documentRules) {
+            String code = pr.getMetadata() != null ? pr.getMetadata().getRuleCode() : null;
+            if (code == null || code.isBlank()) {
+                code = "R-DOC-AUTO-" + String.format("%03d", autoSeq++);
+            }
+            entries.add(new RuleParser.RuleEntry(
+                    code,
+                    pr.getRule().getRuleName(),
+                    pr.getBody(),
+                    toCheckEntries(code, pr.getChecks())));
+        }
+        entries.sort(Comparator.comparing(e -> e.code));
+        return entries;
+    }
+
     /**
-     * 构造单切片系统提示词。流程：
-     * <ol>
-     *   <li>把分发器命中的规则转成 {@link RuleParser.RuleEntry}；缺 rule_code 的自动生成 R-AUTO-NNN，
-     *       保证模型可以稳定引用。</li>
-     *   <li>估算 prompt 长度，若超过 {@link #RULE_BUDGET_TOKENS} 则按"全局规则优先 + rule_code 升序"
-     *       截断，防止超长 prompt 让模型把后段规则当作背景噪声。</li>
-     *   <li>调用 {@link RuleParser#buildStructuredSystemPrompt}，按四段式结构（ROLE / Schema /
-     *       Few-shot / 规则清单）生成最终 system prompt。</li>
-     * </ol>
+     * Split document rules by prompt budget instead of dropping the tail. A single oversized
+     * rule still gets its own batch, preserving the contract that every enabled rule is run.
      */
-    private String buildPromptForRules(List<RuleDispatcher.PreparedRule> rulesForChunk) {
-        return RuleParser.buildStructuredSystemPrompt(buildRuleEntriesForChunk(rulesForChunk));
+    private List<List<RuleParser.RuleEntry>> partitionDocumentRuleEntries(
+            List<RuleParser.RuleEntry> entries) {
+        List<List<RuleParser.RuleEntry>> batches = new ArrayList<>();
+        List<RuleParser.RuleEntry> current = new ArrayList<>();
+        int used = 0;
+        for (RuleParser.RuleEntry entry : entries) {
+            int cost = estimateEntryTokens(entry);
+            if (!current.isEmpty() && used + cost > RULE_BUDGET_TOKENS) {
+                batches.add(List.copyOf(current));
+                current.clear();
+                used = 0;
+            }
+            current.add(entry);
+            used += cost;
+        }
+        if (!current.isEmpty()) batches.add(List.copyOf(current));
+        return batches;
+    }
+
+    private List<Map<String, Object>> buildDocumentRuleSourceRefs(
+            DocumentRuleReviewSupport.EvidenceBundle evidence,
+            List<WordParser.Chapter> rawChapters) {
+        List<Map<String, Object>> refs = new ArrayList<>();
+        if (evidence == null || rawChapters == null) return refs;
+        for (Integer idx : evidence.chapterIndexes()) {
+            if (idx == null || idx < 0 || idx >= rawChapters.size()) continue;
+            WordParser.Chapter chapter = rawChapters.get(idx);
+            Map<String, Object> ref = new LinkedHashMap<>();
+            ref.put("sourceId", chapter.getId());
+            ref.put("title", chapter.getTitle());
+            ref.put("sectionPath", chapter.getTitle());
+            ref.put("reason", "document_rule_evidence");
+            refs.add(ref);
+        }
+        return refs;
     }
 
     /**
@@ -1343,44 +1425,11 @@ public class ReviewService {
     }
 
     /**
-     * Compose the user message for the document-level review pass: chapter outline plus
-     * each per-chunk summary already returned by the model.
-     */
-    private String buildDocumentLevelInput(List<WordParser.Chapter> chapters,
-                                           List<Map<String, Object>> chunkResults) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("【文档章节目录】\n");
-        for (int i = 0; i < chapters.size(); i++) {
-            WordParser.Chapter ch = chapters.get(i);
-            String title = ch.getTitle() == null || ch.getTitle().isBlank()
-                    ? "(前言/无标题)" : ch.getTitle();
-            sb.append(i + 1).append(". ").append(title).append("\n");
-        }
-        sb.append("\n【各章节审查摘要】\n");
-        for (Map<String, Object> chunk : chunkResults) {
-            String title = String.valueOf(chunk.getOrDefault("chapterTitle", ""));
-            sb.append("- ").append(title).append("：");
-            Object result = chunk.get("result");
-            if (result instanceof Map<?, ?> resMap) {
-                Object summary = resMap.get("summary");
-                sb.append(summary == null ? "(无摘要)" : summary.toString());
-                Object issues = resMap.get("issues");
-                if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
-                    sb.append(" / 已发现问题 ").append(issueList.size()).append(" 条");
-                }
-            }
-            sb.append("\n");
-        }
-        sb.append("\n请基于全文目录与各章节摘要，按文档级规则给出综合判定。");
-        return sb.toString();
-    }
-
-    /**
      * 单个切片的完整审查流程：组装系统提示词、附加跨章节引用上下文、调用 AI、解析响应。
      *
      * <p>本方法被并行调度执行，必须线程安全：
      * <ul>
-     *   <li>{@link #buildPromptForRules}、{@link ChapterReferenceResolver} 都是纯函数；</li>
+     *   <li>{@link RuleParser#buildStructuredSystemPrompt}、{@link ChapterReferenceResolver} 都是纯函数；</li>
      *   <li>{@link AiModelService#callAiModel} 使用同一个 {@link java.net.http.HttpClient}
      *       —— JDK HttpClient 文档明确说明线程安全；</li>
      *   <li>{@link #tryParseAiJson} 使用 {@code ObjectMapper}，后者文档说明 read 操作是线程安全的；</li>
@@ -2638,7 +2687,7 @@ public class ReviewService {
                     ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
                     : rawChapters;
             return buildOriginalSources(
-                    chapters,
+                    rawChapters,
                     ChunkUtils.chunkByChapters(chapters, maxChunkTokens));
         } catch (Exception e) {
             log.warn("Failed to build original source view for task {}: {}", task.getId(), e.getMessage());

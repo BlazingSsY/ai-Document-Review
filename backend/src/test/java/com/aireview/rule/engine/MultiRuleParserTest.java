@@ -60,4 +60,23 @@ class MultiRuleParserTest {
         assertThat(rules.get(0).getMetadata().getKeywords()).contains("磁效应试验", "DO160G-15", "QTP");
         assertThat(rules.get(1).getMetadata().getRuleCode()).isEqualTo("15-02-device_identification_eut");
     }
+
+    @Test
+    void parsesLatestGeneralFocusRulesAsTenDocumentRules() throws Exception {
+        java.nio.file.Path ruleFile = java.nio.file.Path.of("..", "prompts", "通用关注要素.md");
+        if (!java.nio.file.Files.exists(ruleFile)) {
+            ruleFile = java.nio.file.Path.of("prompts", "通用关注要素.md");
+        }
+        String content = java.nio.file.Files.readString(ruleFile, java.nio.charset.StandardCharsets.UTF_8);
+
+        List<MultiRuleParser.ParsedRule> rules = MultiRuleParser.parse(
+                "通用关注要素.md", "md", content);
+
+        assertThat(rules).hasSize(10);
+        assertThat(rules).allSatisfy(rule -> {
+            assertThat(rule.getMetadata().getRuleType())
+                    .isEqualTo(RuleMetadata.TYPE_DOCUMENT_SPECIFIC);
+            assertThat(rule.getMetadata().getRuleCode()).startsWith("G-");
+        });
+    }
 }

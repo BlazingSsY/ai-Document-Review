@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  *   - section_specific rules → applied only when the chunk's title or body matches
  *     one of the rule's target_sections (standard chapter numbers) or keywords;
  *   - document_specific rules → bundled into a final "全文汇总" pseudo-chunk after
- *     per-chapter review, so they can reason over chapter summaries together.
+ *     per-chapter review, using the complete outline plus selected original evidence.
  *
  * Rules without metadata are treated as global so existing rule libraries keep working
  * unchanged.

@@ -51,7 +51,8 @@ public class ChunkUtils {
      * Find the index of the first "real" chapter — the first heading whose title starts
      * with a chapter number ("1", "1.1", "一、", "第1章"...) followed by a non-numeric
      * chapter name. Everything before this point is treated as front matter (大标题、
-     * 签署页、目录、图表清单 etc.) and skipped before AI review.
+     * 签署页、目录、图表清单 etc.) and skipped from per-chapter AI review. The caller may
+     * still retain these regions as evidence for document-level rules.
      *
      * <p>Returns 0 if no numbered chapter is found, so behaviour is unchanged for
      * documents whose first content is already a real chapter.
