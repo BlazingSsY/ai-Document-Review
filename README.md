@@ -11,11 +11,13 @@
 ## 功能概览
 
 - **双管线文档审查**：CHUNK 全文逐章 / SAR 结构化精准，前端 Tab 切换；上传 Word 文档（.doc/.docx）自动审查并生成报告
-- **规则库管理**：上传 Markdown 或 JSON 格式规则文件，按规则库分类管理（CHUNK / SAR 各一套）；CHUNK 侧 Markdown 支持按 `##` 规则块拆分，多条规则可来自同一文件；SAR 侧支持 Excel 检查单导入（`/sar/rules/import-checklist`）拆解为原子检查项
+- **规则库管理**：上传 Markdown 或 JSON 格式规则文件，按规则库分类管理（CHUNK / SAR 各一套）；CHUNK 侧 Markdown 支持按 `##` 规则块拆分，多条规则可来自同一文件；SAR 侧支持 Excel 检查单导入（`POST /api/v1/sar/rules/import-checklist`）拆解为原子检查项
+- **规则文件夹**：规则库内可创建二级文件夹，按规则类型（通用/专项）分类管理；支持整个文件夹启用/停用
 - **规则上传增量合并**：重复上传规则文件时，系统按同一规则库/文件夹内的规则编号优先、规则名称兜底自动覆盖已有规则；文件中新增加的规则直接追加到库中
 - **规则元信息维护**：规则名称、编号、类型、适用章节、关键词、描述可在 UI 编辑；仅编辑元信息不会刷新规则排序时间，保存后列表位置保持不变
 - **审查场景配置**：将多个规则库组合为审查场景，针对不同业务场景灵活配置
 - **检查项判定矩阵**：以上传规则/原子检查项为单位输出三级判定（Pass / Fail / Review）+ 证据 + 缺失项 + 建议；CHUNK 会强制每条上传业务规则至少返回一条判定并写入规则快照，内置 `R-Q` 文字质量/图表编号检查仅在 Fail/Review 时显示，支持人工确认/改判与审计日志
+- **人工复核**：支持对系统判定进行人工确认、改判或驳回，记录完整审计日志（操作人、时间、前后值）；复核结果实时同步到导出文件
 - **全文术语一致性**：CHUNK 每个切片会筛选专业术语并生成 `术语表_*.json`，再基于术语表追加一次全文术语一致性审查，为后续维护标准术语库预留数据
 - **多模型支持**：按用途区分 chat / embedding / reranker 模型，接入 OpenAI、Anthropic、Moonshot、百度、阿里、讯飞等主流 AI 厂商，支持自定义厂商
 - **实时进度追踪**：WebSocket 实时推送审查进度、日志与结果
@@ -287,14 +289,19 @@ SAR 管线由 `SarReviewService` 实现，复用 pgvector / embedding / rerank �
 | 模块 | 路径 | 说明 |
 |------|------|------|
 | 认证（共享） | /api/v1/auth/** | 注册、登录、刷新 Token（无需认证） |
-| CHUNK 审查 | /api/v1/reviews/** | 提交 `/execute`、任务 CRUD/取消/重审/导出、复核 `check-decisions`、审计、统计 |
-| CHUNK 场景/规则/规则库 | /api/v1/scenarios·rules·rule-libraries/** | 增删改查、规则上传自动增量合并；`/rules/upload-conflicts` 保留兼容 |
-| SAR 审查 | /api/v1/sar/reviews/** | 与 CHUNK 审查同构（结构化精准管线） |
-| SAR 场景/规则/规则库 | /api/v1/sar/scenarios·rules·rule-libraries/** | SAR 侧；规则上传自动增量合并，Excel 检查单导入 `/sar/rules/import-checklist`；`/sar/rules/upload-conflicts` 保留兼容 |
-| 跨管线 | /api/v1/reviews/all·stats/all·by-id/{taskId}·by-id/{taskId}/sources | 合并列表/统计（?mode=ALL\|CHUNK\|SAR）、管线未知时按 CHUNK → SAR 查详情与原文 |
-| 模型（共享） | /api/v1/models/** | 配置管理、连接测试、`/enabled?modelType=` 按类型查启用 |
-| 用户管理（共享） | /api/v1/admin/users/** | 用户管理（主管权限，库分配带 ?mode=CHUNK\|SAR） |
-| 个人（共享） | /api/v1/user/** | 个人信息、改密 |
+| CHUNK 审查 | /api/v1/review/** | 提交 `/submit`、详情 `/{id}` 和 `/{id}/light`、源文件 `/{id}/sources`、列表查询 `/tasks`、取消 `/{id}/cancel`、重审失败切片 `/{id}/retry-failed`、人工复核 `/{id}/manual-decision`、审计日志 `/{id}/audit-logs`、导出 `/export/{id}/excel` `/export/{id}/report` `/export/{id}/audit` |
+| CHUNK 场景 | /api/v1/scenarios/** | 场景 CRUD |
+| CHUNK 规则 | /api/v1/rules/** | 规则上传 `/upload`、冲突检查 `/check-conflicts`、规则 CRUD、元数据编辑 `/{id}/metadata`、内容编辑 `/{id}/content` |
+| CHUNK 规则库 | /api/v1/rule-libraries/** | 规则库 CRUD、文件夹管理 `/{libraryId}/folders/**` |
+| SAR 审查 | /api/v1/sar-review/** | 与 CHUNK 审查同构（结构化精准管线，端点对应） |
+| SAR 场景 | /api/v1/sar/scenarios/** | SAR 场景 CRUD |
+| SAR 规则 | /api/v1/sar/rules/** | SAR 规则管理，Excel 检查单导入 `/import-checklist` |
+| SAR 规则库 | /api/v1/sar/rule-libraries/** | SAR 规则库 CRUD、文件夹管理 |
+| 跨管线 | /api/v1/unified-review/** | 合并任务列表 `/tasks`（?mode=ALL\|CHUNK\|SAR）、合并统计 `/stats`、按ID查询 `/tasks/{id}` |
+| 模型（共享） | /api/v1/models/** | 模型 CRUD、连接测试 `/test-connection`、思考模式建议 `/suggest-thinking-mode`、启用列表 `/enabled?modelType=`、启停 `/{id}/toggle` |
+| 用户管理（共享） | /api/v1/users/** | 用户 CRUD、规则库分配 `/assign-libraries`（带 ?mode=CHUNK\|SAR）、已分配库查询 `/assigned-libraries` |
+| 个人（共享） | /api/v1/user/** | 个人信息 `/profile`、改密 `/change-password` |
+| 仪表盘（共享） | /api/v1/admin/dashboard | 系统统计（仅主管/管理员） |
 | 健康检查 | /api/health | 容器健康检查 |
 
 规则上传接口现在采用增量 upsert：先解析上传文件中的每一条规则，再在同一规则库/文件夹内按 `rule_code` 匹配已有规则，匹配不到时按规则名称兜底；命中则覆盖该规则的正文、元数据和原子检查项，未命中则新增。`replaceExisting` 参数和 `/upload-conflicts` 查询接口保留兼容，但前端默认不再弹同文件冲突确认，也不会按 `source_file` 整批删除旧规则。
@@ -343,6 +350,27 @@ docker compose up -d --build    # 重新构建
 | review.prompts.path | ./prompts/prompts/prompts.json | v2 提示词迁移源文件 |
 | async.core-pool-size / max-pool-size / queue-capacity | 4 / 8 / 100 | 任务级异步线程池（`reviewTaskExecutor`） |
 
+### 线程池架构（三级隔离避免死锁）
+
+系统使用三个独立线程池，避免任务间相互阻塞：
+
+1. **reviewTaskExecutor**（任务级）
+   - 配置：核心 4，最大 8，队列 100
+   - 用途：@Async 任务启动（一个审查任务 = 一个 async 方法调用）
+   - 配置项：`async.core-pool-size`, `async.max-pool-size`, `async.queue-capacity`
+
+2. **chunkReviewExecutor**（切片级）
+   - 配置：核心 20，最大 50，队列 100
+   - 用途：CHUNK 管线单章节并行审查
+   - 并发控制：由 `review.parallel.chunk-concurrency=6` 控制单任务内的章节并发度
+
+3. **sarCheckExecutor**（检查项级）
+   - 配置：核心 30，最大 60，队列 100
+   - 用途：SAR 管线检查项并行评估
+   - 并发控制：由 `review.sar.check-concurrency=4` 控制单任务内的并发度
+
+**设计原则**：任务级、切片级、检查项级三层隔离，避免大任务占满线程池导致小任务饿死。
+
 > **收敛常量**（不开放配置，写死在 `ReviewService` 顶部）：`temperature=0`、`top_p=1`、`max_tokens=8192`、规则段 token 预算 `RULE_BUDGET_TOKENS=6000`。每章节单次调用（不再双采样）。这些值是"跨模型可对比"的契约本身，调动一次会让历史 `ai_result` 与新结果失去可比性，因此不放配置文件。
 
 ### 审查结果字段说明（CHUNK 管线 `review_tasks.ai_result`）
@@ -388,3 +416,188 @@ CHUNK 规则调度要点：
 | `fingerprint` | `sha1(归一化location + "|" + rule_code)`，跨切片去重的主键 |
 | `confidence` | `single`（单章节单次调用的默认值）；跨章节重复命中同一 fingerprint 时在 `aggregateResults` 中升为 `high` |
 | `occurrences` | 跨切片去重后的命中次数 |
+
+## 前端架构
+
+### 目录结构
+
+```
+frontend/
+├── src/
+│   ├── app/                      # 应用入口和路由配置
+│   │   └── App.tsx               # 路由定义（双管线路由）
+│   ├── features/                 # 业务功能模块（按域组织）
+│   │   ├── auth/                 # 认证模块
+│   │   │   ├── api/              # 认证API
+│   │   │   ├── pages/            # LoginPage
+│   │   │   ├── store/            # authStore (Zustand)
+│   │   │   └── dto/              # 请求/响应类型
+│   │   ├── dashboard/            # 工作台
+│   │   │   ├── api/              # 统计API
+│   │   │   └── pages/            # DashboardPage, DataBoardPage
+│   │   ├── review/               # 审查模块
+│   │   │   ├── api/              # reviews.ts, sarReviews.ts, pipelineApi.ts
+│   │   │   ├── pages/            # ReviewWorkspacePage
+│   │   │   ├── workspace/        # useReviewWorkspace Hook, components, helpers
+│   │   │   ├── components/       # FileUploader
+│   │   │   └── store/            # logStore (WebSocket日志)
+│   │   ├── rules/                # 规则管理
+│   │   │   ├── api/              # rules.ts, sarRules.ts
+│   │   │   ├── pages/            # RuleListPage (三级视图)
+│   │   │   └── components/       # RuleUploader
+│   │   ├── scenarios/            # 场景管理
+│   │   │   ├── api/              # scenarios.ts, sarScenarios.ts
+│   │   │   └── pages/            # ScenarioListPage
+│   │   ├── modelConfig/          # 模型配置
+│   │   │   ├── api/              # models.ts
+│   │   │   └── pages/            # ModelConfigPage
+│   │   └── users/                # 用户管理
+│   │       ├── api/              # users.ts
+│   │       └── pages/            # UserManagementPage, ProfilePage
+│   ├── shared/                   # 共享模块
+│   │   ├── api/                  # request.ts (Axios封装+拦截器)
+│   │   ├── components/           # AppLayout, ProtectedRoute
+│   │   ├── utils/                # constants.ts, websocket.ts
+│   │   └── styles/               # 全局样式
+│   ├── main.tsx                  # Vite入口
+│   └── vite-env.d.ts
+```
+
+### 技术特性
+
+- **虚拟滚动**：审查工作区使用 react-virtuoso 优化长列表性能（千级检查项流畅滚动）
+- **状态管理**：Zustand 轻量级状态管理（authStore 认证状态、logStore WebSocket日志）
+- **实时通信**：WebSocket 订阅任务进度和日志，跨页面持久化到 logStore
+- **双管线架构**：通过路由（/chunk/* 和 /sar/*）和 reviewMode prop 区分管线
+- **管线派发层**：pipelineApi.ts 统一派发逻辑，避免组件中散落 if-else
+- **Token刷新**：全局单例 Promise 避免并发 401 时重复刷新
+- **懒加载**：详情页 light 模式 + 按需加载源文件，大任务秒开
+- **子路径部署**：支持挂载到子路径（如 /office-app/），通过 Vite BASE_URL 自动处理
+
+## 性能优化
+
+### 后端优化
+
+- **问题数缓存**：`review_tasks.problem_count` 字段缓存问题总数，工作台列表查询无需反序列化大型 `ai_result` JSON
+- **懒加载**：详情页提供 light 模式（`GET /tasks/{id}/light`），不含源文件；源文件按需加载（`GET /tasks/{id}/sources`）
+- **三级线程池**：任务/切片/检查项三级隔离避免死锁，大任务不阻塞小任务
+- **批量向量化**：SAR 管线嵌入批大小 24 条/批，减少网络往返
+- **HNSW 索引**：pgvector 使用 HNSW 索引加速向量检索（ef_search=100）
+- **单次调用**：CHUNK 每章节单次调用（避免旧版双采样+批处理的 429 限流风暴）
+- **失败隔离**：单章节失败只标记 retryable，不放大重试，可在 UI 单独补审
+
+### 前端优化
+
+- **虚拟滚动**：审查工作区检查项列表使用 Virtuoso 虚拟滚动，千级列表流畅交互
+- **WebSocket 缓存**：进度数据内存缓存（ConcurrentHashMap），页面刷新后立即恢复
+- **Token 刷新优化**：全局单例 Promise 防止并发 401 时重复刷新（N 个请求共享一个刷新）
+- **懒加载原文**：结构化原文按需加载，避免初次加载过大
+- **动态列宽**：表格列宽响应式适配（ResizeObserver）
+
+## 开发指南
+
+### 新增审查管线
+
+如需添加新的审查管线（如 XYZ 管线）：
+
+1. **数据库**：在 `schema.sql` 中创建 `xyz_*` 表（参考 `sar_*` 表结构）
+2. **后端 Entity**：创建 `XyzReviewTask`、`XyzRule` 等实体类
+3. **后端 Service**：实现 `XyzReviewService`（核心审查逻辑）
+4. **后端 Controller**：创建 `XyzReviewController`（API 端点：`/api/v1/xyz-review/**`）
+5. **前端 API**：创建 `xyzReviews.ts` 和 `xyzRules.ts`
+6. **前端路由**：在 `App.tsx` 中添加 `/xyz/scenarios` 和 `/xyz/rules` 路由
+7. **前端 UI**：在 `AppLayout` 中添加侧边栏入口
+8. **统一接口**：在 `UnifiedReviewController` 和 `pipelineApi.ts` 中添加 XYZ 模式支持
+
+### 新增规则类型
+
+如需添加新的规则类型：
+
+1. 在 `RuleMetadata` 中添加新的 `rule_type` 枚举值
+2. 在 `RuleDispatcher.dispatchForChunk()` 中实现调度逻辑
+3. 更新 `ReviewResultSchema` 中的规则清单构建逻辑
+4. 前端 `RuleListPage` 中添加类型选项
+
+### 新增 AI 模型厂商
+
+如需接入新的 AI 厂商：
+
+1. 在 `AiModelConfig` 的 `provider` 字段添加新值
+2. 在 `EndpointResolver` 中实现端点解析逻辑（如需特殊处理）
+3. 在 `AiModelService` 中添加厂商特定逻辑（如需）
+4. 前端 `ModelConfigPage` 的供应商下拉中添加选项
+
+### 规则编写规范
+
+**Markdown 多规则模板**（推荐）：
+
+```markdown
+## 1. 霉菌试验-设备名称与件号
+
+- 规则编号：13-02-deviceIdentification
+- 规则类型：section_specific
+- 检查项：设备名称、件号
+- 关键词：霉菌
+
+### 审查内容
+
+霉菌试验章节：核查"设备名称与件号"是否满足检查单确认目标。
+
+### 审查步骤
+
+1. 核查供应商件号必填合规性
+2. ...
+```
+
+**Rule JSON**（用于原子检查项）：
+
+```json
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "rule_code": "DO160G-5-QTP",
+      "name": "DO160G 第5章 QTP评估检查",
+      "rule_type": "section_specific",
+      "applies_to": {
+        "sections": ["5"],
+        "keywords": ["QTP", "DO160G"]
+      },
+      "checks": [
+        {
+          "check_code": "DO160G-5-QTP-001",
+          "check_type": "presence",
+          "question": "是否满足检查项要求？",
+          "pass_criteria": "QTP中应提供能够证明该检查项满足要求的明确内容。",
+          "category": "标准符合性",
+          "evidence_required": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+### 常见问题排查
+
+**问题：审查任务一直 PROCESSING**
+- 检查 WebSocket 连接是否正常（浏览器控制台）
+- 检查后端日志是否有异常堆栈
+- 检查线程池是否耗尽（`review.parallel.chunk-concurrency` 是否过大）
+
+**问题：模型调用频繁 429**
+- 降低 `review.parallel.chunk-concurrency`（CHUNK）或 `review.sar.check-concurrency`（SAR）
+- 检查模型配额是否充足
+- 确认 `review.retry.max-attempts` 和重试间隔配置
+
+**问题：前端 401 循环**
+- 检查 refresh token 是否过期（超过 7 天未活跃）
+- 检查 localStorage 中的 token 和 refreshToken
+- 清除浏览器缓存并重新登录
+
+**问题：规则未生效**
+- 检查规则的 `is_valid` 字段是否为 true
+- 检查规则所在文件夹是否启用（`rule_folders.enabled`）
+- 检查场景是否关联了该规则库（`scenario_library_mapping`）
+- CHUNK：检查规则 `rule_type` 和 `sections`/`keywords` 是否匹配章节标题
+
