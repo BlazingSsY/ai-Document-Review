@@ -51,5 +51,3 @@ docker/volumes
 /output/
 
 # 测试用 Office 文档（若规则仅保留 md/json，可忽略 docx/xlsx）
-*.docx
-*.xlsx
