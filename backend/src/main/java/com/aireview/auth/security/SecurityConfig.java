@@ -35,6 +35,12 @@ public class SecurityConfig {
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/api/v1/auth/**").permitAll()
                 .requestMatchers("/ws/**").permitAll()
+                // 成员管理与数据看板对单位管理员开放：URL 层只放行到「是不是管理员」，
+                // 「能不能管这个单位/看这个单位」由 MemberService / DashboardStatsService
+                // 按操作者在库里的 unit_id 逐次判定。两条更具体的规则必须排在下面的
+                // /admin/** 之前，否则会被它先匹配掉。
+                .requestMatchers("/api/v1/admin/members/**").hasAnyRole("ADMIN", "SUPERVISOR")
+                .requestMatchers("/api/v1/admin/dashboard/**").hasAnyRole("ADMIN", "SUPERVISOR")
                 .requestMatchers("/api/v1/admin/**").hasRole("SUPERVISOR")
                 .anyRequest().authenticated()
             )

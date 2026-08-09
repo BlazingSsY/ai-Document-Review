@@ -41,17 +41,27 @@ public class AuthService {
         return generateTokens(user);
     }
 
+    /**
+     * 登录。两条路径：
+     * <ul>
+     *   <li>带 unitId → 成员登录，按「单位 + 用户名」定位（用户名仅在单位内唯一）；</li>
+     *   <li>不带 unitId → 存量平台账号，按邮箱定位（admin_root 等不属于任何单位）。</li>
+     * </ul>
+     *
+     * <p>两条路径失败时返回同一句提示：区分「用户不存在」和「密码错误」会把账号是否
+     * 存在泄露给探测者。
+     */
     public Map<String, String> login(LoginRequest request) {
-        User user = userMapper.findByEmail(request.getEmail());
-        if (user == null) {
+        String identifier = request.getEmail() == null ? "" : request.getEmail().trim();
+        User user = request.getUnitId() != null
+                ? userMapper.findByUnitAndUsername(request.getUnitId(), identifier)
+                : userMapper.findByEmail(identifier);
+
+        if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
             throw new IllegalArgumentException("用户名或密码错误");
         }
 
-        if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            throw new IllegalArgumentException("用户名或密码错误");
-        }
-
-        log.info("User logged in: {}", request.getEmail());
+        log.info("User logged in: id={}, unit={}", user.getId(), user.getUnitId());
         return generateTokens(user);
     }
 
@@ -77,9 +87,15 @@ public class AuthService {
 
     private Map<String, String> generateTokens(User user) {
         String role = user.getRole() != null ? user.getRole() : "user";
+        // 导入的成员没有邮箱，token 的 email 声明退而用用户名，保证声明非空。
+        String subject = user.getEmail() != null && !user.getEmail().isBlank()
+                ? user.getEmail() : user.getUsername();
         Map<String, String> tokens = new HashMap<>();
-        tokens.put("accessToken", jwtTokenProvider.generateAccessToken(user.getId(), user.getEmail(), role));
-        tokens.put("refreshToken", jwtTokenProvider.generateRefreshToken(user.getId(), user.getEmail(), role));
+        tokens.put("accessToken", jwtTokenProvider.generateAccessToken(user.getId(), subject, role));
+        tokens.put("refreshToken", jwtTokenProvider.generateRefreshToken(user.getId(), subject, role));
+        // 前端据此在首次登录时强制跳转改密：统一初始密码在改掉之前，任何知道规则的人
+        // 都能登进别人的账号，所以这个标志必须随登录结果一起返回，不能等用户自己去改。
+        tokens.put("mustChangePassword", String.valueOf(Boolean.TRUE.equals(user.getMustChangePassword())));
         return tokens;
     }
 }

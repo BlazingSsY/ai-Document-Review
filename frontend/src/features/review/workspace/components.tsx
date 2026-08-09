@@ -29,6 +29,7 @@ import {
   CloseCircleOutlined,
   DownloadOutlined,
   DownOutlined,
+  EditOutlined,
   FileSearchOutlined,
   FilterOutlined,
   InfoCircleOutlined,
@@ -49,7 +50,9 @@ import {
   confidenceLabel,
   locatorCandidates,
   numericField,
+  recordArray,
   sourceCandidateKey,
+  sourceEditKey,
   sourceReasonLabel,
   textField,
 } from './helpers';
@@ -167,6 +170,257 @@ function StructuredSourceView({
   );
 }
 
+/** One click-to-edit target inside the editable source view. */
+interface EditableTarget {
+  nodeId: string;
+  nodeType: string;
+  originalText: string;
+  cellRow?: number;
+  cellColumn?: number;
+}
+
+function EditableBlock({
+  target,
+  editedText,
+  saving,
+  as: Tag,
+  className,
+  highlighted,
+  onSave,
+}: {
+  target: EditableTarget;
+  editedText: string | undefined;
+  saving: boolean;
+  as: 'p' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'div';
+  className: string;
+  highlighted: boolean;
+  onSave: (target: EditableTarget, nextText: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const current = editedText ?? target.originalText;
+  const isEdited = editedText !== undefined;
+
+  const beginEdit = () => {
+    setDraft(current);
+    setEditing(true);
+  };
+
+  const commit = async () => {
+    if (draft === current) {
+      setEditing(false);
+      return;
+    }
+    const saved = await onSave(target, draft);
+    if (saved) setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="source-node-editor">
+        <Input.TextArea
+          autoFocus
+          autoSize={{ minRows: 2, maxRows: 14 }}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          // Esc aborts, Ctrl/Cmd+Enter commits — the same muscle memory as the
+          // comment boxes elsewhere in the workspace.
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              setEditing(false);
+            }
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+              event.preventDefault();
+              void commit();
+            }
+          }}
+        />
+        <div className="source-node-editor-actions">
+          <Space size={6}>
+            {isEdited && (
+              <Button
+                size="small"
+                danger
+                disabled={saving}
+                onClick={() => { void onSave(target, target.originalText).then(() => setEditing(false)); }}
+              >
+                还原本段
+              </Button>
+            )}
+            <Button size="small" onClick={() => setEditing(false)}>取消</Button>
+            <Button size="small" type="primary" loading={saving} onClick={() => { void commit(); }}>
+              保存
+            </Button>
+          </Space>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Tag
+      className={[
+        className,
+        'source-node-editable',
+        highlighted ? 'source-node-highlight' : '',
+        isEdited ? 'source-node-edited' : '',
+      ].filter(Boolean).join(' ')}
+      role="button"
+      tabIndex={0}
+      title="点击编辑本段原文"
+      onClick={beginEdit}
+      onKeyDown={(event: React.KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          beginEdit();
+        }
+      }}
+    >
+      {current || <span className="source-node-empty">（空段落，点击填写）</span>}
+    </Tag>
+  );
+}
+
+function EditableTableNode({
+  node,
+  editMap,
+  saving,
+  onSave,
+}: {
+  node: Record<string, unknown>;
+  editMap: Map<string, string>;
+  saving: boolean;
+  onSave: (target: EditableTarget, nextText: string) => Promise<boolean>;
+}) {
+  const nodeId = textField(node, ['id']);
+  const table = node.table as Record<string, unknown> | undefined;
+  const rows = recordArray(table?.rows);
+
+  return (
+    <table className="doc-node doc-table source-editable-table">
+      <tbody>
+        {rows.map((row, rowIdx) => (
+          <tr key={numericField(row, ['rowIndex']) ?? rowIdx}>
+            {recordArray(row.cells).map((cell, cellIdx) => {
+              const cellRow = numericField(cell, ['rowIndex']);
+              const cellColumn = numericField(cell, ['columnIndex']);
+              const originalText = String(cell.text ?? '');
+              const key = sourceEditKey(nodeId, cellRow, cellColumn);
+              const editedText = editMap.get(key);
+              const CellTag = cell.header ? 'th' : 'td';
+              const rowSpan = numericField(cell, ['rowSpan']);
+              const colSpan = numericField(cell, ['colSpan']);
+              return (
+                <CellTag
+                  key={`${cellRow}-${cellColumn}-${cellIdx}`}
+                  rowSpan={rowSpan && rowSpan > 1 ? rowSpan : undefined}
+                  colSpan={colSpan && colSpan > 1 ? colSpan : undefined}
+                >
+                  <EditableBlock
+                    as="div"
+                    className="doc-table-cell"
+                    editedText={editedText}
+                    highlighted={false}
+                    onSave={onSave}
+                    saving={saving}
+                    target={{
+                      nodeId,
+                      nodeType: 'table',
+                      originalText,
+                      cellRow: cellRow ?? undefined,
+                      cellColumn: cellColumn ?? undefined,
+                    }}
+                  />
+                </CellTag>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * Edit-mode counterpart of {@link StructuredSourceView}.
+ *
+ * Renders from the structured `nodes` payload rather than the HTML string: the node
+ * list already carries the ids and the 1-based table coordinates the backend writer
+ * expects, so nothing has to be re-derived from markup. Read mode keeps using the HTML
+ * so display fidelity and highlighting behave exactly as before.
+ */
+function EditableSourceView({
+  workspace,
+  nodes,
+}: {
+  workspace: ReviewWorkspaceViewModel;
+  nodes: Array<Record<string, unknown>>;
+}) {
+  const handleSave = async (target: EditableTarget, nextText: string): Promise<boolean> => (
+    workspace.handleSaveSourceEdit({
+      nodeId: target.nodeId,
+      sourceId: workspace.activeSourceId || undefined,
+      nodeType: target.nodeType,
+      originalText: target.originalText,
+      newText: nextText,
+      cellRow: target.cellRow,
+      cellColumn: target.cellColumn,
+    })
+  );
+
+  return (
+    <div className="source-html-view source-editable-view">
+      {nodes.map((node, index) => {
+        const nodeId = textField(node, ['id']);
+        const nodeType = textField(node, ['type']);
+        const originalText = String(node.text ?? '');
+        const highlighted = Boolean(nodeId) && nodeId === workspace.activeStartNodeId;
+
+        if (nodeType === 'table') {
+          return (
+            <EditableTableNode
+              key={nodeId || index}
+              editMap={workspace.sourceEditMap}
+              node={node}
+              onSave={handleSave}
+              saving={workspace.sourceEditSaving}
+            />
+          );
+        }
+
+        // Figures are OLE/image placeholders with no writable text behind them.
+        if (nodeType === 'figure' || node.editable === false) {
+          return (
+            <p key={nodeId || index} className="doc-node doc-figure source-node-readonly">
+              {originalText}
+            </p>
+          );
+        }
+
+        const headingLevel = numericField(node, ['headingLevel']);
+        const isHeading = nodeType === 'heading' || nodeType === 'chapter_title';
+        const tag = isHeading
+          ? (`h${Math.min(6, Math.max(1, headingLevel ?? 1))}` as 'h1')
+          : 'p';
+
+        return (
+          <EditableBlock
+            as={tag}
+            className={isHeading ? 'doc-node doc-heading' : 'doc-node doc-paragraph'}
+            editedText={workspace.sourceEditMap.get(sourceEditKey(nodeId))}
+            highlighted={highlighted}
+            key={nodeId || index}
+            onSave={handleSave}
+            saving={workspace.sourceEditSaving}
+            target={{ nodeId, nodeType, originalText }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 function ReviewPageHeader({
   workspace,
   onOpenRuntime,
@@ -184,14 +438,26 @@ function ReviewPageHeader({
       : workspace.status === 'cancelled'
         ? 'warning'
         : 'processing';
-  const exportLoading = workspace.exporting || workspace.exportingReport || workspace.exportingAudit;
+  const exportLoading = workspace.exporting || workspace.exportingReport
+    || workspace.exportingAudit || workspace.exportingRevised;
   const exportItems: MenuProps['items'] = [
+    {
+      key: 'revised',
+      label: workspace.sourceEditCount > 0
+        ? `修订版文档（已改 ${workspace.sourceEditCount} 处）`
+        : '修订版文档（原文未修改）',
+      // .doc cannot be rewritten without losing its formatting, which defeats the
+      // point of an export that is supposed to match the original file.
+      disabled: !workspace.revisedExportSupported,
+    },
+    { type: 'divider' },
     { key: 'report', label: 'Word 审查报告' },
     { key: 'excel', label: 'Excel 审查意见表' },
     { key: 'audit', label: 'JSON 审计日志' },
   ];
 
   const handleExportMenu: MenuProps['onClick'] = ({ key }) => {
+    if (key === 'revised') void workspace.handleExportRevisedDocument();
     if (key === 'report') void workspace.handleExportReport();
     if (key === 'excel') void workspace.handleExportExcel();
     if (key === 'audit') void workspace.handleExportAudit();
@@ -577,9 +843,13 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
 }
 
 function SourceEvidence({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  const editableNodes = recordArray(workspace.activeSourceNodes);
+
   return (
     <div className="review-source-viewport">
-      {workspace.activeSourceHtml ? (
+      {workspace.sourceEditMode && editableNodes.length > 0 ? (
+        <EditableSourceView workspace={workspace} nodes={editableNodes} />
+      ) : workspace.activeSourceHtml ? (
         <StructuredSourceView
           html={workspace.activeSourceHtml}
           startNodeId={workspace.activeStartNodeId}
@@ -651,10 +921,32 @@ function EvidencePanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
       <div className="review-pane-header evidence-heading source-only-heading">
         <div>
           <h2>原文定位</h2>
-          <span>{workspace.activeSourceTitle || (item ? '完整章节原文' : '选择左侧检查项查看定位原文')}</span>
+          <span>
+            {workspace.sourceEditMode && workspace.activeSourceNodes.length > 0
+              ? '点击任意段落或表格单元格即可修改，保存后可导出修订版文档'
+              : workspace.activeSourceTitle || (item ? '完整章节原文' : '选择左侧检查项查看定位原文')}
+          </span>
         </div>
         {item && (
           <Space className="source-heading-actions" size={5} wrap>
+            {workspace.sourceEditCount > 0 && (
+              <Tag color="gold">已修改 {workspace.sourceEditCount} 处</Tag>
+            )}
+            <Tooltip
+              title={workspace.activeSourceNodes.length === 0
+                ? '当前原文缺少结构化节点，无法编辑'
+                : workspace.sourceEditMode ? '退出编辑，回到高亮定位视图' : '进入编辑，逐段修改原文'}
+            >
+              <Button
+                size="small"
+                type={workspace.sourceEditMode ? 'primary' : 'default'}
+                icon={<EditOutlined />}
+                disabled={workspace.activeSourceNodes.length === 0}
+                onClick={() => workspace.setSourceEditMode(!workspace.sourceEditMode)}
+              >
+                {workspace.sourceEditMode ? '完成编辑' : '编辑原文'}
+              </Button>
+            </Tooltip>
             {workspace.activeSourceChapterLabel && <Tag color="blue">{workspace.activeSourceChapterLabel}</Tag>}
             {workspace.activeSourceReason && <Tag>{sourceReasonLabel(workspace.activeSourceReason)}</Tag>}
             {workspace.sourceCandidates.length > 0 && (

@@ -56,6 +56,7 @@ class DocumentEvidenceLocatorTest {
 
     private static WordParser.DocumentNode node(String id, int index, String section, String text) {
         return new WordParser.DocumentNode(
-                id, "paragraph", index, 0, section, text, text, "<p>" + text + "</p>", null);
+                id, "paragraph", index, 0, section, text, text, "<p>" + text + "</p>", null,
+                index, "");
     }
 }

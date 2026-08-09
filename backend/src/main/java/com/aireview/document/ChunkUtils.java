@@ -129,6 +129,102 @@ public class ChunkUtils {
         return results;
     }
 
+    /** 通用章节段合并切片的标签。 */
+    public static final String GENERAL_SECTION_LABEL = "通用章节（封面/目录及试验项目前各章）";
+
+    /**
+     * 按「通用章节段 + 逐个试验项目章节」切片。
+     *
+     * <p>试验大纲的前半部分（封面、目录、试验目的、范围、引用文件、术语、承试单位、
+     * 人员职责……）是一整块相互关联的通用内容：签署是否齐全、目录与正文是否对得上、
+     * 术语前后是否一致、引用文件是否都在正文出现过——这些都要跨章看才判得准。逐章切开
+     * 送审时，模型每次只看得到其中一章，跨章的问题结构上就发现不了。所以把它们合并成
+     * 一个切片，让通用类审查在同一次调用里完成。
+     *
+     * <p>试验项目章节（温度和高度、振动、霉菌……）则保持一章一片：每章是一个独立的
+     * 试验，规则也是按试验项目组织的，合并只会稀释注意力。
+     *
+     * @param chapters      解析出的全部章节，含封面/目录等前置内容（不要预先裁掉——
+     *                      前置内容正是通用段要审的一部分）
+     * @param maxTokens     单片 token 上限
+     * @param generalEndExclusive 通用段的结束下标（不含）。传 &lt;=0 表示识别不出边界，
+     *                      此时整体回退到 {@link #chunkByChapters} 的逐章行为
+     */
+    public static List<ChunkResult> chunkWithGeneralSection(List<WordParser.Chapter> chapters,
+                                                            int maxTokens,
+                                                            int generalEndExclusive) {
+        if (chapters == null || chapters.isEmpty()) return new ArrayList<>();
+
+        // 识别不出通用段边界时不要勉强合并：宁可退回原有逐章行为，也不能把整份文档
+        // 并成一片送审。此时沿用原先「跳过前置内容」的做法，保持既有表现不变。
+        if (generalEndExclusive <= 0 || generalEndExclusive > chapters.size()) {
+            int firstReal = findFirstRealChapterIndex(chapters);
+            List<WordParser.Chapter> reviewable = firstReal > 0
+                    ? chapters.subList(firstReal, chapters.size())
+                    : chapters;
+            log.info("General-section boundary unavailable ({}), falling back to per-chapter chunking",
+                    generalEndExclusive);
+            return chunkByChapters(reviewable, maxTokens);
+        }
+
+        List<ChunkResult> results = new ArrayList<>();
+
+        // ---- 通用章节段 ----
+        List<WordParser.Chapter> generalChapters = chapters.subList(0, generalEndExclusive);
+        StringBuilder merged = new StringBuilder();
+        List<String> mergedTitles = new ArrayList<>();
+        for (WordParser.Chapter chapter : generalChapters) {
+            String text = chapter.getFullText();
+            if (text == null || text.isBlank()) continue;
+            if (merged.length() > 0) merged.append("\n\n");
+            merged.append(text.trim());
+            String title = chapter.getTitle();
+            if (title != null && !title.isBlank()) mergedTitles.add(title.trim());
+        }
+
+        String generalText = merged.toString().trim();
+        if (!generalText.isBlank()) {
+            int tokens = estimateTokens(generalText);
+            WordParser.Chapter first = generalChapters.isEmpty() ? null : generalChapters.get(0);
+            if (tokens <= maxTokens) {
+                results.add(new ChunkResult(GENERAL_SECTION_LABEL, generalText, tokens,
+                        0, first, true, mergedTitles));
+            } else {
+                // 超限必须拆——否则这次调用会直接超模型上下文。拆出的每一片仍标记为
+                // 通用段并携带同一份标题清单，规则调度因此不受影响，只是模型的可见
+                // 范围被迫变窄。
+                List<String> parts = splitLargeText(generalText, maxTokens);
+                log.warn("General section is ~{} tokens (max {}), split into {} part(s); "
+                                + "cross-chapter checks inside it may weaken",
+                        tokens, maxTokens, parts.size());
+                for (int i = 0; i < parts.size(); i++) {
+                    results.add(new ChunkResult(
+                            GENERAL_SECTION_LABEL + " (" + (i + 1) + "/" + parts.size() + ")",
+                            parts.get(i), estimateTokens(parts.get(i)),
+                            0, first, true, mergedTitles));
+                }
+            }
+        }
+
+        // ---- 其余章节：维持逐章切片 ----
+        List<WordParser.Chapter> rest = chapters.subList(generalEndExclusive, chapters.size());
+        List<ChunkResult> restChunks = chunkByChapters(rest, maxTokens);
+        for (ChunkResult chunk : restChunks) {
+            // chapterIndex 需要平移回全文坐标，否则 originalSources 的章节定位会错位。
+            results.add(new ChunkResult(
+                    chunk.getLabel(), chunk.getContent(), chunk.getEstimatedTokens(),
+                    chunk.getChapterIndex() < 0
+                            ? chunk.getChapterIndex()
+                            : chunk.getChapterIndex() + generalEndExclusive,
+                    chunk.getSourceChapter(), false, List.of()));
+        }
+
+        log.info("General-section chunking: {} chapter(s) → {} chunk(s) "
+                        + "(通用段合并 {} 章，其余逐章 {} 片)",
+                chapters.size(), results.size(), generalChapters.size(), restChunks.size());
+        return results;
+    }
+
     /**
      * Legacy: split plain text into chunks by token count.
      */
@@ -218,6 +314,8 @@ public class ChunkUtils {
         private final int estimatedTokens;
         private final int chapterIndex;
         private final WordParser.Chapter sourceChapter;
+        private final boolean generalSection;
+        private final List<String> mergedTitles;
 
         public ChunkResult(String label, String content, int estimatedTokens) {
             this(label, content, estimatedTokens, -1, null);
@@ -225,11 +323,19 @@ public class ChunkUtils {
 
         public ChunkResult(String label, String content, int estimatedTokens,
                            int chapterIndex, WordParser.Chapter sourceChapter) {
+            this(label, content, estimatedTokens, chapterIndex, sourceChapter, false, List.of());
+        }
+
+        public ChunkResult(String label, String content, int estimatedTokens,
+                           int chapterIndex, WordParser.Chapter sourceChapter,
+                           boolean generalSection, List<String> mergedTitles) {
             this.label = label;
             this.content = content;
             this.estimatedTokens = estimatedTokens;
             this.chapterIndex = chapterIndex;
             this.sourceChapter = sourceChapter;
+            this.generalSection = generalSection;
+            this.mergedTitles = mergedTitles == null ? List.of() : List.copyOf(mergedTitles);
         }
 
         public String getLabel() { return label; }
@@ -237,5 +343,22 @@ public class ChunkUtils {
         public int getEstimatedTokens() { return estimatedTokens; }
         public int getChapterIndex() { return chapterIndex; }
         public WordParser.Chapter getSourceChapter() { return sourceChapter; }
+
+        /** 本片是否属于「通用章节段」（封面/目录 + 试验项目章节之前的通用章节）。 */
+        public boolean isGeneralSection() { return generalSection; }
+
+        /**
+         * 本片合并了哪些章节的标题。逐章切片时为空。
+         *
+         * <p>合并片必须把子章节标题带出来，否则 {@code section_specific} 规则会失效——
+         * 调度器是拿标题去匹配 keywords/sections 的，十几章并成一片后只剩一个合成标题，
+         * 那些针对「引用文件」「相关验证条款」写的专项规则就再也命中不到了。
+         */
+        public List<String> getMergedTitles() { return mergedTitles; }
+
+        /** 供调度器匹配的标题清单：合并片用子章节标题，普通片用自身标签。 */
+        public List<String> titlesForDispatch() {
+            return mergedTitles.isEmpty() ? List.of(label == null ? "" : label) : mergedTitles;
+        }
     }
 }

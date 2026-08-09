@@ -99,6 +99,10 @@ public final class DocumentSourceMapper {
         item.put("sectionPath", node.getSectionPath());
         item.put("text", node.getText());
         item.put("markdown", node.getReviewText());
+        // editable drives the frontend's 原文编辑 affordance: only nodes that resolve
+        // back to a real .docx element can be written into the revised export.
+        item.put("editable", node.getBodyIndex() >= 0
+                && !"figure".equals(node.getType()));
         if (node.getTable() != null) {
             item.put("table", toStructuredTable(node.getTable()));
         }

@@ -15,6 +15,8 @@ import {
   BookOutlined,
   AimOutlined,
   FundOutlined,
+  ExperimentOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import useAuthStore from '../../features/auth/store/authStore';
@@ -92,25 +94,34 @@ function AppLayout() {
   const menuItems: MenuProps['items'] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
     {
-      key: 'chunk-section',
-      icon: <BookOutlined />,
-      label: '全文逐章审查',
+      key: 'exam-outline-section',
+      icon: <ExperimentOutlined />,
+      label: '环境试验大纲审查',
       children: [
-        { key: '/chunk/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
-        { key: '/chunk/rules', icon: <ProfileOutlined />, label: '审查规则' },
-      ],
-    },
-    {
-      key: 'sar-section',
-      icon: <AimOutlined />,
-      label: '结构化审查',
-      children: [
-        { key: '/sar/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
-        { key: '/sar/rules', icon: <ProfileOutlined />, label: '审查规则' },
+        {
+          key: 'chunk-section',
+          icon: <BookOutlined />,
+          label: '全文逐章审查',
+          children: [
+            { key: '/chunk/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
+            { key: '/chunk/rules', icon: <ProfileOutlined />, label: '审查规则' },
+          ],
+        },
+        {
+          key: 'sar-section',
+          icon: <AimOutlined />,
+          label: '结构化审查',
+          children: [
+            { key: '/sar/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
+            { key: '/sar/rules', icon: <ProfileOutlined />, label: '审查规则' },
+          ],
+        },
       ],
     },
     { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
     ...(isManager ? [{ key: '/analytics', icon: <FundOutlined />, label: '数据看板' }] : []),
+    // 成员管理对单位管理员开放（只能管本单位）；用户管理仍是主管专属的平台级账号维护。
+    ...(isManager ? [{ key: '/members', icon: <IdcardOutlined />, label: '成员管理' }] : []),
     ...(isSupervisor ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }] : []),
   ];
 
@@ -130,8 +141,8 @@ function AppLayout() {
     },
   ];
 
-  // The sidebar is two-level (group → leaf). The menu's `selectedKey` must be the
-  // leaf path. We default both pipeline groups open so users always see all four
+  // The sidebar is three-level (业务域 → 管线 → leaf). The menu's `selectedKey` must
+  // be the leaf path. We default every group open so users always see all four
   // entries; they can manually collapse a group if they want.
   const path = location.pathname;
   const selectedKey = path.startsWith('/chunk/scenarios') ? '/chunk/scenarios'
@@ -139,7 +150,7 @@ function AppLayout() {
     : path.startsWith('/sar/scenarios') ? '/sar/scenarios'
     : path.startsWith('/sar/rules') ? '/sar/rules'
     : '/' + path.split('/')[1];
-  const openKeys = ['chunk-section', 'sar-section'];
+  const openKeys = ['exam-outline-section', 'chunk-section', 'sar-section'];
   const roleTag = ROLE_TAG[role] || ROLE_TAG.user;
 
   return (
@@ -182,6 +193,10 @@ function AppLayout() {
           defaultOpenKeys={openKeys}
           items={menuItems}
           onClick={handleMenuClick}
+          // Three nesting levels at the default 24px step would push the leaf items
+          // (审查场景 / 审查规则) past the 200px sider width; 14px keeps the hierarchy
+          // readable without truncating labels.
+          inlineIndent={14}
           style={{ background: 'transparent', borderRight: 'none', marginTop: 8 }}
         />
       </Sider>

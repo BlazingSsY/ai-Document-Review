@@ -465,26 +465,16 @@ public class MultiRuleParser {
         return null;
     }
 
+    /**
+     * 规则类型归一化，直接委托给 {@link RuleMetadata#normalizeRuleTypeValue}。
+     *
+     * <p>这里原本有一份逐条复制的实现，与 RuleMetadata 那份并存。新增 general_chapter
+     * 类型时只更新了 RuleMetadata，这份没跟上，导致「通用章节」被 {@code contains("通用")}
+     * 判成 global、注入到每一个切片——静默且难以察觉。两份同义实现必然会再次走岔，
+     * 所以收敛成一处：两个类同属 {@code com.aireview.rule.engine} 包，可直接调用。
+     */
     private static String normalizeRuleType(String raw) {
-        if (raw == null) return null;
-        String s = raw.trim().toLowerCase(Locale.ROOT);
-        if (s.isEmpty()) return null;
-        if (s.contains("通用") || s.equals("global") || s.equals("general")) {
-            return RuleMetadata.TYPE_GLOBAL;
-        }
-        if (s.contains("专项") || s.contains("section") || s.contains("specific")) {
-            return RuleMetadata.TYPE_SECTION_SPECIFIC;
-        }
-        if (s.contains("文档") || s.equals("document") || s.equals("document_specific")) {
-            return RuleMetadata.TYPE_DOCUMENT_SPECIFIC;
-        }
-        if (s.contains("试验项目") || s.equals("test_item_chapter") || s.equals("test_item") || s.equals("testitem")) {
-            return RuleMetadata.TYPE_TEST_ITEM;
-        }
-        if (s.contains("输出") || s.equals("output")) {
-            return RuleMetadata.TYPE_OUTPUT;
-        }
-        return s;
+        return RuleMetadata.normalizeRuleTypeValue(raw);
     }
 
     private static List<String> parseScopeValue(Object value) {

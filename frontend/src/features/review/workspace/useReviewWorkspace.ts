@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Form, message } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { ReviewMode, ReviewTask } from '../api/reviews';
+import type { ReviewMode, ReviewTask, SourceEditParams } from '../api/reviews';
 import {
   getReviewApi,
   getReviewDetailAnyPipeline,
@@ -10,6 +10,7 @@ import {
 import taskWebSocket, { TaskProgressMessage } from '../../../shared/utils/websocket';
 import useLogStore, { LogEntry } from '../store/logStore';
 import {
+  buildSourceEditMap,
   extractCheckResults,
   extractIssues,
   findIssueChunk,
@@ -42,6 +43,9 @@ export function useReviewWorkspace() {
   const [exporting, setExporting] = useState(false);
   const [exportingAudit, setExportingAudit] = useState(false);
   const [exportingReport, setExportingReport] = useState(false);
+  const [exportingRevised, setExportingRevised] = useState(false);
+  const [sourceEditMode, setSourceEditMode] = useState(false);
+  const [sourceEditSaving, setSourceEditSaving] = useState(false);
   const [manualReviewOpen, setManualReviewOpen] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
   const [manualTarget, setManualTarget] = useState<Record<string, unknown> | null>(null);
@@ -226,6 +230,80 @@ export function useReviewWorkspace() {
     }
   };
 
+  /**
+   * Save one 原文定位 correction.
+   *
+   * The response is a light DTO with originalSources/chunkResults stripped, so we merge
+   * only the refreshed sourceEdits back in — a blind setTask would blank the very panel
+   * the reviewer is editing in.
+   */
+  const handleSaveSourceEdit = async (params: SourceEditParams): Promise<boolean> => {
+    if (!taskId) return false;
+    setSourceEditSaving(true);
+    try {
+      const res = await reviewApi.saveSourceEdit(taskId, params);
+      const edits = (res.data.data?.aiResult?.sourceEdits ?? []) as Array<Record<string, unknown>>;
+      setTask((prev) => (prev?.aiResult
+        ? { ...prev, aiResult: { ...prev.aiResult, sourceEdits: edits } }
+        : prev));
+      return true;
+    } catch {
+      message.error('原文修改保存失败');
+      return false;
+    } finally {
+      setSourceEditSaving(false);
+    }
+  };
+
+  const handleClearSourceEdits = async (): Promise<boolean> => {
+    if (!taskId) return false;
+    setSourceEditSaving(true);
+    try {
+      const res = await reviewApi.clearSourceEdits(taskId);
+      const edits = (res.data.data?.aiResult?.sourceEdits ?? []) as Array<Record<string, unknown>>;
+      setTask((prev) => (prev?.aiResult
+        ? { ...prev, aiResult: { ...prev.aiResult, sourceEdits: edits } }
+        : prev));
+      message.success('已还原全部原文修改');
+      return true;
+    } catch {
+      message.error('还原失败');
+      return false;
+    } finally {
+      setSourceEditSaving(false);
+    }
+  };
+
+  const handleExportRevisedDocument = async () => {
+    if (!taskId) return;
+    setExportingRevised(true);
+    try {
+      const res = await reviewApi.exportRevisedDocument(taskId);
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const base = task?.fileName?.replace(/\.[^/.]+$/, '') || taskId.substring(0, 8);
+      link.download = `${base}_修订版.docx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      message.success('修订版文档已导出');
+    } catch (error) {
+      // The backend answers a rejected export (legacy .doc, missing source file) with a
+      // plain-text reason. responseType:'blob' means it arrives as a Blob, so read it
+      // rather than showing a generic failure the reviewer can't act on.
+      const payload = (error as { response?: { data?: unknown } })?.response?.data;
+      const reason = payload instanceof Blob ? (await payload.text()).trim() : '';
+      message.error(reason || '修订版文档导出失败');
+    } finally {
+      setExportingRevised(false);
+    }
+  };
+
   const openManualReview = (item: Record<string, unknown> | null) => {
     if (!item) return;
     setManualTarget(item);
@@ -375,6 +453,11 @@ export function useReviewWorkspace() {
     : {};
   const chunkResults = (task?.aiResult?.chunkResults || []) as Array<Record<string, unknown>>;
   const originalSources = recordArray(task?.aiResult?.originalSources);
+  const sourceEdits = recordArray(task?.aiResult?.sourceEdits);
+  const sourceEditMap = buildSourceEditMap(sourceEdits);
+  const sourceEditCount = sourceEdits.length;
+  // 只有 .docx 能原位回写；.doc 走 HWPF 无法可靠保存格式，后端会拒绝导出。
+  const revisedExportSupported = /\.docx$/i.test(task?.fileName || '');
   const failedChunks = (task?.aiResult?.failedChunks || []) as Array<Record<string, unknown>>;
   const failedChunkCount = Number(task?.aiResult?.failedChunkCount || failedChunks.length || 0);
   const isProcessing = status === 'processing';
@@ -389,6 +472,8 @@ export function useReviewWorkspace() {
   const activeSourceText = textField(activeSource, ['text', 'content', 'originalText', 'sourceText'])
     || (originalSources.length === 0 ? sourceText(activeChunk) : '');
   const activeSourceHtml = textField(activeSource, ['html', 'contentHtml']);
+  // 结构化节点：编辑态直接按节点渲染，节点自带 id 与表格单元格坐标，无需从 HTML 反推。
+  const activeSourceNodes = recordArray(activeSource?.nodes);
   const activeSourceTitle = textField(activeSource, ['sectionPath', 'chapterTitle', 'title']) || sourceTitle(activeChunk);
   const activeSourceId = textField(activeSource, ['sourceId', 'blockId']);
   const activeSourceChapterLabel = sourceChapterLabel(activeSource);
@@ -412,6 +497,7 @@ export function useReviewWorkspace() {
     activeSourceHtml,
     activeSourceId,
     activeSourceLength,
+    activeSourceNodes,
     activeSourceReason,
     activeSourceSafeIndex,
     activeSourceScore,
@@ -427,16 +513,20 @@ export function useReviewWorkspace() {
     exporting,
     exportingAudit,
     exportingReport,
+    exportingRevised,
     failedChunkCount,
     failedChunks,
     goDashboard,
+    handleClearSourceEdits,
     handleExportAudit,
     handleExportExcel,
     handleExportReport,
+    handleExportRevisedDocument,
     handleInlineManualDecision,
     handleManualReviewSubmit,
     handleReReview,
     handleRetryFailedChunks,
+    handleSaveSourceEdit,
     hasCheckMatrix,
     isProcessing,
     loading,
@@ -451,9 +541,15 @@ export function useReviewWorkspace() {
     retryingFailed,
     reviewItems,
     reviewMode,
+    revisedExportSupported,
     selectIssue,
     setActiveSourceIndex,
+    setSourceEditMode,
     sourceCandidates,
+    sourceEditCount,
+    sourceEditMap,
+    sourceEditMode,
+    sourceEditSaving,
     sourcesLoading,
     status,
     task,

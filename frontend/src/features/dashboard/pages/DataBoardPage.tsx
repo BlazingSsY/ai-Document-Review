@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import {
-  Card, Row, Col, Statistic, Button, Spin, Empty, Typography, Space, Tag,
+  Card, Row, Col, Statistic, Button, Spin, Empty, Typography, Space, Tag, Select,
 } from 'antd';
 import {
   ReloadOutlined, FileTextOutlined, CheckCircleOutlined, SyncOutlined,
   CloseCircleOutlined, ClockCircleOutlined, BugOutlined, TeamOutlined,
 } from '@ant-design/icons';
 import { getAdminDashboard, DashboardData, NameValue } from '../api/dashboard';
+import { getUnits, getMembers, Unit, Member } from '../../users/api/members';
 
 const { Title, Text } = Typography;
 
@@ -140,17 +141,34 @@ function ResourceStat({ label, value, suffix }: { label: string; value: number; 
 function DataBoardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [unitFilter, setUnitFilter] = useState<number | undefined>();
+  const [userFilter, setUserFilter] = useState<number | undefined>();
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const res = await getAdminDashboard();
+      const res = await getAdminDashboard({ unitId: unitFilter, userId: userFilter });
       setData(res.data.data);
     } catch { /* handled */ }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { fetchData(); }, [unitFilter, userFilter]);
+
+  // 筛选下拉的数据源。看板对单位管理员开放，这两个接口同样按单位收敛，
+  // 所以管理员在这里也只会看到本单位的人。
+  useEffect(() => {
+    getUnits().then((res) => setUnits(res.data.data || [])).catch(() => setUnits([]));
+  }, []);
+
+  // 人员下拉跟着单位走：选了单位就只列该单位的人，避免几百人挤在一个下拉里。
+  useEffect(() => {
+    getMembers({ page: 1, pageSize: 200, unitId: unitFilter })
+      .then((res) => setMembers(res.data.data?.records || []))
+      .catch(() => setMembers([]));
+  }, [unitFilter]);
 
   const ov = data?.overview;
   const res = data?.resources;
@@ -166,7 +184,36 @@ function DataBoardPage() {
             </Text>
           )}
         </Space>
-        <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
+        <Space wrap>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部单位"
+            style={{ width: 200 }}
+            value={unitFilter}
+            onChange={(value) => {
+              setUnitFilter(value);
+              // 换单位后原来选中的人多半不属于新单位，一并清掉避免出现空结果。
+              setUserFilter(undefined);
+            }}
+            options={units.map((u) => ({ label: u.name, value: u.id }))}
+          />
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部人员"
+            style={{ width: 200 }}
+            value={userFilter}
+            onChange={setUserFilter}
+            options={members.map((m) => ({
+              label: m.unitName ? `${m.name}（${m.unitName}）` : m.name,
+              value: m.id,
+            }))}
+          />
+          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
+        </Space>
       </div>
 
       <Spin spinning={loading}>
@@ -206,6 +253,24 @@ function DataBoardPage() {
           <Col xs={24} lg={16}>
             <Card title="模型使用排行（按审查任务数）" size="small">
               <BarList data={data?.topModels ?? []} color="#722ed1" />
+            </Card>
+          </Col>
+        </Row>
+
+        {/* 单位 / 人员审查量 */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col xs={24} lg={10}>
+            <Card title="各单位审查量" size="small">
+              <BarList data={data?.unitDistribution ?? []} color="#13c2c2" />
+            </Card>
+          </Col>
+          <Col xs={24} lg={14}>
+            <Card
+              title="人员审查量排行"
+              size="small"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>前 12 名</Text>}
+            >
+              <BarList data={data?.memberDistribution ?? []} color="#eb2f96" />
             </Card>
           </Col>
         </Row>

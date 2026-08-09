@@ -43,6 +43,12 @@ public class ReviewTask {
     /** 是否对本次审查启用全文质量检查（基础文字质量审查）。默认 true。 */
     private Boolean qualityCheckEnabled;
 
+    /**
+     * 审查类别（业务域），与审查方式（CHUNK/SAR 管线）正交：类别说明审的是什么文件，
+     * 管线说明用什么方法审。取值见 {@code ReviewCategory}，当前只开放 ENV_TEST_OUTLINE。
+     */
+    private String reviewCategory;
+
     // Status constants
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_PROCESSING = "PROCESSING";

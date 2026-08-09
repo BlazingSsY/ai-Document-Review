@@ -22,6 +22,10 @@ export interface DashboardData {
   modeDistribution: NameValue[];
   dailyTrend: { date: string; total: number; completed: number }[];
   topModels: NameValue[];
+  /** 按单位统计的审查量，降序。 */
+  unitDistribution: NameValue[];
+  /** 按成员统计的审查量（前 N 名），名称带单位后缀以区分跨单位重名。 */
+  memberDistribution: NameValue[];
   resources: {
     users: number;
     usersByRole: NameValue[];
@@ -37,6 +41,10 @@ export interface DashboardData {
   generatedAt: string;
 }
 
-export function getAdminDashboard() {
-  return request.get<ApiResponse<DashboardData>>('/admin/dashboard');
+/**
+ * @param unitId 按单位筛选；单位管理员传什么都会被后端收敛到本单位
+ * @param userId 按成员筛选
+ */
+export function getAdminDashboard(params?: { unitId?: number; userId?: number }) {
+  return request.get<ApiResponse<DashboardData>>('/admin/dashboard', { params });
 }

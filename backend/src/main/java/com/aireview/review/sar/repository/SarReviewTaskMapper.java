@@ -21,7 +21,7 @@ public interface SarReviewTaskMapper extends BaseMapper<SarReviewTask> {
     })
     @Select("SELECT id, user_id, file_name, file_path, scenario_id, selected_model, status, "
             + "(ai_result - 'originalSources' - 'chunkResults') AS ai_result, "
-            + "created_at, updated_at, fail_reason, problem_count "
+            + "created_at, updated_at, fail_reason, problem_count, review_category "
             + "FROM sar_review_tasks WHERE id = #{taskId}")
     SarReviewTask selectLightById(@Param("taskId") String taskId);
 

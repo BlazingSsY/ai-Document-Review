@@ -42,6 +42,15 @@ public class RuleMetadata {
     public static final String TYPE_OUTPUT = "output";
     /** 仅作用于"试验项目章节"——由试验概述(7.1)声明的试验项目动态匹配出的那批一级标题章节。 */
     public static final String TYPE_TEST_ITEM = "test_item_chapter";
+    /**
+     * 仅作用于"通用章节段"——封面/目录及第一个试验项目章节之前的各章，它们被合并为
+     * 一个切片统一送审。与 {@link #TYPE_TEST_ITEM} 对称：一个管文档前半的通用内容，
+     * 一个管后半的逐个试验项目。
+     *
+     * <p>相比把这类规则写成 {@code global}：global 会注入每一片（包括几十个试验项目章），
+     * 白白消耗 token 且容易在试验章里误报；general_chapter 只在通用段出现一次。
+     */
+    public static final String TYPE_GENERAL_CHAPTER = "general_chapter";
 
     private String scenario;
     private String ruleCode;
@@ -69,6 +78,10 @@ public class RuleMetadata {
 
     public boolean isTestItem() {
         return TYPE_TEST_ITEM.equalsIgnoreCase(ruleType);
+    }
+
+    public boolean isGeneralChapter() {
+        return TYPE_GENERAL_CHAPTER.equalsIgnoreCase(ruleType);
     }
 
     /**
@@ -184,6 +197,11 @@ public class RuleMetadata {
         if (raw == null) return null;
         String s = raw.trim().toLowerCase(Locale.ROOT);
         if (s.isEmpty()) return null;
+        // 必须排在下面的「通用」之前：contains("通用") 会把「通用章节」也吃掉，
+        // 顺序反了就会把 general_chapter 规则静默降级成 global，注入到每一片。
+        if (s.contains("通用章节") || s.equals("general_chapter") || s.equals("generalchapter")) {
+            return TYPE_GENERAL_CHAPTER;
+        }
         if (s.contains("通用") || s.equals("global") || s.equals("general")) return TYPE_GLOBAL;
         if (s.contains("专项") || s.contains("section") || s.contains("specific")) return TYPE_SECTION_SPECIFIC;
         if (s.contains("文档") || s.equals("document") || s.equals("document_specific")) return TYPE_DOCUMENT_SPECIFIC;

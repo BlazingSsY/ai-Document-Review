@@ -4,6 +4,7 @@ import com.aireview.common.dto.ApiResponse;
 import com.aireview.review.dto.ManualCheckDecisionRequest;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.review.dto.ReviewTaskDTO;
+import com.aireview.review.dto.SourceEditRequest;
 import com.aireview.review.sar.service.SarReviewService;
 import com.aireview.auth.security.SecurityUtils;
 import lombok.RequiredArgsConstructor;
@@ -38,12 +39,13 @@ public class SarReviewController {
             @RequestParam("scenarioId") Long scenarioId,
             @RequestParam("selectedModel") String selectedModel,
             @RequestParam(value = "qualityCheckEnabled", required = false, defaultValue = "true") boolean qualityCheckEnabled,
+            @RequestParam(value = "reviewCategory", required = false) String reviewCategory,
             Authentication authentication) {
         try {
             Long userId = SecurityUtils.getUserId(authentication);
             String role = SecurityUtils.getRoleFromAuthentication(authentication);
             ReviewTaskDTO task = sarReviewService.submitReview(
-                    file, scenarioId, selectedModel, userId, qualityCheckEnabled, role);
+                    file, scenarioId, selectedModel, userId, qualityCheckEnabled, role, reviewCategory);
             return ApiResponse.success("SAR review task submitted", task);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
@@ -242,6 +244,66 @@ public class SarReviewController {
             return ResponseEntity.badRequest().build();
         } catch (Exception e) {
             log.error("Failed to export SAR review report", e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    /** Save (or revert) one reviewer correction made in the 原文定位 panel. */
+    @PutMapping("/tasks/{taskId}/source-edits")
+    public ApiResponse<ReviewTaskDTO> saveSourceEdit(@PathVariable String taskId,
+                                                     @RequestBody SourceEditRequest request,
+                                                     Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            return ApiResponse.success("Source edit saved",
+                    sarReviewService.saveSourceEdit(taskId, userId, request));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to save SAR source edit", e);
+            return ApiResponse.error("Failed to save source edit: " + e.getMessage());
+        }
+    }
+
+    @DeleteMapping("/tasks/{taskId}/source-edits")
+    public ApiResponse<ReviewTaskDTO> clearSourceEdits(@PathVariable String taskId,
+                                                       Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            return ApiResponse.success("Source edits cleared",
+                    sarReviewService.clearSourceEdits(taskId, userId));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to clear SAR source edits", e);
+            return ApiResponse.error("Failed to clear source edits: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Download the uploaded document with the reviewer's corrections applied in place —
+     * same file, same formatting, corrected content.
+     */
+    @GetMapping("/tasks/{taskId}/revised-document")
+    public ResponseEntity<byte[]> exportRevisedDocument(@PathVariable String taskId,
+                                                        Authentication authentication) {
+        try {
+            Long userId = (Long) authentication.getPrincipal();
+            byte[] docx = sarReviewService.exportRevisedDocument(taskId, userId);
+            String fileName = URLEncoder.encode("修订版_" + taskId.substring(0, 8) + ".docx",
+                    StandardCharsets.UTF_8);
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + fileName)
+                    .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                    .body(docx);
+        } catch (IllegalArgumentException e) {
+            // Surface the reason (unsupported .doc, missing source file) instead of a bare
+            // 400 — the frontend shows this text to the reviewer.
+            return ResponseEntity.badRequest()
+                    .contentType(MediaType.TEXT_PLAIN)
+                    .body(String.valueOf(e.getMessage()).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            log.error("Failed to export SAR revised document", e);
             return ResponseEntity.internalServerError().build();
         }
     }

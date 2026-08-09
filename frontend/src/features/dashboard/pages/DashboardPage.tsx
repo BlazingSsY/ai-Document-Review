@@ -39,9 +39,12 @@ import type { Scenario } from '../../scenarios/api/scenarios';
 import { getEnabledModels, AIModel } from '../../modelConfig/api/models';
 import {
   getReviewApi, getScenarioApi, getUnifiedReviewList, getUnifiedReviewStats,
-  PIPELINE_LABEL, PIPELINE_COLOR, type UnifiedStats,
+  PIPELINE_LABEL, type UnifiedStats,
 } from '../../review/api/pipelineApi';
-import { STATUS_LABELS, STATUS_COLORS, PAGE_SIZE } from '../../../shared/utils/constants';
+import {
+  STATUS_LABELS, STATUS_COLORS, PAGE_SIZE,
+  REVIEW_CATEGORIES, DEFAULT_REVIEW_CATEGORY, reviewCategoryLabel,
+} from '../../../shared/utils/constants';
 import FileUploader from '../../review/components/FileUploader';
 import taskWebSocket, { TaskProgressMessage } from '../../../shared/utils/websocket';
 import useLogStore from '../../review/store/logStore';
@@ -90,6 +93,9 @@ function DashboardPage() {
 
   // Review creation modal state
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  // 审查类别同样不设默认值：现在只有一个可用类别，但后续会加试验报告、可靠性等，
+  // 让用户从一开始就意识到这是需要选择的维度，与下面「不默认选管线」的做法一致。
+  const [draftCategory, setDraftCategory] = useState<string | undefined>();
   // 决策 #8：无默认管线，强制用户在 Tab 切换器上手动选择。
   const [draftMode, setDraftMode] = useState<ReviewMode | undefined>();
   const [currentStep, setCurrentStep] = useState(0);
@@ -264,6 +270,7 @@ function DashboardPage() {
       formData.append('scenarioId', String(scenarioId));
       formData.append('selectedModel', selectedModel);
       formData.append('qualityCheckEnabled', String(qualityCheckEnabled));
+      formData.append('reviewCategory', draftCategory ?? DEFAULT_REVIEW_CATEGORY);
       const reviewApi = getReviewApi(draftMode);
       await reviewApi.submitReview(formData);
       message.success(`审查任务已提交（${PIPELINE_LABEL[draftMode]}）`);
@@ -315,6 +322,7 @@ function DashboardPage() {
   };
 
   const resetReviewModal = () => {
+    setDraftCategory(undefined);
     setDraftMode(undefined);
     setCurrentStep(0);
     setSelectedFile(null);
@@ -332,15 +340,27 @@ function DashboardPage() {
       width: 200,
     },
     {
-      title: '审查方式',
-      dataIndex: 'reviewMode',
-      key: 'reviewMode',
-      width: 120,
-      render: (mode: ReviewMode | undefined) => {
+      // 类别与方式合成一列：类别是业务域（审的是什么），方式是管线（怎么审）——
+      // 方式从属于类别，拆成两列既占宽度又让人误以为是并列维度。
+      title: '审查类型',
+      key: 'reviewType',
+      width: 170,
+      render: (_: unknown, task: ReviewTask) => {
         // 没有 reviewMode 的历史任务统一显示为 CHUNK（迁移脚本会按 ai_result.reviewMode
-        // 推断填入；推断不出来的就是 chunk）。
-        const m = mode ?? 'CHUNK';
-        return <Tag color={PIPELINE_COLOR[m]}>{PIPELINE_LABEL[m]}</Tag>;
+        // 推断填入；推断不出来的就是 chunk）。类别侧后端已对空值回落为环境试验大纲。
+        const mode = task.reviewMode ?? 'CHUNK';
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3 }}>
+            <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+              {reviewCategoryLabel(task.reviewCategory)}
+            </Tag>
+            {/* 审查方式是从属信息，用次要灰而不是管线主题色：一列里两个高饱和色块
+                会互相抢视线，反而看不出主次。 */}
+            <span style={{ fontSize: 12, color: '#8c8c8c', paddingLeft: 2 }}>
+              {PIPELINE_LABEL[mode]}
+            </span>
+          </div>
+        );
       },
     },
     {
@@ -581,33 +601,98 @@ function DashboardPage() {
         destroyOnClose
         width={680}
       >
-        <Tabs
-          activeKey={draftMode ?? ''}
-          onChange={(key) => {
-            setDraftMode(key as ReviewMode);
-            // 切换 Tab 时把已经填的场景/模型清空，避免选了另一个管线的项后串库。
-            setScenarioId(undefined);
-            setSelectedModel(undefined);
-            setCurrentStep(0);
-          }}
-          items={[
-            {
-              key: 'CHUNK',
-              label: <span><BookOutlined /> 全文逐章审查</span>,
-            },
-            {
-              key: 'SAR',
-              label: <span><AimOutlined /> 结构化审查</span>,
-            },
-          ]}
-        />
-        {!draftMode && (
+        {/* 第一层：审查类别（业务域）。目前只开放环境试验大纲，其余置灰但仍然展示，
+            让用户看得到系统的能力边界与后续方向。 */}
+        <div style={{ marginBottom: 20 }}>
+          <Text strong style={{ display: 'block', marginBottom: 4 }}>1. 选择审查类别</Text>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
+            审查类别决定审的是什么文件，下一步的审查方式决定用什么方法审。
+          </Text>
+          <Row gutter={[12, 12]}>
+            {REVIEW_CATEGORIES.map((category) => {
+              const active = draftCategory === category.value;
+              return (
+                <Col span={8} key={category.value}>
+                  <Card
+                    size="small"
+                    hoverable={category.enabled}
+                    onClick={() => {
+                      if (!category.enabled || draftCategory === category.value) return;
+                      setDraftCategory(category.value);
+                      // 换类别就是换业务域，下游的方式/场景/模型全部作废重选。
+                      // 当前只有一个可用类别走不到这里，但类别一多就会踩到。
+                      setDraftMode(undefined);
+                      setScenarioId(undefined);
+                      setSelectedModel(undefined);
+                      setCurrentStep(0);
+                    }}
+                    style={{
+                      height: '100%',
+                      cursor: category.enabled ? 'pointer' : 'not-allowed',
+                      borderColor: active ? '#1677ff' : undefined,
+                      background: category.enabled ? undefined : '#fafafa',
+                      opacity: category.enabled ? 1 : 0.6,
+                      boxShadow: active ? '0 0 0 2px rgba(22,119,255,0.15)' : undefined,
+                    }}
+                  >
+                    <div style={{ fontWeight: 500, marginBottom: 4 }}>
+                      {category.label}
+                      {!category.enabled && (
+                        <Tag style={{ marginLeft: 6 }}>敬请期待</Tag>
+                      )}
+                    </div>
+                    <div style={{ color: '#8c8c8c', fontSize: 12, lineHeight: 1.5 }}>
+                      {category.description}
+                    </div>
+                  </Card>
+                </Col>
+              );
+            })}
+          </Row>
+        </div>
+
+        {!draftCategory && (
           <Alert
             type="info"
             showIcon
-            message="请先在上方选择审查方式"
-            description="全文逐章审查（按章节切片）、结构化审查（结构路由 + 区域取证 + 一致性）两条管线使用各自独立的规则库与场景，互不可见。"
+            message="请先选择审查类别"
+            description="目前已开放「环境试验大纲审查」；试验报告审查、可靠性审查正在规划中。"
           />
+        )}
+
+        {/* 第二层：审查方式（管线）。选定类别后才出现。 */}
+        {draftCategory && (
+          <>
+            <Text strong style={{ display: 'block', marginBottom: 8 }}>2. 选择审查方式</Text>
+            <Tabs
+              activeKey={draftMode ?? ''}
+              onChange={(key) => {
+                setDraftMode(key as ReviewMode);
+                // 切换 Tab 时把已经填的场景/模型清空，避免选了另一个管线的项后串库。
+                setScenarioId(undefined);
+                setSelectedModel(undefined);
+                setCurrentStep(0);
+              }}
+              items={[
+                {
+                  key: 'CHUNK',
+                  label: <span><BookOutlined /> 全文逐章审查</span>,
+                },
+                {
+                  key: 'SAR',
+                  label: <span><AimOutlined /> 结构化审查</span>,
+                },
+              ]}
+            />
+            {!draftMode && (
+              <Alert
+                type="info"
+                showIcon
+                message="请先在上方选择审查方式"
+                description="全文逐章审查（按章节切片）、结构化审查（结构路由 + 区域取证 + 一致性）两条管线使用各自独立的规则库与场景，互不可见。"
+              />
+            )}
+          </>
         )}
 
         {draftMode && (draftMode === 'SAR') && embeddingModelCount === 0 && (
@@ -622,6 +707,7 @@ function DashboardPage() {
 
         {draftMode && currentStep === 0 && (
           <div>
+            <Text strong style={{ display: 'block', marginBottom: 8 }}>3. 上传待审查文件</Text>
             <FileUploader onFileSelect={(file) => setSelectedFile(file)} />
             {selectedFile && (
               <div style={{ marginTop: 16, textAlign: 'center' }}>
@@ -645,6 +731,7 @@ function DashboardPage() {
 
         {draftMode && currentStep === 1 && (
           <div>
+            <Text strong style={{ display: 'block', marginBottom: 8 }}>4. 配置场景与模型</Text>
             <Form layout="vertical">
               <Form.Item
                 label={`审查场景（${PIPELINE_LABEL[draftMode]}）`}

@@ -22,6 +22,7 @@ const { TextArea } = Input;
 
 const RULE_TYPE_LABELS: Record<string, { label: string; color: string }> = {
   global: { label: '通用', color: 'default' },
+  general_chapter: { label: '通用章节', color: 'green' },
   section_specific: { label: '专项', color: 'geekblue' },
   document_specific: { label: '文档级', color: 'purple' },
   test_item_chapter: { label: '试验项目章节', color: 'orange' },
@@ -1056,10 +1057,11 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
             <Select
               options={[
                 { label: '通用规则（应用到所有章节）', value: 'global' },
+                { label: '通用章节规则（仅作用于合并后的通用章节段：封面/目录及试验项目前各章）', value: 'general_chapter' },
                 { label: '专项规则（按章节匹配触发）', value: 'section_specific' },
                 { label: '文档级规则（全文综合审查）', value: 'document_specific' },
                 { label: '试验项目章节规则（自动作用于试验概述声明的试验项目章节）', value: 'test_item_chapter' },
-                { label: '输出规范规则', value: 'output' },
+                { label: '输出规范规则（行为等同通用规则）', value: 'output' },
               ]}
             />
           </Form.Item>

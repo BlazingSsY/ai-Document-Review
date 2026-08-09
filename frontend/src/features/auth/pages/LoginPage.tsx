@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Form, Input, Button, Typography, message, Divider } from 'antd';
-import { UserOutlined, LockOutlined, MailOutlined, RobotOutlined } from '@ant-design/icons';
-import { login, register, getUserProfile } from '../api/auth';
+import { Card, Form, Input, Button, Typography, message, Divider, Select } from 'antd';
+import { UserOutlined, LockOutlined, MailOutlined, RobotOutlined, BankOutlined } from '@ant-design/icons';
+import { login, register, getUserProfile, getLoginUnits, LoginUnit } from '../api/auth';
 import useAuthStore from '../store/authStore';
 
 const { Title, Text, Link } = Typography;
@@ -10,11 +10,22 @@ const { Title, Text, Link } = Typography;
 function LoginPage() {
   const [isRegister, setIsRegister] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [units, setUnits] = useState<LoginUnit[]>([]);
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
 
-  const handleSubmit = async (values: { email: string; password: string; name?: string }) => {
+  // 单位列表决定登录表单长什么样：一个单位都没有（全新部署、还没导入成员）时
+  // 不显示单位选择，避免让人以为必须先建单位才能用 admin_root 登录。
+  useEffect(() => {
+    getLoginUnits()
+      .then((res) => setUnits(res.data.data || []))
+      .catch(() => setUnits([]));
+  }, []);
+
+  const handleSubmit = async (values: {
+    email: string; password: string; name?: string; unitId?: number;
+  }) => {
     setLoading(true);
     try {
       let res;
@@ -25,9 +36,13 @@ function LoginPage() {
           name: values.name || '',
         });
       } else {
-        res = await login({ email: values.email, password: values.password });
+        res = await login({
+          email: values.email,
+          password: values.password,
+          unitId: values.unitId,
+        });
       }
-      const { accessToken: token, refreshToken } = res.data.data;
+      const { accessToken: token, refreshToken, mustChangePassword } = res.data.data;
       // Temporarily store tokens so getUserProfile and the refresh interceptor can use them
       localStorage.setItem('token', token);
       localStorage.setItem('refreshToken', refreshToken);
@@ -36,6 +51,14 @@ function LoginPage() {
       const profileRes = await getUserProfile();
       const userInfo = profileRes.data.data;
       setAuth(token, refreshToken, userInfo);
+
+      // 统一初始密码在改掉之前，任何知道规则的人都能登进别人的账号，所以这里直接
+      // 把用户送到个人中心改密，而不是提示一下就放行。
+      if (mustChangePassword === 'true') {
+        message.warning('您正在使用初始密码，请立即修改');
+        navigate('/profile');
+        return;
+      }
       message.success(isRegister ? '注册成功' : '登录成功');
       navigate('/dashboard');
     } catch {
@@ -82,6 +105,25 @@ function LoginPage() {
               rules={[{ required: true, message: '请输入用户名' }]}
             >
               <Input prefix={<UserOutlined />} placeholder="用户名" />
+            </Form.Item>
+          )}
+          {!isRegister && units.length > 0 && (
+            <Form.Item
+              name="unitId"
+              extra={
+                <span style={{ fontSize: 12 }}>
+                  平台管理账号（邮箱登录）无需选择单位
+                </span>
+              }
+            >
+              <Select
+                allowClear
+                showSearch
+                placeholder="请选择所属单位"
+                prefix={<BankOutlined />}
+                optionFilterProp="label"
+                options={units.map((u) => ({ label: u.name, value: u.id }))}
+              />
             </Form.Item>
           )}
           <Form.Item

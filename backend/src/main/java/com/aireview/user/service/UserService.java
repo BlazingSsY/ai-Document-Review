@@ -4,9 +4,11 @@ import com.aireview.user.dto.ChangePasswordRequest;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.user.dto.UserDTO;
 import com.aireview.user.entity.User;
+import com.aireview.user.entity.Unit;
 import com.aireview.user.entity.SarUserRuleAssignment;
 import com.aireview.user.entity.UserRuleAssignment;
 import com.aireview.user.repository.SarUserRuleAssignmentMapper;
+import com.aireview.user.repository.UnitMapper;
 import com.aireview.user.repository.UserMapper;
 import com.aireview.user.repository.UserRuleAssignmentMapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -25,6 +27,7 @@ import java.util.List;
 public class UserService {
 
     private final UserMapper userMapper;
+    private final UnitMapper unitMapper;
     private final UserRuleAssignmentMapper userRuleAssignmentMapper;
     private final SarUserRuleAssignmentMapper sarUserRuleAssignmentMapper;
     private final PasswordEncoder passwordEncoder;
@@ -48,8 +51,10 @@ public class UserService {
         }
 
         user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
+        // 改完密就解除强制改密：这是导入成员从统一初始密码转为个人密码的唯一出口。
+        user.setMustChangePassword(false);
         userMapper.updateById(user);
-        log.info("Password changed for user: {}", user.getEmail());
+        log.info("Password changed for user id={}", user.getId());
     }
 
     public UserDTO createUser(String email, String password, String name, String role) {
@@ -160,13 +165,37 @@ public class UserService {
         return userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
     }
 
-    private UserDTO toDTO(User user) {
+    /**
+     * 实体 → DTO。公开给 {@code MemberService} 复用，避免两处各写一份转换逻辑而在
+     * 脱敏这类安全相关的字段上走样。
+     */
+    public UserDTO toDTO(User user) {
         UserDTO dto = new UserDTO();
         dto.setId(user.getId());
         dto.setEmail(user.getEmail());
-        dto.setName(user.getName() != null ? user.getName() : user.getEmail().split("@")[0]);
+        dto.setName(displayName(user));
         dto.setRole(user.getRole() != null ? user.getRole() : "user");
         dto.setCreatedAt(user.getCreatedAt());
+        dto.setUnitId(user.getUnitId());
+        dto.setUsername(user.getUsername());
+        // 只出脱敏值，明文身份证号不离开后端。
+        dto.setIdCardMasked(IdCardSupport.mask(user.getIdCard()));
+        dto.setMustChangePassword(Boolean.TRUE.equals(user.getMustChangePassword()));
+        if (user.getUnitId() != null) {
+            Unit unit = unitMapper.selectById(user.getUnitId());
+            if (unit != null) dto.setUnitName(unit.getName());
+        }
         return dto;
+    }
+
+    /**
+     * 显示名。导入的成员没有邮箱，原先「name 为空就取邮箱 @ 前缀」的写法会 NPE，
+     * 改为按 name → username → email 前缀依次回落。
+     */
+    private static String displayName(User user) {
+        if (user.getName() != null && !user.getName().isBlank()) return user.getName();
+        if (user.getUsername() != null && !user.getUsername().isBlank()) return user.getUsername();
+        String email = user.getEmail();
+        return (email != null && email.contains("@")) ? email.split("@")[0] : "";
     }
 }

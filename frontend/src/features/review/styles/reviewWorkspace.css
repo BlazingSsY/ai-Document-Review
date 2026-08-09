@@ -746,6 +746,85 @@
   padding: 3px;
 }
 
+/* ---- 原文编辑态 ----
+   编辑态复用 .source-html-view 的排版，只叠加可点击/已修改的视觉反馈，
+   这样进出编辑模式时页面不会跳版。 */
+
+.source-editable-view .source-node-editable {
+  position: relative;
+  border-radius: 4px;
+  cursor: text;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.source-editable-view .source-node-editable:hover {
+  background: #f0f7ff;
+  box-shadow: 0 0 0 3px #f0f7ff;
+}
+
+.source-editable-view .source-node-editable:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
+}
+
+/* 已保存修改的段落：左侧留一道绿边，快速扫出改了哪些地方。 */
+.source-editable-view .source-node-edited {
+  background: #f6ffed;
+  box-shadow: inset 3px 0 0 #52c41a, 0 0 0 3px #f6ffed;
+}
+
+.source-editable-view .source-node-edited:hover {
+  background: #eaffdb;
+  box-shadow: inset 3px 0 0 #52c41a, 0 0 0 3px #eaffdb;
+}
+
+.source-editable-view .source-node-readonly {
+  color: #8c8c8c;
+  cursor: not-allowed;
+}
+
+.source-editable-view .source-node-empty {
+  color: #bfbfbf;
+  font-style: italic;
+}
+
+.source-node-editor {
+  margin: 6px 0 12px;
+}
+
+.source-node-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.source-editable-table {
+  width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
+}
+
+.source-editable-table th,
+.source-editable-table td {
+  min-width: 80px;
+  padding: 4px;
+  border: 1px solid #d9d9d9;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.source-editable-table th {
+  background: #eaf2ff;
+  font-weight: 600;
+}
+
+.source-editable-table .doc-table-cell {
+  min-height: 22px;
+  padding: 3px 5px;
+  white-space: pre-wrap;
+}
+
 .manual-review-bar {
   display: flex;
   align-items: center;

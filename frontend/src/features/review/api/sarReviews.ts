@@ -1,9 +1,19 @@
 import request, { ApiResponse } from '../../../shared/api/request';
 import type { PaginatedResult } from '../../rules/api/rules';
-import type { ReviewTask, ReviewListParams, ManualCheckDecisionParams } from './reviews';
+import type {
+  ReviewTask,
+  ReviewListParams,
+  ManualCheckDecisionParams,
+  SourceEditParams,
+} from './reviews';
 
 // Types are shape-identical to chunk side — ReviewTask carries a reviewMode field.
-export type { ReviewTask, ReviewListParams, ManualCheckDecisionParams } from './reviews';
+export type {
+  ReviewTask,
+  ReviewListParams,
+  ManualCheckDecisionParams,
+  SourceEditParams,
+} from './reviews';
 
 const BASE = '/sar/reviews';
 
@@ -55,6 +65,18 @@ export function exportReviewAudit(taskId: string) {
 
 export function exportReviewReport(taskId: string) {
   return request.get(`${BASE}/tasks/${taskId}/report`, { responseType: 'blob' });
+}
+
+export function saveSourceEdit(taskId: string, params: SourceEditParams) {
+  return request.put<ApiResponse<ReviewTask>>(`${BASE}/tasks/${taskId}/source-edits`, params);
+}
+
+export function clearSourceEdits(taskId: string) {
+  return request.delete<ApiResponse<ReviewTask>>(`${BASE}/tasks/${taskId}/source-edits`);
+}
+
+export function exportRevisedDocument(taskId: string) {
+  return request.get(`${BASE}/tasks/${taskId}/revised-document`, { responseType: 'blob' });
 }
 
 export function getReviewStats() {

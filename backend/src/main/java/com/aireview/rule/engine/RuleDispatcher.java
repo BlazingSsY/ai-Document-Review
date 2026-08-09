@@ -21,6 +21,10 @@ import java.util.regex.Pattern;
  *
  * Dispatch policy (matches Section 五.4 of 试验大纲智能审查处理流程.md):
  *   - global / output rules → applied to every chunk;
+ *   - general_chapter rules → applied only to the merged 通用章节段 chunk;
+ *   - test_item_chapter rules → applied only to chapters recognised as test items; when the
+ *     rule also declares keywords, the chapter title must match one of them, which narrows
+ *     the rule from "every test chapter" down to one specific test;
  *   - section_specific rules → applied only when the chunk's title or body matches
  *     one of the rule's target_sections (standard chapter numbers) or keywords;
  *   - document_specific rules → bundled into a final "全文汇总" pseudo-chunk after
@@ -148,11 +152,32 @@ public class RuleDispatcher {
                                                   List<PreparedRule> prepared,
                                                   int basicOnlyMaxChapter,
                                                   boolean isTestItemChapter) {
+        return dispatchForChunk(chapterTitle, chapterBody, prepared, basicOnlyMaxChapter,
+                isTestItemChapter, false, null);
+    }
+
+    /**
+     * @param isGeneralSection 本片是否为「通用章节段」合并片。{@code general_chapter}
+     *                         规则仅在该值为 true 时注入。
+     * @param chunkTitles      供匹配的标题清单。合并片要传入被合并的**全部**子章节标题——
+     *                         只传合成标题的话，针对「引用文件」「相关验证条款」等具体
+     *                         章节写的 {@code section_specific} 规则会全部匹配不上而静默
+     *                         失效。传 null 时退化为只用 {@code chapterTitle}。
+     */
+    public static DispatchResult dispatchForChunk(String chapterTitle,
+                                                  String chapterBody,
+                                                  List<PreparedRule> prepared,
+                                                  int basicOnlyMaxChapter,
+                                                  boolean isTestItemChapter,
+                                                  boolean isGeneralSection,
+                                                  List<String> chunkTitles) {
         List<PreparedRule> applied = new ArrayList<>();
         List<String> appliedNames = new ArrayList<>();
         List<Map<String, Object>> traces = new ArrayList<>();
 
-        if (isBasicReviewOnlyChapter(chapterTitle, basicOnlyMaxChapter)) {
+        // 合并片不受 basic-only 档位约束：那个档位是按单章章节号判断的，而合并片跨越
+        // 第 1~N 章，被它拦下就等于整段通用内容一条业务规则都注入不进去。
+        if (!isGeneralSection && isBasicReviewOnlyChapter(chapterTitle, basicOnlyMaxChapter)) {
             Map<String, Object> trace = new LinkedHashMap<>();
             trace.put("ruleName", BASIC_QUALITY_RULE_NAME);
             trace.put("ruleCode", BASIC_QUALITY_RULE_CODE);
@@ -162,8 +187,9 @@ public class RuleDispatcher {
             return new DispatchResult(applied, List.of(BASIC_QUALITY_RULE_NAME), traces);
         }
 
-        // Match against the chapter's first-level heading only.
-        String titleHay = Objects.toString(chapterTitle, "").toLowerCase(Locale.ROOT);
+        List<String> titles = (chunkTitles == null || chunkTitles.isEmpty())
+                ? List.of(Objects.toString(chapterTitle, ""))
+                : chunkTitles;
 
         for (PreparedRule p : prepared) {
             RuleMetadata meta = p.getMetadata();
@@ -176,16 +202,39 @@ public class RuleDispatcher {
                 continue;
             }
 
-            if (meta != null && meta.isTestItem()) {
+            if (meta != null && meta.isGeneralChapter()) {
+                // 通用章节规则：只作用于合并出来的通用段。
+                if (!isGeneralSection) {
+                    continue;
+                }
+                reason = "general_chapter";
+            } else if (meta != null && meta.isTestItem()) {
                 // 试验项目章节规则：只作用于被识别为"试验项目章节"的章；非试验项目章一律跳过。
                 if (!isTestItemChapter) {
                     continue;
                 }
+                // 配了 keywords 就再按标题过滤一次，把规则收敛到具体那个试验项目。
+                // 不做这层过滤的话，「温度高度」的规则会注入到振动、霉菌等每一个试验章，
+                // 既产生大量文不对题的误报，也会在各章规则齐备后撑爆规则 token 预算。
+                // 不配 keywords 时保持原语义：作用于全部试验项目章节（如测试设备通用要求）。
+                if (meta.getKeywords() != null && !meta.getKeywords().isEmpty()) {
+                    for (String title : titles) {
+                        matchedKeywords.addAll(findMatches(
+                                Objects.toString(title, "").toLowerCase(Locale.ROOT), meta.getKeywords()));
+                    }
+                    if (matchedKeywords.isEmpty()) {
+                        continue;
+                    }
+                }
                 reason = "test_item_chapter";
             } else if (meta != null && meta.isSectionSpecific()) {
-                // Specific rules require an H1 match to be included.
-                matchedKeywords.addAll(findMatches(titleHay, meta.getKeywords()));
-                matchedSections.addAll(findSectionMatches(chapterTitle, meta.getSections()));
+                // Specific rules require a heading match to be included. 合并片对子章节
+                // 标题逐个尝试，任一命中即注入。
+                for (String title : titles) {
+                    matchedKeywords.addAll(findMatches(
+                            Objects.toString(title, "").toLowerCase(Locale.ROOT), meta.getKeywords()));
+                    matchedSections.addAll(findSectionMatches(title, meta.getSections()));
+                }
                 if (matchedKeywords.isEmpty() && matchedSections.isEmpty()) {
                     continue; // skip — not applicable to this chapter
                 }

@@ -25,10 +25,14 @@ import com.aireview.rule.repository.RuleMapper;
 import com.aireview.rule.repository.SarRuleCheckMapper;
 import com.aireview.rule.service.SarRuleService;
 import com.aireview.scenario.service.SarScenarioService;
+import com.aireview.review.core.ReviewCategory;
 import com.aireview.review.core.ReviewResultSchema;
+import com.aireview.review.core.SourceEditStore;
+import com.aireview.review.dto.SourceEditRequest;
 import com.aireview.review.llm.JsonExtractor;
 import com.aireview.document.ChunkUtils;
 import com.aireview.document.DocumentEvidenceLocator;
+import com.aireview.document.DocumentRevisionWriter;
 import com.aireview.document.DocumentSourceMapper;
 import com.aireview.document.WordParser;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -267,6 +271,14 @@ public class SarReviewService {
     public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
                                       String selectedModel, Long userId,
                                       boolean qualityCheckEnabled, String role) throws IOException {
+        return submitReview(file, scenarioId, selectedModel, userId, qualityCheckEnabled, role, null);
+    }
+
+    public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
+                                      String selectedModel, Long userId,
+                                      boolean qualityCheckEnabled, String role,
+                                      String reviewCategory) throws IOException {
+        String category = ReviewCategory.normalize(reviewCategory);
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
             throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
@@ -286,13 +298,14 @@ public class SarReviewService {
         task.setScenarioId(scenarioId);
         task.setSelectedModel(selectedModel);
         task.setQualityCheckEnabled(qualityCheckEnabled);
+        task.setReviewCategory(category);
         task.setStatus(SarReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
         sarReviewTaskMapper.insert(task);
 
-        log.info("SAR review task created: {} for file {} using model {}",
-                task.getId(), originalFilename, selectedModel);
+        log.info("SAR review task created: {} for file {} using model {} (category {})",
+                task.getId(), originalFilename, selectedModel, category);
 
         // Use the proxy so @Async actually fires.
         self.executeReviewAsync(task.getId());
@@ -394,6 +407,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
+        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -470,6 +484,7 @@ public class SarReviewService {
         task.setScenarioId(original.getScenarioId());
         task.setSelectedModel(original.getSelectedModel());
         task.setQualityCheckEnabled(original.getQualityCheckEnabled());
+        task.setReviewCategory(resolveCategory(original.getReviewCategory()));
         task.setStatus(SarReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -606,6 +621,76 @@ public class SarReviewService {
                 listAuditLogs(taskId, userId));
     }
 
+    /**
+     * Save one 原文定位 edit. Audited like a manual decision — a corrected document is a
+     * reviewer action on the record, so it has to be attributable after the fact.
+     */
+    public ReviewTaskDTO saveSourceEdit(String taskId, Long userId, SourceEditRequest request) {
+        SarReviewTask task = requireOwnedTask(taskId, userId);
+        if (task.getAiResult() == null) {
+            throw new IllegalArgumentException("No review result available to edit");
+        }
+
+        Map<String, Object> aiResult = new LinkedHashMap<>(task.getAiResult());
+        Map<String, Object> stored = SourceEditStore.upsert(aiResult, request, userId);
+        task.setAiResult(aiResult);
+        task.setUpdatedAt(LocalDateTime.now());
+        sarReviewTaskMapper.updateById(task);
+
+        SarReviewAuditLog audit = new SarReviewAuditLog();
+        audit.setTaskId(taskId);
+        audit.setUserId(userId);
+        audit.setAction(stored == null ? "source_edit_revert" : "source_edit");
+        audit.setTargetType("document_node");
+        audit.setTargetId(request.getNodeId());
+        audit.setBeforeValue(auditTextValue(request.getOriginalText()));
+        audit.setAfterValue(auditTextValue(request.getNewText()));
+        audit.setComment(stored == null ? "撤销原文修改" : "原文修改");
+        audit.setCreatedAt(LocalDateTime.now());
+        sarReviewAuditLogMapper.insert(audit);
+
+        return toDTO(task, false);
+    }
+
+    public ReviewTaskDTO clearSourceEdits(String taskId, Long userId) {
+        SarReviewTask task = requireOwnedTask(taskId, userId);
+        if (task.getAiResult() == null) {
+            throw new IllegalArgumentException("No review result available to edit");
+        }
+        Map<String, Object> aiResult = new LinkedHashMap<>(task.getAiResult());
+        int removed = SourceEditStore.clear(aiResult);
+        task.setAiResult(aiResult);
+        task.setUpdatedAt(LocalDateTime.now());
+        sarReviewTaskMapper.updateById(task);
+        log.info("Cleared {} source edit(s) on SAR task {}", removed, taskId);
+        return toDTO(task, false);
+    }
+
+    private static Map<String, Object> auditTextValue(String text) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("text", text == null ? "" : text);
+        return value;
+    }
+
+    /**
+     * Export the uploaded document with the reviewer's corrections applied in place.
+     * With no edits recorded this is a faithful re-save of the original document.
+     */
+    public byte[] exportRevisedDocument(String taskId, Long userId) throws IOException {
+        SarReviewTask task = requireOwnedTask(taskId, userId);
+        return DocumentRevisionWriter
+                .apply(task.getFilePath(), SourceEditStore.toWriterEdits(task.getAiResult()))
+                .bytes();
+    }
+
+    /**
+     * 存量任务的 review_category 可能为空（该列晚于任务表加入），一律按环境试验大纲回显——
+     * 加类别之前系统只审试验大纲，这个回落是事实正确的，也让前端不必处理空值。
+     */
+    private static String resolveCategory(String raw) {
+        return raw == null || raw.isBlank() ? ReviewCategory.ENV_TEST_OUTLINE : raw;
+    }
+
     private SarReviewTask requireOwnedTask(String taskId, Long userId) {
         SarReviewTask task = sarReviewTaskMapper.selectById(taskId);
         if (task == null) {
@@ -636,6 +721,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
+        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -678,6 +764,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
+        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
         return dto;
     }
 

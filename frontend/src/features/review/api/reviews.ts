@@ -20,6 +20,11 @@ export interface ReviewTask {
   progress?: number | null;
   /** 任务所属管线。后端在 DTO 序列化时填入；前端按此值分流后续 API 调用。 */
   reviewMode?: ReviewMode;
+  /**
+   * 任务所属审查类别（业务域），如 'ENV_TEST_OUTLINE'。与 reviewMode 正交：
+   * 类别说明审的是什么文件，reviewMode 说明用什么方法审。取值见 REVIEW_CATEGORIES。
+   */
+  reviewCategory?: string;
 }
 
 export interface ReviewListParams {
@@ -94,6 +99,36 @@ export function exportReviewAudit(taskId: string) {
 
 export function exportReviewReport(taskId: string) {
   return request.get(`/reviews/tasks/${taskId}/report`, {
+    responseType: 'blob',
+  });
+}
+
+/**
+ * 一次「原文定位」编辑。只送 nodeId，不送文档内位置：后端导出时重新解析原始文档来
+ * 定位段落，浏览器端拿到的旧数据因此无法写错段落。
+ */
+export interface SourceEditParams {
+  nodeId: string;
+  sourceId?: string;
+  nodeType?: string;
+  originalText: string;
+  newText: string;
+  /** 表格单元格 1 基坐标；普通段落不传。 */
+  cellRow?: number;
+  cellColumn?: number;
+}
+
+export function saveSourceEdit(taskId: string, params: SourceEditParams) {
+  return request.put<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}/source-edits`, params);
+}
+
+export function clearSourceEdits(taskId: string) {
+  return request.delete<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}/source-edits`);
+}
+
+/** 原始文档 + 已保存的修改，导出为格式一致的 .docx。 */
+export function exportRevisedDocument(taskId: string) {
+  return request.get(`/reviews/tasks/${taskId}/revised-document`, {
     responseType: 'blob',
   });
 }

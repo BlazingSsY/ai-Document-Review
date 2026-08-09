@@ -62,10 +62,12 @@ public class WordParser {
         private final String reviewText;
         private final String html;
         private final TableData table;
+        private final int bodyIndex;
+        private final String numberPrefix;
 
         DocumentNode(String id, String type, int nodeIndex, int headingLevel,
                      String sectionPath, String text, String reviewText, String html,
-                     TableData table) {
+                     TableData table, int bodyIndex, String numberPrefix) {
             this.id = id;
             this.type = type;
             this.nodeIndex = nodeIndex;
@@ -75,6 +77,8 @@ public class WordParser {
             this.reviewText = reviewText;
             this.html = html;
             this.table = table;
+            this.bodyIndex = bodyIndex;
+            this.numberPrefix = numberPrefix == null ? "" : numberPrefix;
         }
 
         public String getId() { return id; }
@@ -86,6 +90,27 @@ public class WordParser {
         public String getReviewText() { return reviewText; }
         public String getHtml() { return html; }
         public TableData getTable() { return table; }
+
+        /**
+         * Position of the originating element in the document's flattened body-element
+         * list ({@link #flattenBodyElements}), or {@code -1} when the node has no
+         * writable origin (legacy .doc path, synthetic figure placeholders).
+         *
+         * This is the anchor {@link DocumentRevisionWriter} uses to patch the edited
+         * text back into the original .docx: node ids are chapter-scoped ordinals and
+         * say nothing about where the content lives in the file, so without this the
+         * only way back would be text matching, which breaks on duplicate paragraphs.
+         */
+        public int getBodyIndex() { return bodyIndex; }
+
+        /**
+         * Auto-numbering prefix that {@code NumberingFormatter} reconstructed and
+         * prepended to {@link #getText()}. Word renders list/heading numbers from
+         * numbering.xml at display time and they are NOT part of the paragraph runs,
+         * so the writer must strip this prefix again before writing text back —
+         * otherwise the number would be duplicated into the document body.
+         */
+        public String getNumberPrefix() { return numberPrefix; }
     }
 
     public record TableCellData(int rowIndex, int columnIndex, String text,
@@ -106,7 +131,8 @@ public class WordParser {
 
     /** Mutable draft collected during parsing, finalized into a {@link DocumentNode}. */
     private record NodeDraft(String type, int headingLevel, String sectionPath,
-                             String text, String reviewText, String html, TableData table) {
+                             String text, String reviewText, String html, TableData table,
+                             int bodyIndex, String numberPrefix) {
     }
 
     private record TableRendering(String plainText, String markdown, String html,
@@ -158,6 +184,12 @@ public class WordParser {
 
     private static Chapter createChapter(int chapterNumber, String title,
                                          List<NodeDraft> bodyNodes, int titleHeadingLevel) {
+        return createChapter(chapterNumber, title, bodyNodes, titleHeadingLevel, -1, "");
+    }
+
+    private static Chapter createChapter(int chapterNumber, String title,
+                                         List<NodeDraft> bodyNodes, int titleHeadingLevel,
+                                         int titleBodyIndex, String titleNumberPrefix) {
         String chapterId = String.format("DOC-C%03d", chapterNumber);
         String normalizedTitle = title == null ? "" : title.trim();
         List<NodeDraft> drafts = new ArrayList<>();
@@ -169,7 +201,9 @@ public class WordParser {
                     normalizedTitle,
                     normalizedTitle,
                     null,
-                    null));
+                    null,
+                    titleBodyIndex,
+                    titleNumberPrefix));
         }
         drafts.addAll(bodyNodes);
 
@@ -182,7 +216,8 @@ public class WordParser {
             String nodeId = chapterId + "-N" + String.format("%04d", i + 1);
             String nodeHtml = renderNodeHtml(nodeId, draft);
             nodes.add(new DocumentNode(nodeId, draft.type(), i + 1, draft.headingLevel(),
-                    draft.sectionPath(), draft.text(), draft.reviewText(), nodeHtml, draft.table()));
+                    draft.sectionPath(), draft.text(), draft.reviewText(), nodeHtml, draft.table(),
+                    draft.bodyIndex(), draft.numberPrefix()));
             html.append(nodeHtml);
             if (!"chapter_title".equals(draft.type())
                     && draft.reviewText() != null
@@ -201,26 +236,32 @@ public class WordParser {
                 plainText.toString().trim(), html.toString(), nodes);
     }
 
-    private static NodeDraft paragraphNode(String sectionPath, String text) {
+    private static NodeDraft paragraphNode(String sectionPath, String text,
+                                           int bodyIndex, String numberPrefix) {
         String normalized = text == null ? "" : text.trim();
-        return new NodeDraft("paragraph", 0, sectionPath, normalized, normalized, null, null);
+        return new NodeDraft("paragraph", 0, sectionPath, normalized, normalized, null, null,
+                bodyIndex, numberPrefix);
     }
 
-    private static NodeDraft headingNode(String sectionPath, int headingLevel, String text) {
+    private static NodeDraft headingNode(String sectionPath, int headingLevel, String text,
+                                         int bodyIndex, String numberPrefix) {
         String normalized = text == null ? "" : text.trim();
         int level = Math.max(1, Math.min(6, headingLevel));
         return new NodeDraft("heading", level, sectionPath, normalized,
-                "#".repeat(level) + " " + normalized, null, null);
+                "#".repeat(level) + " " + normalized, null, null, bodyIndex, numberPrefix);
     }
 
-    private static NodeDraft figureNode(String sectionPath, String text) {
+    private static NodeDraft figureNode(String sectionPath, String text, int bodyIndex) {
         String normalized = text == null ? "[figure]" : text.trim();
-        return new NodeDraft("figure", 0, sectionPath, normalized, normalized, null, null);
+        // Figure nodes are synthetic placeholders for OLE/image-only paragraphs. They
+        // carry a bodyIndex for provenance but are never text-editable.
+        return new NodeDraft("figure", 0, sectionPath, normalized, normalized, null, null,
+                bodyIndex, "");
     }
 
-    private static NodeDraft tableNode(String sectionPath, TableRendering table) {
+    private static NodeDraft tableNode(String sectionPath, TableRendering table, int bodyIndex) {
         return new NodeDraft("table", 0, sectionPath, table.plainText(),
-                table.markdown(), table.html(), table.table());
+                table.markdown(), table.html(), table.table(), bodyIndex, "");
     }
 
     private static String buildSectionPath(String chapterTitle,
@@ -330,11 +371,23 @@ public class WordParser {
      */
     private static List<Chapter> parseDocxChapters(String filePath) throws IOException {
         log.info("Parsing .docx file with adaptive chapter detection: {}", filePath);
-        List<Chapter> chapters = new ArrayList<>();
-
         try (InputStream is = new FileInputStream(filePath);
              XWPFDocument document = new XWPFDocument(is)) {
+            return parseDocxChapters(document);
+        }
+    }
 
+    /**
+     * Chapter-split an already-open document. Split out from the file-path overload so
+     * {@link DocumentRevisionWriter} can parse and patch within a single open
+     * {@link XWPFDocument}: the {@code bodyIndex} recorded on each node indexes into
+     * {@link #flattenBodyElements}, so the element it points at must come from the very
+     * same document instance the writer is about to modify.
+     */
+    public static List<Chapter> parseDocxChapters(XWPFDocument document) {
+        List<Chapter> chapters = new ArrayList<>();
+
+        {
             // Flatten XWPFSDT (content controls) into the body element stream first.
             // Must be done before buildStyleHeadingMap so we can collect style IDs.
             List<IBodyElement> bodyElements = flattenBodyElements(document.getBodyElements());
@@ -391,17 +444,19 @@ public class WordParser {
             if (topHeadingLevel == -1) {
                 log.warn("No headings found in document, treating entire document as a single chapter.");
                 List<NodeDraft> nodes = new ArrayList<>();
-                for (IBodyElement element : bodyElements) {
+                for (int bodyIndex = 0; bodyIndex < bodyElements.size(); bodyIndex++) {
+                    IBodyElement element = bodyElements.get(bodyIndex);
                     if (element instanceof XWPFParagraph p) {
-                        String t = withNumbering(p, numberingFormatter, document.getStyles());
+                        String prefix = numberingFormatter.formatNumber(p, document.getStyles());
+                        String t = combinePrefixAndText(prefix, getParagraphTextWithSpecialChars(p));
                         if (t != null && !t.isBlank()) {
-                            nodes.add(paragraphNode("", t));
+                            nodes.add(paragraphNode("", t, bodyIndex, prefix));
                         } else if (hasDrawingOrPicture(p)) {
-                            nodes.add(figureNode("", "[figure]"));
+                            nodes.add(figureNode("", "[figure]", bodyIndex));
                         }
                     } else if (element instanceof XWPFTable tbl) {
                         nodes.add(tableNode("", convertTable(
-                                tbl, numberingFormatter, document.getStyles())));
+                                tbl, numberingFormatter, document.getStyles()), bodyIndex));
                     }
                 }
                 chapters.add(createChapter(1, "", nodes, 1));
@@ -450,8 +505,13 @@ public class WordParser {
             List<NodeDraft> currentNodes = new ArrayList<>();
             NavigableMap<Integer, String> sectionHeadings = new TreeMap<>();
             int figureIndex = 0; // counter for unnamed figure placeholders
+            // Body position + numbering prefix of the paragraph that opened the current
+            // chapter, carried so the chapter_title node can be written back too.
+            int currentTitleBodyIndex = -1;
+            String currentTitleNumberPrefix = "";
 
-            for (IBodyElement element : bodyElements) {
+            for (int bodyIndex = 0; bodyIndex < bodyElements.size(); bodyIndex++) {
+                IBodyElement element = bodyElements.get(bodyIndex);
                 if (element instanceof XWPFParagraph paragraph) {
                     // Check if this paragraph is an appendix marker (style contains "附录标识")
                     // Only do manual counter initialization if the style doesn't define its own numbering.
@@ -496,9 +556,13 @@ public class WordParser {
                                     chapters.size() + 1,
                                     currentTitle != null ? currentTitle : "",
                                     currentNodes,
-                                    splitLevel));
+                                    splitLevel,
+                                    currentTitleBodyIndex,
+                                    currentTitleNumberPrefix));
                         }
                         currentTitle = paraText != null ? paraText.trim() : "";
+                        currentTitleBodyIndex = bodyIndex;
+                        currentTitleNumberPrefix = numberPrefix;
                         currentNodes = new ArrayList<>();
                         sectionHeadings.clear();
                         continue;
@@ -512,7 +576,7 @@ public class WordParser {
                     // Note: Use paragraph.getText() for this check since it returns empty for special chars
                     if ((paragraph.getText() == null || paragraph.getText().isBlank()) && hasDrawingOrPicture(paragraph)) {
                         figureIndex++;
-                        currentNodes.add(figureNode(sectionPath, "[图表 " + figureIndex + "]"));
+                        currentNodes.add(figureNode(sectionPath, "[图表 " + figureIndex + "]", bodyIndex));
                         continue;
                     }
 
@@ -521,19 +585,20 @@ public class WordParser {
                         sectionHeadings.tailMap(headingLevel, true).clear();
                         sectionHeadings.put(headingLevel, paraText.trim());
                         sectionPath = buildSectionPath(currentTitle, sectionHeadings);
-                        currentNodes.add(headingNode(sectionPath, headingLevel, paraText.trim()));
+                        currentNodes.add(headingNode(sectionPath, headingLevel, paraText.trim(),
+                                bodyIndex, numberPrefix));
                         continue;
                     }
 
                     // Regular paragraph text
                     if (paraText != null && !paraText.isBlank()) {
-                        currentNodes.add(paragraphNode(sectionPath, paraText));
+                        currentNodes.add(paragraphNode(sectionPath, paraText, bodyIndex, numberPrefix));
                     }
 
                 } else if (element instanceof XWPFTable table) {
                     String sectionPath = buildSectionPath(currentTitle, sectionHeadings);
                     currentNodes.add(tableNode(sectionPath, convertTable(
-                            table, numberingFormatter, document.getStyles())));
+                            table, numberingFormatter, document.getStyles()), bodyIndex));
                 }
             }
 
@@ -543,7 +608,9 @@ public class WordParser {
                         chapters.size() + 1,
                         currentTitle != null ? currentTitle : "",
                         currentNodes,
-                        splitLevel));
+                        splitLevel,
+                        currentTitleBodyIndex,
+                        currentTitleNumberPrefix));
             }
 
             log.info("Parsed .docx file into {} chapter(s) (split by H{})", chapters.size(), splitLevel);
@@ -667,7 +734,12 @@ public class WordParser {
      * content controls) with their inner body elements. This prevents silent content
      * loss for documents that use content controls to structure their chapters or sections.
      */
-    private static List<IBodyElement> flattenBodyElements(List<IBodyElement> elements) {
+    /**
+     * Package-private rather than private: {@link DocumentRevisionWriter} must flatten
+     * the body the exact same way to resolve a node's {@code bodyIndex} back to its
+     * element. Any divergence here would silently shift every write target.
+     */
+    static List<IBodyElement> flattenBodyElements(List<IBodyElement> elements) {
         List<IBodyElement> result = new ArrayList<>();
         for (IBodyElement el : elements) {
             if (el instanceof XWPFSDT sdt) {
@@ -775,6 +847,37 @@ public class WordParser {
                 renderTableMarkdown(tableData),
                 html.toString(),
                 tableData);
+    }
+
+    /**
+     * Resolve the 1-based (row, logical column) coordinates emitted by
+     * {@link #convertTable} back to the physical {@link XWPFTableCell}.
+     *
+     * The two are not the same index: {@code TableCellData.columnIndex()} counts grid
+     * columns, so a cell with {@code gridSpan=3} advances the logical column by 3 while
+     * occupying a single physical cell, and vertically merged continuation cells occupy
+     * grid columns without emitting a cell at all. This walk mirrors convertTable's
+     * exactly — it lives here, beside its counterpart, because the two must never drift.
+     *
+     * @return the matching cell, or {@code null} when the coordinates address a merged
+     *         continuation slot or fall outside the table
+     */
+    static XWPFTableCell resolveLogicalCell(XWPFTable table, int rowIndex, int columnIndex) {
+        if (table == null || rowIndex < 1 || columnIndex < 1) return null;
+        List<XWPFTableRow> rows = table.getRows();
+        if (rowIndex > rows.size()) return null;
+
+        int logicalCol = 0;
+        for (XWPFTableCell cell : rows.get(rowIndex - 1).getTableCells()) {
+            int gridSpan = getGridSpan(cell);
+            if (getVMergeState(cell) == STMerge.CONTINUE) {
+                logicalCol += gridSpan;
+                continue;
+            }
+            if (logicalCol + 1 == columnIndex) return cell;
+            logicalCol += gridSpan;
+        }
+        return null;
     }
 
     private static String renderTablePlainText(TableData table) {
@@ -1673,7 +1776,10 @@ public class WordParser {
             List<NodeDraft> nodes = Arrays.stream(result.replace("\r\n", "\n").split("\\n\\s*\\n"))
                     .map(String::trim)
                     .filter(text -> !text.isBlank())
-                    .map(text -> paragraphNode("", text))
+                    // bodyIndex = -1: the legacy .doc path reconstructs paragraphs by
+                    // splitting extracted text, so there is no addressable element to
+                    // write an edit back into. DocumentRevisionWriter rejects .doc.
+                    .map(text -> paragraphNode("", text, -1, ""))
                     .toList();
             chapters.add(createChapter(1, "", nodes, 1));
             return chapters;

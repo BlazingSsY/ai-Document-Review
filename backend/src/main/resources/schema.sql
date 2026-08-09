@@ -572,6 +572,15 @@ CREATE INDEX IF NOT EXISTS idx_sar_rules_folder ON sar_rules(folder_id);
 ALTER TABLE review_tasks     ADD COLUMN IF NOT EXISTS quality_check_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE sar_review_tasks ADD COLUMN IF NOT EXISTS quality_check_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 
+-- 审查类别（业务域）：一条任务属于哪类审查业务，与「审查方式」(CHUNK/SAR 管线) 正交——
+-- 类别回答“审的是什么文件”，管线回答“用什么方法审”。目前只开放环境试验大纲审查，
+-- 后续会扩展试验报告审查、可靠性审查等；先落库，避免新增类别时历史任务无从归属。
+-- 默认值让存量任务自动归入 ENV_TEST_OUTLINE，这在当前是事实正确的（系统此前只审试验大纲）。
+ALTER TABLE review_tasks     ADD COLUMN IF NOT EXISTS review_category VARCHAR(50) NOT NULL DEFAULT 'ENV_TEST_OUTLINE';
+ALTER TABLE sar_review_tasks ADD COLUMN IF NOT EXISTS review_category VARCHAR(50) NOT NULL DEFAULT 'ENV_TEST_OUTLINE';
+CREATE INDEX IF NOT EXISTS idx_review_tasks_category     ON review_tasks(review_category);
+CREATE INDEX IF NOT EXISTS idx_sar_review_tasks_category ON sar_review_tasks(review_category);
+
 -- 删除审查场景时不应被历史审查任务的外键挡住：把 scenario_id 外键改为 ON DELETE SET NULL，
 -- 删场景时仅解除任务与场景的关联（置空），保留审查结果历史。对存量库幂等重建该约束。
 ALTER TABLE review_tasks     DROP CONSTRAINT IF EXISTS review_tasks_scenario_id_fkey;
@@ -654,3 +663,46 @@ BEGIN
            '术语一致性', TRUE, 3, TRUE
     WHERE NOT EXISTS (SELECT 1 FROM rule_checks WHERE check_code = 'R-Q-C003');
 END $basic_quality_seed$;
+
+-- ============================================================================
+-- 成员管理：单位 + 成员档案
+--
+-- 「成员」就是登录用户，不另立名册表：成员即账号，导入即开通，历史审查任务的
+-- user_id 关联天然可用，看板按单位/人员统计不需要额外的成员↔账号映射。
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS units (
+    id          BIGSERIAL       PRIMARY KEY,
+    name        VARCHAR(200)    NOT NULL UNIQUE,
+    code        VARCHAR(50),
+    remark      TEXT,
+    created_at  TIMESTAMP       NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+
+-- 成员字段。全部走 ADD COLUMN IF NOT EXISTS，存量库可直接滚动升级。
+ALTER TABLE users ADD COLUMN IF NOT EXISTS unit_id   BIGINT REFERENCES units(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username  VARCHAR(100);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS id_card   VARCHAR(18);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- 导入的成员没有邮箱（Excel 只给单位/姓名/身份证号/角色），所以 email 必须可空。
+-- 存量账号（admin_root 等）仍然带邮箱，继续用邮箱登录，不受影响。
+ALTER TABLE users ALTER COLUMN email DROP NOT NULL;
+
+-- 邮箱原本是 NOT NULL UNIQUE。放宽为可空后，普通 UNIQUE 约束在 PostgreSQL 里允许多行
+-- NULL，本可沿用；这里改成部分唯一索引只是把「仅对非空邮箱唯一」这个意图写明确。
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_users_email
+    ON users(email) WHERE email IS NOT NULL;
+
+-- 登录名在单位内唯一：各单位自己排表、各自编号，跨单位重名互不干扰，
+-- 登录时先选单位再输用户名即可定位到唯一账号。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_users_unit_username
+    ON users(unit_id, username) WHERE username IS NOT NULL;
+
+-- 身份证号是成员的唯一编码，跨单位也不允许重复（同一个人不该在两个单位各有一个账号）。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_users_id_card
+    ON users(id_card) WHERE id_card IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_users_unit ON users(unit_id);

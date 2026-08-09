@@ -3,6 +3,7 @@ package com.aireview.review.chunk.service;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.review.dto.ManualCheckDecisionRequest;
 import com.aireview.review.dto.ReviewTaskDTO;
+import com.aireview.review.dto.SourceEditRequest;
 import com.aireview.modelconfig.entity.AiModelConfig;
 import com.aireview.review.chunk.entity.ReviewTask;
 import com.aireview.review.chunk.entity.ReviewAuditLog;
@@ -18,8 +19,11 @@ import com.aireview.modelconfig.service.AiModelService;
 import com.aireview.rule.service.RuleService;
 import com.aireview.rule.repository.RuleCheckMapper;
 import com.aireview.rule.repository.RuleMapper;
+import com.aireview.review.core.ReviewCategory;
 import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.core.DocumentRuleReviewSupport;
+import com.aireview.review.core.SourceEditStore;
+import com.aireview.document.DocumentRevisionWriter;
 import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.document.ChapterReferenceResolver;
 import com.aireview.document.ChunkUtils;
@@ -51,6 +55,8 @@ import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -112,8 +118,55 @@ public class ReviewService {
     @Value("${review.parallel.chunk-concurrency}")
     private int chunkConcurrency;
 
-    @Value("${review.dispatch.basic-only-max-chapter:6}")
+    @Value("${review.dispatch.basic-only-max-chapter:0}")
     private int basicOnlyMaxChapter;
+
+    /**
+     * 通用章节段的结束章节号（含）。0 = 自动识别，取「第一个试验项目章节」之前的全部
+     * 章节；识别不出时回退到逐章切片。仅在自动识别不准（试验概述写法不规范、提不出
+     * 试验项目清单）时才需要手动指定。
+     */
+    @Value("${review.chunk.general-section-end-chapter:0}")
+    private int generalSectionEndChapter;
+
+    /**
+     * 文档级综合审查一次能带多少原文字符。
+     *
+     * <p>文档级规则做的是跨章比对（试验项目一览表与各试验章节是否一致、章节顺序是否
+     * 合规等），证据包里必须同时装下完整目录与足够多章节的开头。原先硬编码 18000，
+     * 对 20+ 试验章的大纲只够覆盖前十来章，后面的章节压根没进证据，跨章判定就成了
+     * 睁眼瞎。提成配置项按文档规模调整。
+     */
+    @Value("${review.document.max-evidence-chars:40000}")
+    private int documentMaxEvidenceChars;
+
+    /**
+     * 文档级综合审查的**单批**规则预算，与逐章的 {@link #ruleBudgetTokens} 分开。
+     *
+     * <p>两者约束的对象不同：逐章预算管「一次调用能塞多少规则」，超了丢规则；这里管
+     * 「一批放几条规则」，超了拆批、一条不丢。
+     *
+     * <p>真正的瓶颈不在输入而在输出：模型输出上限固定 {@link #CONVERGENCE_MAX_TOKENS}
+     * (8192)，而文档级规则要逐行列出跨章核对结果，十几条规则挤在一批必然写不完、JSON 被
+     * 截断，只能靠 salvage 抢救回前几条。因此本值要显著小于逐章预算——用批数换输出余量，
+     * 每批规则少了，那一批的输出才装得下。
+     */
+    @Value("${review.document.rule-budget-tokens:4000}")
+    private int documentRuleBudgetTokens;
+
+    /**
+     * 注入单次调用的「审查规则清单」段的 token 上限。
+     *
+     * <p>放开成配置项而不再写死：它不是收敛契约（不影响判定口径），只是容量限制，
+     * 调大不改变任何判定语义，只是让更多规则能进提示词。超限的规则会被静默跳过、
+     * 只留一行日志，与其为了迁就上限压缩判据文字，不如按文档规模把它调够——判据
+     * 写不全才是真正影响审查准确性的地方。
+     *
+     * <p>参考量级：单章正文最大约 7000 token，固定提示词段约 2000，主流模型上下文
+     * 128K，因此默认 16000 仍有充足余量。
+     */
+    @Value("${review.chunk.rule-budget-tokens:16000}")
+    private int ruleBudgetTokens;
 
     /**
      * 收敛性审查的统一参数。这些值不放配置是因为它们是「跨模型收敛」契约本身：
@@ -124,8 +177,6 @@ public class ReviewService {
     private static final int CONVERGENCE_MAX_TOKENS = 8192;
     /** JSON 解析失败时的最大整体尝试次数（含首次）；每次换种子重新调用模型。 */
     private static final int JSON_PARSE_MAX_ATTEMPTS = 3;
-    /** 单切片 prompt 中规则部分的硬上限。超过则按 rule_code asc 截断。 */
-    private static final int RULE_BUDGET_TOKENS = 6000;
 
     /**
      * Submit a review task: upload the document and start async processing.
@@ -144,6 +195,14 @@ public class ReviewService {
     public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
                                       String selectedModel, Long userId,
                                       boolean qualityCheckEnabled) throws IOException {
+        return submitReview(file, scenarioId, selectedModel, userId, qualityCheckEnabled, null);
+    }
+
+    public ReviewTaskDTO submitReview(MultipartFile file, Long scenarioId,
+                                      String selectedModel, Long userId,
+                                      boolean qualityCheckEnabled,
+                                      String reviewCategory) throws IOException {
+        String category = ReviewCategory.normalize(reviewCategory);
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
             throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
@@ -164,13 +223,14 @@ public class ReviewService {
         task.setScenarioId(scenarioId);
         task.setSelectedModel(selectedModel);
         task.setQualityCheckEnabled(qualityCheckEnabled);
+        task.setReviewCategory(category);
         task.setStatus(ReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
         reviewTaskMapper.insert(task);
 
-        log.info("Review task created: {} for file {} using model {}",
-                task.getId(), originalFilename, selectedModel);
+        log.info("Review task created: {} for file {} using model {} (category {})",
+                task.getId(), originalFilename, selectedModel, category);
 
         // Start async processing — must go through the proxy so @Async actually fires.
         self.executeReviewAsync(task.getId());
@@ -420,6 +480,10 @@ public class ReviewService {
         task.setFilePath(original.getFilePath());
         task.setScenarioId(original.getScenarioId());
         task.setSelectedModel(original.getSelectedModel());
+        // 重审要复现原任务的配置。qualityCheckEnabled 此前漏继承，导致重审一个关闭了
+        // 全文质量检查的任务时，会因列默认值 TRUE 而重新跑满质量检查（SAR 侧一直是继承的）。
+        task.setQualityCheckEnabled(original.getQualityCheckEnabled());
+        task.setReviewCategory(resolveCategory(original.getReviewCategory()));
         task.setStatus(ReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -472,17 +536,17 @@ public class ReviewService {
         }
 
         try {
-            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
-            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
-            List<WordParser.Chapter> chapters = firstRealIdx > 0
-                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
-                    : rawChapters;
+            // 切片过程必须与 executeReviewAsync 完全一致：失败切片是按编号定位的
+            // （chunks.get(chunkNumber - 1)），两边切法只要有一点不同，重审就会审到
+            // 另一个章节上去。
+            List<WordParser.Chapter> chapters = WordParser.parseChapters(task.getFilePath());
             List<Rule> rules = ruleService.getRulesByScenarioId(task.getScenarioId());
             List<RuleDispatcher.PreparedRule> preparedRules = RuleDispatcher.prepare(rules);
             List<String> declaredTestItems = extractDeclaredTestItems(chapters);
             attachChecks(preparedRules);
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
-            List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
+            List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkWithGeneralSection(
+                    chapters, maxChunkTokens, resolveGeneralSectionEnd(chapters, declaredTestItems));
             final boolean qualityCheck = !Boolean.FALSE.equals(task.getQualityCheckEnabled());
 
             List<Integer> validChunkNumbers = failedChunkNumbers.stream()
@@ -527,7 +591,8 @@ public class ReviewService {
                 final ChunkUtils.ChunkResult chunk = chunks.get(chunkIdx);
                 final RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
                         chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter,
-                        isTestItemChapter(chunk.getLabel(), declaredTestItems));
+                        isTestItemChapter(chunk.getLabel(), declaredTestItems),
+                        chunk.isGeneralSection(), chunk.titlesForDispatch());
 
                 CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
                     long startNs = System.nanoTime();
@@ -633,19 +698,13 @@ public class ReviewService {
                 throw new RuntimeException("文档内容为空或无法解析");
             }
 
-            // Skip leading front matter (封面/签署页/目录/图表清单) — start review from the
-            // first chapter whose title begins with a chapter number, e.g. "1 试验目的".
-            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
-            List<WordParser.Chapter> chapters = firstRealIdx > 0
-                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
-                    : rawChapters;
-            if (firstRealIdx > 0) {
-                log.info("Skipped {} front-matter chapter(s); first real chapter: '{}'",
-                        firstRealIdx, chapters.get(0).getTitle());
-            }
-            log.info("Document parsed into {} chapter(s) (after front-matter trim)", chapters.size());
+            // 不再预先裁掉封面/签署页/目录：它们是通用章节段的一部分，签署是否齐全、
+            // 目录与正文是否对得上这类检查正需要它们在场。边界由 resolveGeneralSectionEnd
+            // 决定；识别不出时 chunkWithGeneralSection 内部会退回「跳过前置 + 逐章」的旧行为。
+            List<WordParser.Chapter> chapters = rawChapters;
+            log.info("Document parsed into {} chapter(s)", chapters.size());
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                    "文档解析完成，跳过封面/目录等前置内容后共 " + chapters.size() + " 个章节", 15);
+                    "文档解析完成，共 " + chapters.size() + " 个章节", 15);
 
             // 2. Load and prepare scenario rules (parse metadata + strip frontmatter)
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在加载审查规则...", 20);
@@ -665,18 +724,23 @@ public class ReviewService {
             // 3. Get AI model config
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
 
-            // 4. Chunk chapters (each chapter = 1 chunk if under maxTokens, otherwise sub-split)
-            List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkByChapters(chapters, maxChunkTokens);
-            log.info("Document split into {} chunk(s) for AI review", chunks.size());
-            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
-                    "文档已切分为 " + chunks.size() + " 个片段，开始调用AI审查...", 30);
-
-            // 试验项目章节识别：从试验概述(7.1)动态提取声明的试验项目清单，供 test_item 规则按章路由。
+            // 4. 试验项目章节识别必须先于切片：通用段的边界就是「第一个试验项目章节」，
+            //    切片需要它才能决定合并到哪里。
             List<String> declaredTestItems = extractDeclaredTestItems(chapters);
             if (!declaredTestItems.isEmpty()) {
                 log.info("Detected {} declared test item(s) from overview: {}",
                         declaredTestItems.size(), declaredTestItems);
             }
+
+            // 5. 切片：通用章节段合并为一片，试验项目章节逐章一片
+            int generalEnd = resolveGeneralSectionEnd(chapters, declaredTestItems);
+            List<ChunkUtils.ChunkResult> chunks =
+                    ChunkUtils.chunkWithGeneralSection(chapters, maxChunkTokens, generalEnd);
+            log.info("Document split into {} chunk(s) for AI review", chunks.size());
+            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                    "文档已切分为 " + chunks.size() + " 个片段"
+                            + (generalEnd > 0 ? "（前 " + generalEnd + " 章合并为通用章节段）" : "")
+                            + "，开始调用AI审查...", 30);
 
             // 5a. Pre-compute dispatch for every chunk so we can write the debug file
             // BEFORE any AI call. This way a 429 / timeout on chunk 1 still leaves a
@@ -687,12 +751,17 @@ public class ReviewService {
                 ChunkUtils.ChunkResult chunk = chunks.get(i);
                 RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
                         chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter,
-                        isTestItemChapter(chunk.getLabel(), declaredTestItems));
+                        isTestItemChapter(chunk.getLabel(), declaredTestItems),
+                        chunk.isGeneralSection(), chunk.titlesForDispatch());
                 dispatches.add(dispatch);
 
                 Map<String, Object> dispatchEntry = new LinkedHashMap<>();
                 dispatchEntry.put("chunk", i + 1);
                 dispatchEntry.put("chapterTitle", chunk.getLabel());
+                dispatchEntry.put("generalSection", chunk.isGeneralSection());
+                if (chunk.isGeneralSection()) {
+                    dispatchEntry.put("mergedChapters", chunk.getMergedTitles());
+                }
                 dispatchEntry.put("appliedRules", dispatch.getAppliedRuleNames());
                 dispatchEntry.put("matchTraces", dispatch.getMatchTraces());
                 chunkDispatchTraces.add(dispatchEntry);
@@ -816,7 +885,7 @@ public class ReviewService {
                 List<List<RuleParser.RuleEntry>> docBatches = partitionDocumentRuleEntries(allDocEntries);
                 DocumentRuleReviewSupport.EvidenceBundle evidence =
                         DocumentRuleReviewSupport.buildEvidence(rawChapters, docRules,
-                                DocumentRuleReviewSupport.DEFAULT_MAX_EVIDENCE_CHARS);
+                                documentMaxEvidenceChars);
                 webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                         "正在进行文档级综合审查（" + docRules.size() + " 条，"
                                 + docBatches.size() + " 批）...", 92);
@@ -1116,6 +1185,9 @@ public class ReviewService {
     /**
      * Split document rules by prompt budget instead of dropping the tail. A single oversized
      * rule still gets its own batch, preserving the contract that every enabled rule is run.
+     *
+     * <p>用 {@link #documentRuleBudgetTokens} 而非逐章预算：分批的目的是给**输出**留余量，
+     * 不是塞满输入。见该字段的说明。
      */
     private List<List<RuleParser.RuleEntry>> partitionDocumentRuleEntries(
             List<RuleParser.RuleEntry> entries) {
@@ -1124,7 +1196,7 @@ public class ReviewService {
         int used = 0;
         for (RuleParser.RuleEntry entry : entries) {
             int cost = estimateEntryTokens(entry);
-            if (!current.isEmpty() && used + cost > RULE_BUDGET_TOKENS) {
+            if (!current.isEmpty() && used + cost > documentRuleBudgetTokens) {
                 batches.add(List.copyOf(current));
                 current.clear();
                 used = 0;
@@ -1196,7 +1268,7 @@ public class ReviewService {
         List<RuleParser.RuleEntry> kept = applyRuleBudget(entries, rulesForChunk);
         if (kept.size() != entries.size()) {
             log.info("Rule budget triggered: chunk rules trimmed from {} → {} (cap={} tokens)",
-                    entries.size(), kept.size(), RULE_BUDGET_TOKENS);
+                    entries.size(), kept.size(), ruleBudgetTokens);
         }
         if (qualityCheck) kept.add(0, builtInQualityRule());
         return kept;
@@ -1270,7 +1342,7 @@ public class ReviewService {
             if (!Boolean.TRUE.equals(isGlobalFlags.get(i))) {
                 RuleParser.RuleEntry e = entries.get(i);
                 int cost = estimateEntryTokens(e);
-                if (budgetUsed + cost > RULE_BUDGET_TOKENS) {
+                if (budgetUsed + cost > ruleBudgetTokens) {
                     continue; // 跳过这一条，继续尝试后续可能更短的
                 }
                 kept.add(e);
@@ -1283,7 +1355,11 @@ public class ReviewService {
     private int estimateEntryTokens(RuleParser.RuleEntry e) {
         int tokens = 0;
         if (e.name != null) tokens += ChunkUtils.estimateTokens(e.name);
-        if (e.body != null) tokens += ChunkUtils.estimateTokens(e.body);
+        // 与 buildStructuredSystemPrompt 保持一致：有检查项时正文只算检查项段之前的部分，
+        // 否则会把同一批检查项算两遍，预算凭空少一半、规则被无谓挤掉。
+        String body = (e.checks != null && !e.checks.isEmpty())
+                ? RuleParser.bodyWithoutChecks(e.body) : e.body;
+        if (body != null) tokens += ChunkUtils.estimateTokens(body);
         if (e.checks != null) {
             for (RuleParser.CheckEntry check : e.checks) {
                 if (check.checkCode != null) tokens += ChunkUtils.estimateTokens(check.checkCode);
@@ -1310,6 +1386,64 @@ public class ReviewService {
         }
         return sb.toString();
     }
+
+    /**
+     * 定出「通用章节段」的结束位置（不含），即第一个试验项目章节在 {@code chapters} 中的下标。
+     *
+     * <p>优先自动识别：试验大纲的结构天然分成两半——前半是通用内容（封面、目录、试验目的、
+     * 范围、引用文件、术语、承试单位、人员职责……），后半是一个个具体试验项目。系统已经能
+     * 从试验概述里提取声明的试验项目清单，用它反查第一个试验项目章节即可，换一份章节数不同
+     * 的大纲也能自适应，不必硬编码「前 12 章」。
+     *
+     * <p>{@code review.chunk.general-section-end-chapter} 可覆盖：试验概述写法不规范、
+     * 提不出清单时用它兜底。
+     *
+     * @return 结束下标（不含）；返回 -1 表示定不出边界，调用方应回退逐章切片
+     */
+    private int resolveGeneralSectionEnd(List<WordParser.Chapter> chapters,
+                                         List<String> declaredTestItems) {
+        if (chapters == null || chapters.isEmpty()) return -1;
+
+        // ① 配置覆盖：找出章节号等于该值的章，其后一位即通用段结束。
+        if (generalSectionEndChapter > 0) {
+            for (int i = 0; i < chapters.size(); i++) {
+                String title = chapters.get(i).getTitle();
+                if (title == null) continue;
+                Matcher m = CHAPTER_NUMBER_IN_TITLE.matcher(title.trim());
+                if (m.find()) {
+                    try {
+                        if (Integer.parseInt(m.group(1)) == generalSectionEndChapter) {
+                            log.info("General section end pinned by config: chapter {} at index {}",
+                                    generalSectionEndChapter, i);
+                            return i + 1;
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // 标题里的数字不是章节号，继续找下一章
+                    }
+                }
+            }
+            log.warn("general-section-end-chapter={} not found in document, falling back to auto detection",
+                    generalSectionEndChapter);
+        }
+
+        // ② 自动识别：第一个试验项目章节。
+        if (declaredTestItems == null || declaredTestItems.isEmpty()) {
+            log.info("No declared test items extracted; general-section merging disabled for this document");
+            return -1;
+        }
+        for (int i = 0; i < chapters.size(); i++) {
+            if (isTestItemChapter(chapters.get(i).getTitle(), declaredTestItems)) {
+                log.info("General section = chapters [0, {}), first test-item chapter: '{}'",
+                        i, chapters.get(i).getTitle());
+                return i;
+            }
+        }
+        log.info("Declared test items present but no chapter matched; general-section merging disabled");
+        return -1;
+    }
+
+    private static final Pattern CHAPTER_NUMBER_IN_TITLE =
+            Pattern.compile("^\\s*(?:第\\s*)?(\\d+)(?:\\s*章)?(?:\\s|[.．、:：-]|$)");
 
     /**
      * 从"试验概述"章节(一般是 7.1)动态提取本受试设备声明应完成的试验项目清单。
@@ -1384,6 +1518,10 @@ public class ReviewService {
     static boolean isTestItemChapter(String chapterTitle, List<String> declaredTestItems) {
         if (chapterTitle == null || declaredTestItems == null || declaredTestItems.isEmpty()) return false;
         String title = chapterTitle.trim();
+        // 空标题必须直接否掉：下面的 it.contains(core) 在 core 为空串时对任何项都成立
+        // （任何字符串都 contains("")），无标题的封面/目录章会被判成试验项目章节，
+        // 既让 test_item 规则注入到前置内容上，也会把通用段边界错误地定到 0。
+        if (title.isEmpty()) return false;
         String core = normalizeTitleCore(title);
         if (core.isEmpty()) core = title;
         for (String item : declaredTestItems) {
@@ -1489,6 +1627,10 @@ public class ReviewService {
 
         int sampleCount = 1;
         List<Map<String, Object>> samples = new ArrayList<>();
+        // 是否拿到过一次可解析的模型应答。R-Q 缺项的兜底判定完全取决于它：模型正常
+        // 应答只是没列某项 = 本章没发现该类问题；模型压根没应答 = 检查没做成，两者
+        // 不能混为一谈（详见 enrichBuiltInQualityChecks）。
+        boolean modelResponded = false;
         for (int s = 0; s < sampleCount; s++) {
             Map<String, Object> parsed = null;
             String aiResponse = null;
@@ -1510,11 +1652,16 @@ public class ReviewService {
             if (parsed == null) {
                 log.warn("Chunk {} sample {} 多次解析仍失败，降级为原始文本 issue。", chunkNum, s + 1);
                 parsed = buildFallbackResult(chunk.getLabel(), aiResponse);
+            } else {
+                modelResponded = true;
             }
             samples.add(parsed);
         }
         Map<String, Object> merged = mergeSamples(samples, chunk.getLabel());
-        if (qualityCheck) enrichBuiltInQualityChecks(merged, chunkHasFiguresOrTables(chunk.getContent()));
+        if (qualityCheck) {
+            enrichBuiltInQualityChecks(
+                    merged, chunkHasFiguresOrTables(chunk.getContent()), modelResponded);
+        }
         enrichResultSourceRefs(merged, chunkIdx, chunk, refIdx);
 
         Map<String, Object> chunkResult = new HashMap<>();
@@ -1606,7 +1753,7 @@ public class ReviewService {
      * The three (or user-edited) basic-quality checks. Loaded from the editable DB rule's
      * {@code rule_checks}; falls back to {@link #defaultBasicQualityChecks()} when the rule
      * row or its active checks are missing. Drives both the prompt and the N/A / missing-item
-     * enforcement in {@link #enrichBuiltInQualityChecks(Map)}.
+     * enforcement in {@link #enrichBuiltInQualityChecks(Map, boolean, boolean)}.
      */
     private List<RuleParser.CheckEntry> basicQualityChecks() {
         Rule dbRule = loadEditableRule(RuleDispatcher.BASIC_QUALITY_RULE_CODE);
@@ -1680,8 +1827,22 @@ public class ReviewService {
                         true));
     }
 
+    /**
+     * 用内置 R-Q 元数据补齐本章的基础文字质量检查项。
+     *
+     * <p>R-Q 的 7 项全是「负面发现型」检查——找错别字、语病、术语不一致、图表编号问题。
+     * 模型审完一章没列某项，正确解读是「本章没发现这类问题」，而不是「需要人再看一遍」：
+     * 补出来的兜底记录没有 evidence、没有 location、没有 suggestion，人工拿到手上无从
+     * 复核，只能把整章重读，等于把模型没干的活原样推回给人。一份 20 章的文档能因此产生
+     * 上百条无定位的待复核，把真正需要人看的问题淹掉。
+     *
+     * <p>所以缺项按 Pass 收敛，只有 {@code modelResponded=false}（响应解析失败、整章降级）
+     * 时才保留待复核——那种情况检查是真的没做成，必须暴露出来。confidence 记 medium
+     * 而不是 high，保留「非模型明确确认」的痕迹，便于事后区分。
+     */
     @SuppressWarnings("unchecked")
-    private void enrichBuiltInQualityChecks(Map<String, Object> result, boolean hasFigures) {
+    private void enrichBuiltInQualityChecks(Map<String, Object> result, boolean hasFigures,
+                                            boolean modelResponded) {
         List<Map<String, Object>> checks = new ArrayList<>();
         if (result.get("check_results") instanceof List<?> rawChecks) {
             for (Object item : rawChecks) {
@@ -1713,12 +1874,18 @@ public class ReviewService {
             missing.put("check_code", entry.checkCode);
             missing.put("rule_code", RuleDispatcher.BASIC_QUALITY_RULE_CODE);
             missing.put("check_question", entry.question);
-            missing.put("status", "Review");
-            missing.put("reason", "模型未返回该基础文字质量检查项，已转为待复核。");
+            if (modelResponded) {
+                missing.put("status", "Pass");
+                missing.put("reason", "模型完成本章审查且未报告该类问题，按未发现处理。");
+                missing.put("confidence", "medium");
+            } else {
+                missing.put("status", "Review");
+                missing.put("reason", "模型响应无法解析，本章基础文字质量检查未完成，需人工复核。");
+                missing.put("confidence", "needs_review");
+            }
             missing.put("evidence", "");
             missing.put("missing_items", new ArrayList<>());
             missing.put("suggestion", "");
-            missing.put("confidence", "needs_review");
             enrichBuiltInQualityCheck(missing, entry, hasFigures);
             checks.add(missing);
         }
@@ -1744,10 +1911,13 @@ public class ReviewService {
             check.put("suggestion", "");
             return;
         }
+        // 模型对基础文字质量检查返回“不适用”：这几项对任何正文章节都适用，所以 N/A 实际
+        // 表达的是“本章没有这类问题可报”。原先一律转待复核，产生的同样是无证据、无定位的
+        // 空壳记录，和缺项兜底是同一类噪声，按同一口径收敛为 Pass。
         if ("N/A".equals(normalizeCheckStatus(check.get("status")))) {
-            check.put("status", "Review");
-            check.put("confidence", "needs_review");
-            check.put("reason", "基础文字质量检查始终适用，模型返回“不适用”，已转为待复核。");
+            check.put("status", "Pass");
+            check.put("confidence", "medium");
+            check.put("reason", "模型判定本项不适用；基础文字质量检查对本章适用，按未发现该类问题处理。");
         }
     }
 
@@ -2533,6 +2703,68 @@ public class ReviewService {
                 listAuditLogs(taskId, userId));
     }
 
+    /**
+     * Save one 原文定位 edit. Audited like a manual decision — a corrected document is a
+     * reviewer action on the record, so it has to be attributable after the fact.
+     */
+    public ReviewTaskDTO saveSourceEdit(String taskId, Long userId, SourceEditRequest request) {
+        ReviewTask task = requireOwnedTask(taskId, userId);
+        if (task.getAiResult() == null) {
+            throw new IllegalArgumentException("No review result available to edit");
+        }
+
+        Map<String, Object> aiResult = new LinkedHashMap<>(task.getAiResult());
+        Map<String, Object> stored = SourceEditStore.upsert(aiResult, request, userId);
+        task.setAiResult(aiResult);
+        task.setUpdatedAt(LocalDateTime.now());
+        reviewTaskMapper.updateById(task);
+
+        ReviewAuditLog audit = new ReviewAuditLog();
+        audit.setTaskId(taskId);
+        audit.setUserId(userId);
+        audit.setAction(stored == null ? "source_edit_revert" : "source_edit");
+        audit.setTargetType("document_node");
+        audit.setTargetId(request.getNodeId());
+        audit.setBeforeValue(auditTextValue(request.getOriginalText()));
+        audit.setAfterValue(auditTextValue(request.getNewText()));
+        audit.setComment(stored == null ? "撤销原文修改" : "原文修改");
+        audit.setCreatedAt(LocalDateTime.now());
+        reviewAuditLogMapper.insert(audit);
+
+        return toDTO(task, false);
+    }
+
+    public ReviewTaskDTO clearSourceEdits(String taskId, Long userId) {
+        ReviewTask task = requireOwnedTask(taskId, userId);
+        if (task.getAiResult() == null) {
+            throw new IllegalArgumentException("No review result available to edit");
+        }
+        Map<String, Object> aiResult = new LinkedHashMap<>(task.getAiResult());
+        int removed = SourceEditStore.clear(aiResult);
+        task.setAiResult(aiResult);
+        task.setUpdatedAt(LocalDateTime.now());
+        reviewTaskMapper.updateById(task);
+        log.info("Cleared {} source edit(s) on task {}", removed, taskId);
+        return toDTO(task, false);
+    }
+
+    private static Map<String, Object> auditTextValue(String text) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("text", text == null ? "" : text);
+        return value;
+    }
+
+    /**
+     * Export the uploaded document with the reviewer's corrections applied in place.
+     * With no edits recorded this is a faithful re-save of the original document.
+     */
+    public byte[] exportRevisedDocument(String taskId, Long userId) throws IOException {
+        ReviewTask task = requireOwnedTask(taskId, userId);
+        return DocumentRevisionWriter
+                .apply(task.getFilePath(), SourceEditStore.toWriterEdits(task.getAiResult()))
+                .bytes();
+    }
+
     private static String strField(Map<String, Object> map, String key) {
         Object v = map.get(key);
         return v == null ? "" : v.toString();
@@ -2540,6 +2772,15 @@ public class ReviewService {
 
     private static String firstNonBlank(String a, String b) {
         return a == null || a.isBlank() ? (b == null ? "" : b) : a;
+    }
+
+    /**
+     * 存量任务的 review_category 可能为空（该列晚于任务表加入，且 light 查询之外的历史行
+     * 未必回填过），一律按环境试验大纲回显——加类别之前系统只审试验大纲，这个回落是
+     * 事实正确的，也让前端不必处理空值。
+     */
+    private static String resolveCategory(String raw) {
+        return raw == null || raw.isBlank() ? ReviewCategory.ENV_TEST_OUTLINE : raw;
     }
 
     private ReviewTask requireOwnedTask(String taskId, Long userId) {
@@ -2681,14 +2922,14 @@ public class ReviewService {
             return sources;
         }
         try {
+            // 这里的切片必须与审查时一致：CHUNK-00N 溯源 id 是按切片序号生成的，切法
+            // 不同就会让结果里的 sourceChunk 指到别的章节上。
             List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
-            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
-            List<WordParser.Chapter> chapters = firstRealIdx > 0
-                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
-                    : rawChapters;
+            List<String> declaredTestItems = extractDeclaredTestItems(rawChapters);
             return buildOriginalSources(
                     rawChapters,
-                    ChunkUtils.chunkByChapters(chapters, maxChunkTokens));
+                    ChunkUtils.chunkWithGeneralSection(rawChapters, maxChunkTokens,
+                            resolveGeneralSectionEnd(rawChapters, declaredTestItems)));
         } catch (Exception e) {
             log.warn("Failed to build original source view for task {}: {}", task.getId(), e.getMessage());
         }
@@ -2733,6 +2974,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
+        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -2752,6 +2994,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
+        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -2787,6 +3030,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
+        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
         return dto;
     }
 }

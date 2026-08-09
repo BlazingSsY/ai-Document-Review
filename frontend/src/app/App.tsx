@@ -10,6 +10,7 @@ import ModelConfigPage from '../features/modelConfig/pages/ModelConfigPage';
 import DataBoardPage from '../features/dashboard/pages/DataBoardPage';
 import ProfilePage from '../features/users/pages/ProfilePage';
 import UserManagementPage from '../features/users/pages/UserManagementPage';
+import MemberManagementPage from '../features/users/pages/MemberManagementPage';
 
 function App() {
   return (
@@ -39,6 +40,7 @@ function App() {
         <Route path="models" element={<ModelConfigPage />} />
         <Route path="analytics" element={<DataBoardPage />} />
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="members" element={<MemberManagementPage />} />
         <Route path="users" element={<UserManagementPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

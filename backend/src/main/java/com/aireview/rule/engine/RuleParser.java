@@ -246,6 +246,23 @@ public class RuleParser {
      * </ol>
      * 末尾追加严重度默认值兜底和"只能用清单内编号"的约束，把模型自由度压到最小。
      */
+    /**
+     * {@code MultiRuleParser.renderCanonicalRuleBody} 渲染检查项段落时用的固定标题。
+     * 提示词与 token 预算都靠它把「规则头部」与「检查项清单」切开。
+     */
+    private static final String CHECKS_SECTION_MARKER = "## 原子检查项";
+
+    /**
+     * 取规则正文中检查项段之前的部分（规则编号、说明等）。
+     *
+     * <p>仅对 JSON 规则包渲染出的正文有效；Markdown 规则正文没有该标记，原样返回。
+     */
+    public static String bodyWithoutChecks(String body) {
+        if (body == null || body.isBlank()) return body;
+        int idx = body.indexOf(CHECKS_SECTION_MARKER);
+        return idx < 0 ? body : body.substring(0, idx).trim();
+    }
+
     public static String buildStructuredSystemPrompt(List<RuleEntry> rules) {
         List<RuleEntry> sorted = new ArrayList<>(rules == null ? List.of() : rules);
         sorted.sort(Comparator
@@ -292,8 +309,14 @@ public class RuleParser {
             sp.append("\n[").append(code).append("] ");
             if (e.name != null && !e.name.isBlank()) sp.append(e.name);
             sp.append("\n");
-            if (e.body != null && !e.body.isBlank()) {
-                sp.append(e.body.trim()).append("\n");
+            // 有原子检查项时，正文只取检查项段之前的部分：JSON 规则包的 body 是
+            // MultiRuleParser 渲染出来的，本身就把每条检查项完整写了一遍，下面还会再
+            // 以更紧凑的形式输出一次。不裁掉的话每个检查项在提示词里出现两次，白白吃掉
+            // 一倍的规则 token 预算，规则条数一多就会有规则被预算挤掉而静默不生效。
+            String body = (e.checks != null && !e.checks.isEmpty())
+                    ? bodyWithoutChecks(e.body) : e.body;
+            if (body != null && !body.isBlank()) {
+                sp.append(body.trim()).append("\n");
             }
             if (e.checks != null && !e.checks.isEmpty()) {
                 sp.append("原子检查项（必须逐项输出 check_results）：\n");

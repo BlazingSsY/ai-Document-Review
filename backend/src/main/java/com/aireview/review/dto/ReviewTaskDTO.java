@@ -30,4 +30,9 @@ public class ReviewTaskDTO {
      * 由列表/详情接口在序列化时填入，让前端按管线分流后续调用。
      */
     private String reviewMode;
+    /**
+     * 审查类别（业务域），取值见 {@code ReviewCategory}，如 "ENV_TEST_OUTLINE"。
+     * 与 {@link #reviewMode} 正交：类别说明审的是什么文件，管线说明用什么方法审。
+     */
+    private String reviewCategory;
 }

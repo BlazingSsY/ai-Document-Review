@@ -235,6 +235,37 @@ export function findIssueChunk(
   return chunks[0];
 }
 
+/**
+ * Identity of one source edit. Must stay byte-identical to the backend's
+ * SourceEditStore.editKey — a paragraph is keyed by node alone, a table cell by node
+ * plus its 1-based logical coordinates. If the two drift, saving a cell edit would
+ * fail to replace the previous one and the export would apply a stale correction.
+ */
+export function sourceEditKey(
+  nodeId: string,
+  cellRow?: number | null,
+  cellColumn?: number | null,
+): string {
+  if (cellRow === undefined || cellRow === null || cellColumn === undefined || cellColumn === null) {
+    return `${nodeId}|-|-`;
+  }
+  return `${nodeId}|${cellRow}|${cellColumn}`;
+}
+
+/** nodeId(+cell) → 已保存的修改文本，供原文面板渲染「已修改」态。 */
+export function buildSourceEditMap(edits: Array<Record<string, unknown>>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const edit of edits) {
+    const nodeId = textField(edit, ['nodeId']);
+    if (!nodeId) continue;
+    map.set(
+      sourceEditKey(nodeId, numericField(edit, ['cellRow']), numericField(edit, ['cellColumn'])),
+      String(edit.newText ?? ''),
+    );
+  }
+  return map;
+}
+
 export function checkStatusColor(status: string): string {
   if (status === 'Pass') return 'green';
   if (status === 'Partial') return 'orange';
