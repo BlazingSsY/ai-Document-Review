@@ -24,7 +24,9 @@ interface ScenarioListPageProps {
 
 function ScenarioListPage({ reviewMode }: ScenarioListPageProps) {
   const user = useAuthStore((s) => s.user);
-  const canManage = user?.role === 'supervisor' || user?.role === 'admin';
+  // 已获功能授权的普通用户也需要能用已分配规则库组装自己的审查场景；
+  // 后端按创建者和规则库授权再次校验，不能编辑他人场景或引用未授权规则库。
+  const canManage = Boolean(user);
 
   // 按管线挑出对应的 API 客户端。两条管线的接口签名完全一致，只是 URL 不同。
   const scenarioApi = useMemo(() => getScenarioApi(reviewMode), [reviewMode]);

@@ -2,7 +2,11 @@ package com.aireview.user.service;
 
 import com.aireview.common.dto.PageResponse;
 import com.aireview.user.dto.MemberImportResult;
+import com.aireview.user.dto.MemberPermissionUpdateRequest;
+import com.aireview.user.dto.MemberPermissionsDTO;
+import com.aireview.user.dto.SystemFeatureDTO;
 import com.aireview.user.dto.UserDTO;
+import com.aireview.rule.service.RuleLibraryService;
 import com.aireview.user.entity.Unit;
 import com.aireview.user.entity.User;
 import com.aireview.user.repository.UnitMapper;
@@ -35,7 +39,7 @@ import java.util.Set;
  * 单位与成员管理。
  *
  * <h2>权限边界</h2>
- * 单位管理员（admin）只能操作本单位成员，项目主管（supervisor）跨单位。这个约束不是靠
+ * 单位管理员（admin）可以操作本单位及下级单位成员，平台管理员（supervisor）跨单位。这个约束不是靠
  * 前端不显示按钮来保证的——每个写操作都在服务端重新核对目标成员的 unit_id，
  * 见 {@link #requireManageable}。
  *
@@ -51,6 +55,8 @@ public class MemberService {
     private final UserMapper userMapper;
     private final UnitMapper unitMapper;
     private final UserService userService;
+    private final FeaturePermissionService featurePermissionService;
+    private final RuleLibraryService ruleLibraryService;
     private final PasswordEncoder passwordEncoder;
 
     /** 导入成员的统一初始密码。成员首次登录被强制改密后即失效。 */
@@ -78,17 +84,30 @@ public class MemberService {
 
     // ---------------- 单位 ----------------
 
-    public List<Unit> listUnits() {
-        return unitMapper.findAllOrdered();
+    public List<Unit> listUnits(Long operatorId) {
+        Operator operator = requireManager(loadOperator(operatorId));
+        List<Unit> all = unitMapper.findAllOrdered();
+        if (operator.isSupervisor()) return all;
+        Set<Long> manageable = new HashSet<>(manageableUnitIds(operator));
+        return all.stream().filter(unit -> manageable.contains(unit.getId())).toList();
     }
 
-    public Unit createUnit(String name, String code, String remark) {
+    public Unit createUnit(Long parentId, String name, String code, String remark, Long operatorId) {
+        Operator operator = requireManager(loadOperator(operatorId));
+        if (operator.isAdmin() && parentId == null) {
+            throw new IllegalArgumentException("单位管理员只能在本单位或下级单位下新建单位");
+        }
+        if (parentId != null) {
+            if (unitMapper.selectById(parentId) == null) throw new IllegalArgumentException("上级单位不存在");
+            requireUnitManageable(parentId, operator);
+        }
         String trimmed = name == null ? "" : name.trim();
         if (trimmed.isEmpty()) throw new IllegalArgumentException("单位名称不能为空");
         Unit existing = unitMapper.findByName(trimmed);
         if (existing != null) throw new IllegalArgumentException("单位已存在：" + trimmed);
         Unit unit = new Unit();
         unit.setName(trimmed);
+        unit.setParentId(parentId);
         unit.setCode(code == null || code.isBlank() ? null : code.trim());
         unit.setRemark(remark);
         unit.setCreatedAt(LocalDateTime.now());
@@ -98,7 +117,16 @@ public class MemberService {
         return unit;
     }
 
-    public void deleteUnit(Long unitId) {
+    public void deleteUnit(Long unitId, Long operatorId) {
+        Operator operator = requireManager(loadOperator(operatorId));
+        requireUnitManageable(unitId, operator);
+        if (operator.isAdmin() && unitId.equals(operator.unitId())) {
+            throw new IllegalArgumentException("不能删除自己所属的单位");
+        }
+        long children = unitMapper.countChildren(unitId);
+        if (children > 0) {
+            throw new IllegalArgumentException("该单位下还有 " + children + " 个下级单位，请先处理下级单位");
+        }
         long members = userMapper.countByUnit(unitId);
         if (members > 0) {
             // 直接删会把成员的 unit_id 置空，变成一批无归属的游离账号，看板统计也会凭空
@@ -114,25 +142,31 @@ public class MemberService {
     /**
      * 分页查询成员。
      *
-     * @param unitId 按单位过滤；null 表示不限。admin 会被强制收敛到自己单位
+     * @param unitId 按单位过滤；null 表示操作者可管理的全部范围
      */
     public PageResponse<UserDTO> listMembers(int page, int size, Long unitId, String keyword,
                                              Long operatorId) {
-        Operator operator = loadOperator(operatorId);
+        Operator operator = requireManager(loadOperator(operatorId));
         Long effectiveUnit = unitId;
+        List<Long> scope = null;
         if (operator.isAdmin()) {
-            // 单位管理员无论请求什么 unitId，一律只看得到本单位——查询条件在服务端覆盖，
-            // 不依赖前端传对参数。
-            effectiveUnit = operator.unitId();
+            scope = manageableUnitIds(operator);
+            if (effectiveUnit != null && !scope.contains(effectiveUnit)) {
+                throw new IllegalArgumentException("所选单位不在您的管辖范围内");
+            }
         }
 
         LambdaQueryWrapper<User> query = new LambdaQueryWrapper<>();
         if (effectiveUnit != null) {
             query.eq(User::getUnitId, effectiveUnit);
+        } else if (scope != null) {
+            query.in(User::getUnitId, scope);
         }
         if (keyword != null && !keyword.isBlank()) {
             String kw = keyword.trim();
-            query.and(w -> w.like(User::getName, kw).or().like(User::getUsername, kw));
+            query.and(w -> w.like(User::getName, kw)
+                    .or().like(User::getUsername, kw)
+                    .or().like(User::getEmail, kw));
         }
         query.orderByDesc(User::getCreatedAt);
 
@@ -153,6 +187,20 @@ public class MemberService {
         return userService.toDTO(user);
     }
 
+    /** 兼容原“用户管理”能力：平台账号与组织成员仍写入同一 users 表。 */
+    @Transactional
+    public UserDTO createPlatformAccount(String email, String password, String name, String role,
+                                         Long operatorId) {
+        Operator operator = loadOperator(operatorId);
+        if (!operator.isSupervisor()) throw new IllegalArgumentException("只有平台管理员可以创建平台账号");
+        if (email == null || email.isBlank()) throw new IllegalArgumentException("平台账号不能为空");
+        if (password == null || password.length() < 6) throw new IllegalArgumentException("初始密码至少 6 位");
+        if (ROLE_ADMIN.equals(normalizeRole(role))) {
+            throw new IllegalArgumentException("单位管理员必须创建为有组织归属的成员");
+        }
+        return userService.createUser(email, password, name, ROLE_USER);
+    }
+
     @Transactional
     public void deleteMember(Long memberId, Long operatorId) {
         User target = requireManageable(memberId, loadOperator(operatorId));
@@ -160,15 +208,13 @@ public class MemberService {
         log.info("Member {} deleted", memberId);
     }
 
-    /** 单位管理员只能在本单位内改角色，且改不了主管。 */
+    /** 兼容旧接口；新页面通过统一权限接口同时保存角色、功能与规则库。 */
     @Transactional
     public void updateMemberRole(Long memberId, String role, Long operatorId) {
         Operator operator = loadOperator(operatorId);
         User target = requireManageable(memberId, operator);
         String normalized = normalizeRole(role);
-        if (ROLE_SUPERVISOR.equals(normalized) && !operator.isSupervisor()) {
-            throw new IllegalArgumentException("只有项目主管可以授予项目主管角色");
-        }
+        if (ROLE_SUPERVISOR.equals(normalized)) throw new IllegalArgumentException("平台管理员角色不可在组织成员中授予");
         target.setRole(normalized);
         userMapper.updateById(target);
         log.info("Member {} role changed to {}", memberId, normalized);
@@ -182,6 +228,88 @@ public class MemberService {
         target.setMustChangePassword(true);
         userMapper.updateById(target);
         log.info("Member {} password reset to default", memberId);
+    }
+
+    // ---------------- 统一权限 ----------------
+
+    public List<SystemFeatureDTO> listGrantableFeatures(Long operatorId) {
+        Operator operator = requireManager(loadOperator(operatorId));
+        if (operator.isSupervisor()) return featurePermissionService.listAllFeatures();
+        Set<String> own = new HashSet<>(featurePermissionService.getFeatureCodes(operator.id()));
+        return featurePermissionService.listAllFeatures().stream()
+                .filter(feature -> own.contains(feature.getCode()))
+                .toList();
+    }
+
+    public MemberPermissionsDTO getMemberPermissions(Long memberId, Long operatorId) {
+        User target = requireManageable(memberId, requireManager(loadOperator(operatorId)));
+        MemberPermissionsDTO dto = new MemberPermissionsDTO();
+        dto.setUserId(target.getId());
+        dto.setRole(target.getRole());
+        dto.setFeatureCodes(featurePermissionService.getFeatureCodes(target.getId()));
+        dto.setLibraryIds(userService.getAssignedLibraryIds(target.getId()));
+        return dto;
+    }
+
+    /**
+     * 原子保存成员角色、功能与规则库。单位管理员只能向下转授自己已拥有的权限，
+     * 平台管理员可分配全部已登记功能和规则库。
+     */
+    @Transactional
+    public void updateMemberPermissions(Long memberId, MemberPermissionUpdateRequest request,
+                                        Long operatorId) {
+        Operator operator = requireManager(loadOperator(operatorId));
+        User target = requireManageable(memberId, operator);
+        String normalizedRole = normalizeRole(request == null ? null : request.getRole());
+        if (ROLE_SUPERVISOR.equals(normalizedRole)) {
+            throw new IllegalArgumentException("平台管理员角色不可通过成员授权下放");
+        }
+        if (ROLE_ADMIN.equals(normalizedRole) && target.getUnitId() == null) {
+            throw new IllegalArgumentException("单位管理员必须归属具体单位");
+        }
+
+        List<String> requestedFeatures = request == null || request.getFeatureCodes() == null
+                ? List.of() : request.getFeatureCodes();
+        Set<String> grantableFeatures = new HashSet<>(operator.isSupervisor()
+                ? featurePermissionService.listAllFeatures().stream().map(SystemFeatureDTO::getCode).toList()
+                : featurePermissionService.getFeatureCodes(operator.id()));
+        if (!grantableFeatures.containsAll(requestedFeatures)) {
+            throw new IllegalArgumentException("不能分配超出自己权限范围的功能");
+        }
+        List<String> effectiveFeatures = new ArrayList<>(requestedFeatures);
+        if (!operator.isSupervisor()) {
+            featurePermissionService.getFeatureCodes(target.getId()).stream()
+                    .filter(code -> !grantableFeatures.contains(code))
+                    .forEach(effectiveFeatures::add);
+        }
+
+        List<Long> requestedLibraries = request == null || request.getLibraryIds() == null
+                ? List.of() : request.getLibraryIds();
+        if (!requestedLibraries.isEmpty()
+                && !requestedFeatures.contains(FeaturePermissionService.ENV_TEST_OUTLINE_REVIEW)) {
+            throw new IllegalArgumentException("分配规则库前必须同时分配环境试验大纲审查功能");
+        }
+        String operatorRole = operator.isSupervisor() ? ROLE_SUPERVISOR : operator.role();
+        Set<Long> grantableLibraries = new HashSet<>(
+                ruleLibraryService.grantableLibraryIds(operator.id(), operatorRole));
+        if (!grantableLibraries.containsAll(requestedLibraries)) {
+            throw new IllegalArgumentException("不能分配不存在或超出自己权限范围的规则库");
+        }
+        List<Long> effectiveLibraries = new ArrayList<>(requestedLibraries);
+        if (!operator.isSupervisor()) {
+            userService.getAssignedLibraryIds(target.getId()).stream()
+                    .filter(id -> !grantableLibraries.contains(id))
+                    .forEach(effectiveLibraries::add);
+        }
+
+        target.setRole(normalizedRole);
+        userMapper.updateById(target);
+        featurePermissionService.replaceAssignments(
+                target.getId(), effectiveFeatures.stream().distinct().toList());
+        userService.assignLibrariesToUser(
+                target.getId(), effectiveLibraries.stream().distinct().toList());
+        log.info("Permissions updated: member={}, role={}, features={}, libraries={}",
+                memberId, normalizedRole, requestedFeatures.size(), requestedLibraries.size());
     }
 
     // ---------------- Excel 导入 ----------------
@@ -265,11 +393,8 @@ public class MemberService {
         String trimmed = unitName.trim();
         Unit unit = unitMapper.findByName(trimmed);
         if (unit == null) {
-            if (!operator.isSupervisor()) {
-                // 单位管理员不能借导入之名创建新单位——那等于绕过本单位的权限边界。
-                throw new IllegalArgumentException("单位「" + trimmed + "」不存在，且您只能导入本单位成员");
-            }
-            unit = createUnit(trimmed, null, "Excel 导入时自动创建");
+            Long parentId = operator.isSupervisor() ? null : operator.unitId();
+            unit = createUnit(parentId, trimmed, null, "Excel 导入时自动创建", operator.id());
         }
         requireUnitManageable(unit.getId(), operator);
         return unit;
@@ -300,7 +425,11 @@ public class MemberService {
         user.setUsername(loginName);
         user.setName(name == null || name.isBlank() ? loginName : name.trim());
         user.setIdCard(normalizedId);
-        user.setRole(normalizeRole(role));
+        String normalizedRole = normalizeRole(role);
+        if (ROLE_SUPERVISOR.equals(normalizedRole)) {
+            throw new IllegalArgumentException("组织成员不能设置为平台管理员");
+        }
+        user.setRole(normalizedRole);
         user.setPasswordHash(passwordEncoder.encode(defaultPassword));
         user.setMustChangePassword(true);
         user.setCreatedAt(LocalDateTime.now());
@@ -322,9 +451,23 @@ public class MemberService {
         if (!operator.isAdmin()) {
             throw new IllegalArgumentException("没有成员管理权限");
         }
-        if (operator.unitId() == null || !operator.unitId().equals(unitId)) {
-            throw new IllegalArgumentException("只能管理本单位的成员");
+        if (unitId == null || !manageableUnitIds(operator).contains(unitId)) {
+            throw new IllegalArgumentException("只能管理本单位及下级单位的成员");
         }
+    }
+
+    private List<Long> manageableUnitIds(Operator operator) {
+        if (operator.unitId() == null) throw new IllegalArgumentException("管理员尚未归属任何单位");
+        List<Long> ids = unitMapper.findSubtreeIds(operator.unitId());
+        if (ids == null || ids.isEmpty()) throw new IllegalArgumentException("管理员所属单位不存在");
+        return ids;
+    }
+
+    private Operator requireManager(Operator operator) {
+        if (!operator.isSupervisor() && !operator.isAdmin()) {
+            throw new IllegalArgumentException("没有成员与权限管理权限");
+        }
+        return operator;
     }
 
     /**
@@ -338,7 +481,7 @@ public class MemberService {
             throw new IllegalArgumentException("不能对自己执行该操作");
         }
         if (ROLE_SUPERVISOR.equals(target.getRole())) {
-            throw new IllegalArgumentException("不能操作项目主管账号");
+            throw new IllegalArgumentException("不能操作平台管理员账号");
         }
         requireUnitManageable(target.getUnitId(), operator);
         return target;

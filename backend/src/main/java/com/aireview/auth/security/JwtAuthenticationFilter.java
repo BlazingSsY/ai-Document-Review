@@ -1,5 +1,7 @@
 package com.aireview.auth.security;
 
+import com.aireview.user.entity.User;
+import com.aireview.user.repository.UserMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -23,6 +25,7 @@ import java.util.List;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
+    private final UserMapper userMapper;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -35,7 +38,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 if ("access".equals(tokenType)) {
                     Long userId = jwtTokenProvider.getUserIdFromToken(token);
                     String email = jwtTokenProvider.getEmailFromToken(token);
-                    String role = jwtTokenProvider.getRoleFromToken(token);
+                    // 角色会被平台管理员动态调整，不能在 access token 有效期内一直相信
+                    // 旧 claim；每次请求取数据库当前角色，使升权和降权都立即生效。
+                    User currentUser = userMapper.selectById(userId);
+                    if (currentUser == null) {
+                        filterChain.doFilter(request, response);
+                        return;
+                    }
+                    String role = currentUser.getRole() == null ? "user" : currentUser.getRole();
 
                     List<SimpleGrantedAuthority> authorities =
                             List.of(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()));

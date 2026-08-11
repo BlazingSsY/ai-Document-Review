@@ -35,6 +35,71 @@ function renderRuleTypeTag(ruleType?: string) {
   return <Tag color={meta?.color || 'default'}>{meta?.label || ruleType}</Tag>;
 }
 
+function normalizedRuleType(ruleType?: string) {
+  return (ruleType || 'global').toLowerCase();
+}
+
+function getKeywordFieldMeta(ruleType?: string) {
+  switch (normalizedRuleType(ruleType)) {
+    case 'document_specific':
+      return {
+        label: '证据检索词',
+        extra: '不决定规则是否执行。文档级规则始终执行一次；这里只保留 1～2 个高辨识度词，用于从全文选择相关原文。纯目录或顺序规则可留空。',
+        placeholder: '选择或输入少量证据检索词',
+      };
+    case 'test_item_chapter':
+      return {
+        label: '章节匹配词',
+        extra: '用于将规则收敛到正确的试验项目章节。建议只保留试验名称及必要标题变体；留空会应用到全部试验项目章节。',
+        placeholder: '选择或输入试验章节标题关键词',
+      };
+    case 'section_specific':
+      return {
+        label: '章节匹配词',
+        extra: '用于匹配文档一级标题并决定专项规则的应用章节。建议只保留 1～2 个高辨识度标题词。',
+        placeholder: '选择或输入专项章节标题关键词',
+      };
+    default:
+      return {
+        label: '辅助关键词（可选）',
+        extra: '当前规则类型不使用关键词决定适用范围；无检索或管理需要时建议留空。',
+        placeholder: '可选，不参与当前规则类型的路由',
+      };
+  }
+}
+
+function renderRuleScope(rule: Rule) {
+  const ruleType = normalizedRuleType(rule.ruleType);
+  if (ruleType === 'document_specific') return <Tag color="purple">全文（文档级）</Tag>;
+  if (ruleType === 'general_chapter') return <Tag color="green">通用章节段</Tag>;
+  if (ruleType === 'global') return <Tag>全文各章节</Tag>;
+  if (ruleType === 'output') return <Tag color="cyan">全文各章节</Tag>;
+
+  const scopes = Array.from(new Set([
+    ...(rule.sections || []).map((section) => `第 ${section} 章`),
+    ...(rule.keywords || []),
+  ].filter(Boolean)));
+
+  if (scopes.length === 0) {
+    return ruleType === 'test_item_chapter'
+      ? <Tag color="orange">全部试验项目章节</Tag>
+      : <Text type="warning" style={{ fontSize: 12 }}>未设置章节匹配范围</Text>;
+  }
+
+  const visibleScopes = scopes.slice(0, 2);
+  const hiddenCount = scopes.length - visibleScopes.length;
+  return (
+    <Tooltip title={scopes.join('、')}>
+      <Space wrap size={4}>
+        {visibleScopes.map((scope) => (
+          <Tag key={scope} color="blue" style={{ marginInlineEnd: 0 }}>{scope}</Tag>
+        ))}
+        {hiddenCount > 0 && <Tag style={{ marginInlineEnd: 0 }}>+{hiddenCount}</Tag>}
+      </Space>
+    </Tooltip>
+  );
+}
+
 function hasRuleMetadata(rule: Rule): boolean {
   return Boolean(
     rule.ruleCode || rule.ruleType || rule.documentType
@@ -117,6 +182,7 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editForm] = Form.useForm();
+  const editingRuleType = Form.useWatch('ruleType', editForm) as string | undefined;
   // 内容编辑（正文 + 原子检查项）
   const [contentModalOpen, setContentModalOpen] = useState(false);
   const [editingContentRule, setEditingContentRule] = useState<Rule | null>(null);
@@ -698,18 +764,7 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
       title: '适用范围', key: 'scope',
       width: RULE_COL_WIDTHS.scope,
       onHeaderCell: () => noWrapHeader,
-      render: (_, record) => {
-        if (!record.keywords || record.keywords.length === 0) {
-          return <Text type="secondary" style={{ fontSize: 12 }}>全文档</Text>;
-        }
-        return (
-          <Space wrap size={4}>
-            {record.keywords.map((k) => (
-              <Tag key={k} color="blue" style={{ marginInlineEnd: 0 }}>{k}</Tag>
-            ))}
-          </Space>
-        );
-      },
+      render: (_, record) => renderRuleScope(record),
     },
     {
       title: '来源文件', dataIndex: 'sourceFile', key: 'sourceFile',
@@ -1015,7 +1070,7 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
                     </Descriptions.Item>
                   )}
                   {previewRule.keywords && previewRule.keywords.length > 0 && (
-                    <Descriptions.Item label="匹配关键词" span={2}>
+                    <Descriptions.Item label={getKeywordFieldMeta(previewRule.ruleType).label} span={2}>
                       <Space wrap>
                         {previewRule.keywords.map((k) => <Tag color="blue" key={k}>{k}</Tag>)}
                       </Space>
@@ -1074,13 +1129,13 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
           </Form.Item>
           <Form.Item
             name="keywords"
-            label="匹配关键词"
-            extra="自定义本规则的匹配关键词：审查时会与上传文档的一级标题做匹配，命中任一关键词即认为该规则适用于该章节（仅专项规则按此触发）。例如磁影响章节可同时填“磁影响、磁效应”。下拉可选当前已有关键词，也可直接键入后回车新增。"
+            label={getKeywordFieldMeta(editingRuleType || editingRule?.ruleType).label}
+            extra={getKeywordFieldMeta(editingRuleType || editingRule?.ruleType).extra}
           >
             <Select
               mode="tags"
               tokenSeparators={[',', '，']}
-              placeholder="选择或输入匹配关键词"
+              placeholder={getKeywordFieldMeta(editingRuleType || editingRule?.ruleType).placeholder}
               options={libraryScopeOptions}
             />
           </Form.Item>
@@ -1110,14 +1165,14 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
             <Form.Item
               name="content"
               label="规则正文"
-              extra="规则的文本主体（.md/.json 内容）。全文逐章审查直接据此审查；智能召回 / 结构化审查以下方的原子检查项为准。"
+              extra="规则的文本主体（.md/.json 内容），全文逐章审查将直接依据该内容执行。"
             >
               <Input.TextArea rows={8} placeholder="规则正文内容" />
             </Form.Item>
 
             <Typography.Title level={5} style={{ marginBottom: 0 }}>原子检查项</Typography.Title>
             <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-              每条 = 一个独立是/否判定；智能召回 / 结构化审查按这些检查项逐项判定 通过 / 不通过 / 待复核。
+              每条代表一个独立判定项，用于规则内容的结构化维护与结果追踪。
             </Typography.Paragraph>
 
             <Form.List name="checks">

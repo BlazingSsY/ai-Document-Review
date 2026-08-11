@@ -85,6 +85,104 @@ export function recordArray(value: unknown): Array<Record<string, unknown>> {
   ));
 }
 
+interface DocumentPosition {
+  chunk: number;
+  chapter: number;
+  node: number;
+  section: number[];
+  originalIndex: number;
+}
+
+const UNKNOWN_DOCUMENT_POSITION = Number.MAX_SAFE_INTEGER;
+
+function sourceIdPosition(value: string): { chapter?: number; node?: number } {
+  const match = value.match(/(?:^|-)C(\d+)(?:-N(\d+))?/i);
+  if (!match) return {};
+  return {
+    chapter: Number(match[1]),
+    node: match[2] ? Number(match[2]) : undefined,
+  };
+}
+
+function sourceIdChunk(value: string): number | undefined {
+  const match = value.match(/^CHUNK-(\d+)$/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+function sectionNumberPath(value: string): number[] {
+  const matches = value.match(/\d+(?:[.．]\d+)*/g);
+  const deepestSection = matches?.[matches.length - 1];
+  return deepestSection
+    ? deepestSection.split(/[.．]/).map(Number).filter(Number.isFinite)
+    : [];
+}
+
+function compareNumberPaths(left: number[], right: number[]): number {
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left[index] ?? -1;
+    const rightPart = right[index] ?? -1;
+    if (leftPart !== rightPart) return leftPart - rightPart;
+  }
+  return 0;
+}
+
+function itemDocumentPosition(item: Record<string, unknown>, originalIndex: number): DocumentPosition {
+  const refs = recordArray(item.sourceRefs);
+  // matched_chunk carries the exact node hit. Other references can be supporting
+  // chapters and must not move an item away from its actual finding location.
+  const primaryRef = refs.find((ref) => textField(ref, ['reason']) === 'matched_chunk')
+    ?? refs.find((ref) => textField(ref, ['startNodeId', 'start_node_id']))
+    ?? refs[0];
+
+  const sourceId = textField(primaryRef, ['sourceId', 'blockId']);
+  const startNodeId = textField(item, ['startNodeId', 'start_node_id'])
+    || textField(primaryRef, ['startNodeId', 'start_node_id']);
+  const sourcePosition = sourceIdPosition(startNodeId || sourceId);
+  const chunk = numericField(item, ['sourceChunk', 'chunk', 'chunkNo', 'chunkIndex'])
+    ?? numericField(primaryRef, ['chunk', 'sourceChunk'])
+    ?? sourceIdChunk(sourceId)
+    ?? UNKNOWN_DOCUMENT_POSITION;
+  const chapter = numericField(item, ['chapterIndex'])
+    ?? numericField(primaryRef, ['chapterIndex'])
+    ?? sourcePosition.chapter
+    ?? UNKNOWN_DOCUMENT_POSITION;
+  const node = sourcePosition.node ?? UNKNOWN_DOCUMENT_POSITION;
+  const section = sectionNumberPath(
+    textField(primaryRef, ['sectionPath', 'title', 'sourceTitle'])
+      || textField(item, ['sectionPath', 'sourceTitle', 'chapterTitle', 'location']),
+  );
+
+  return { chunk, chapter, node, section, originalIndex };
+}
+
+/**
+ * Return review items in the order their primary evidence appears in the source
+ * document. The final original-index tie breaker keeps the ordering deterministic
+ * for several rules that point at the same paragraph or for document-level checks
+ * that do not have one precise source node.
+ */
+export function sortReviewItemsByDocumentOrder(
+  items: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return items
+    .map((item, originalIndex) => ({ item, position: itemDocumentPosition(item, originalIndex) }))
+    .sort((left, right) => {
+      if (left.position.chunk !== right.position.chunk) {
+        return left.position.chunk - right.position.chunk;
+      }
+      if (left.position.chapter !== right.position.chapter) {
+        return left.position.chapter - right.position.chapter;
+      }
+      if (left.position.node !== right.position.node) {
+        return left.position.node - right.position.node;
+      }
+      const sectionOrder = compareNumberPaths(left.position.section, right.position.section);
+      return sectionOrder || left.position.originalIndex - right.position.originalIndex;
+    })
+    .map(({ item }) => item);
+}
+
 export function sourceRefKey(ref: Record<string, unknown>): string {
   const sourceId = textField(ref, ['sourceId', 'blockId']);
   if (sourceId) return `id:${sourceId}`;
@@ -277,6 +375,23 @@ export function checkStatusColor(status: string): string {
 export function isProblemCheck(item: Record<string, unknown>): boolean {
   const status = textField(item, ['manualStatus', 'status']);
   return status !== 'Pass' && status !== 'N/A';
+}
+
+/**
+ * Business checks form a complete matrix, so Pass/Fail/Review are all visible.
+ * Basic text-quality checks are finding-oriented and only actual failures should
+ * occupy the list. This also cleans up legacy task results created before the
+ * backend applied the same projection.
+ */
+export function isVisibleCheckResult(item: Record<string, unknown>): boolean {
+  const ruleCode = textField(item, ['rule_code', 'ruleCode']).trim().toUpperCase();
+  const checkCode = textField(item, ['check_code', 'checkCode']).trim().toUpperCase();
+  const textQuality = ruleCode === 'R-Q'
+    || ruleCode === 'R-BASIC-QUALITY'
+    || checkCode.startsWith('R-Q-')
+    || checkCode.startsWith('R-BASIC-QUALITY-');
+  if (!textQuality) return true;
+  return textField(item, ['manualStatus', 'status']) === 'Fail';
 }
 
 export function isHighConfidenceNotApplicable(item: Record<string, unknown>): boolean {

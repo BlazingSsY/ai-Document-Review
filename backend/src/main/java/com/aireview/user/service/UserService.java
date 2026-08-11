@@ -30,6 +30,7 @@ public class UserService {
     private final UnitMapper unitMapper;
     private final UserRuleAssignmentMapper userRuleAssignmentMapper;
     private final SarUserRuleAssignmentMapper sarUserRuleAssignmentMapper;
+    private final FeaturePermissionService featurePermissionService;
     private final PasswordEncoder passwordEncoder;
 
     public UserDTO getUserById(Long id) {
@@ -94,7 +95,7 @@ public class UserService {
         }
 
         if ("supervisor".equals(target.getRole())) {
-            throw new IllegalArgumentException("不能修改项目主管的角色");
+            throw new IllegalArgumentException("不能修改平台管理员的角色");
         }
 
         if (!"admin".equals(role) && !"user".equals(role)) {
@@ -116,7 +117,7 @@ public class UserService {
             throw new IllegalArgumentException("用户不存在");
         }
         if ("supervisor".equals(target.getRole())) {
-            throw new IllegalArgumentException("不能删除项目主管");
+            throw new IllegalArgumentException("不能删除平台管理员");
         }
         userRuleAssignmentMapper.deleteByUserId(targetUserId);
         sarUserRuleAssignmentMapper.deleteByUserId(targetUserId);
@@ -135,7 +136,7 @@ public class UserService {
 
     /**
      * Library assignment is per-pipeline (粗粒度物理隔离的衍生 — 两条管线各有自己的
-     * user_library_assignment 表）。supervisor 在用户管理页可为同一用户分别配置
+     * user_library_assignment 表）。平台管理员可在统一的成员与权限页配置
      * chunk 与 RAG 两侧能见的规则库。
      */
     @Transactional
@@ -181,6 +182,8 @@ public class UserService {
         // 只出脱敏值，明文身份证号不离开后端。
         dto.setIdCardMasked(IdCardSupport.mask(user.getIdCard()));
         dto.setMustChangePassword(Boolean.TRUE.equals(user.getMustChangePassword()));
+        dto.setFeatureCodes(featurePermissionService.getFeatureCodes(user.getId()));
+        dto.setRuleLibraryCount(userRuleAssignmentMapper.findLibraryIdsByUserId(user.getId()).size());
         if (user.getUnitId() != null) {
             Unit unit = unitMapper.selectById(user.getUnitId());
             if (unit != null) dto.setUnitName(unit.getName());

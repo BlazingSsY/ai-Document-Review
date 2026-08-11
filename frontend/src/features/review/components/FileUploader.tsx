@@ -6,6 +6,7 @@ const { Dragger } = Upload;
 
 interface FileUploaderProps {
   onFileSelect: (file: File) => void;
+  onFileRemove?: () => void;
   accept?: string;
   maxSize?: number; // MB
   description?: string;
@@ -13,6 +14,7 @@ interface FileUploaderProps {
 
 function FileUploader({
   onFileSelect,
+  onFileRemove,
   accept = '.docx,.doc',
   maxSize = 20,
   description = '支持 .docx 格式，文件大小不超过 20MB',
@@ -32,7 +34,7 @@ function FileUploader({
       return false; // Prevent auto upload
     },
     onRemove: () => {
-      // Allow removal
+      onFileRemove?.();
     },
   };
 

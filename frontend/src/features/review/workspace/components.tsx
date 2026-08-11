@@ -51,7 +51,6 @@ import {
   locatorCandidates,
   numericField,
   recordArray,
-  sourceCandidateKey,
   sourceEditKey,
   sourceReasonLabel,
   textField,
@@ -504,11 +503,13 @@ function ReviewPageHeader({
         )}
         {workspace.status === 'completed' && workspace.failedChunkCount > 0 && (
           <Button
+            danger
+            className="failed-chunk-retry-button"
             icon={<ReloadOutlined />}
             loading={workspace.retryingFailed}
             onClick={workspace.handleRetryFailedChunks}
           >
-            重审失败切片
+            重审失败切片（{workspace.failedChunkCount}）
           </Button>
         )}
         {!workspace.isProcessing && (
@@ -588,6 +589,38 @@ function ExecutionStrip({ workspace }: { workspace: ReviewWorkspaceViewModel }) 
       <div className="review-coverage">
         <div><span>{workspace.isProcessing ? '审查进度' : '审查覆盖率'}</span><strong>{progress}%</strong></div>
         <Progress percent={progress} showInfo={false} status={workspace.status === 'failed' ? 'exception' : 'normal'} size="small" />
+      </div>
+    </section>
+  );
+}
+
+function FailedChunksSummary({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  if (workspace.failedChunkCount <= 0) return null;
+
+  return (
+    <section className="failed-chunks-summary" aria-label="失败切片信息" role="status">
+      <div className="failed-chunks-summary-heading">
+        <WarningOutlined />
+        <div>
+          <strong>{workspace.failedChunkCount} 个切片审查失败</strong>
+          <span>这些章节尚未形成有效审查结论，可使用页面右上角的“重审失败切片”单独重试。</span>
+        </div>
+      </div>
+      <div className="failed-chunks-summary-list">
+        {workspace.failedChunks.map((chunk, index) => {
+          const chunkNumber = String(chunk.chunk || index + 1);
+          const chapterTitle = String(chunk.chapterTitle || '未命名章节');
+          const error = String(chunk.error || '未记录失败原因');
+          return (
+            <article className="failed-chunk-summary-item" key={`${chunkNumber}-${chapterTitle}-${index}`}>
+              <span className="failed-chunk-summary-index">#{chunkNumber}</span>
+              <div>
+                <strong>{chapterTitle}</strong>
+                <p title={error}>{error}</p>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -691,7 +724,10 @@ function matchesFilter(item: Record<string, unknown>, filter: ResultFilter, hasC
 
 function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const counts = summarizeReviewItems(workspace);
-  const [filter, setFilter] = useState<ResultFilter>(() => workspace.hasCheckMatrix && counts.Fail > 0 ? 'Fail' : 'all');
+  // Open on the complete decision matrix. Business-rule Pass/Fail/Review rows are
+  // all required feedback; only text-quality Pass rows have already been projected
+  // out by the workspace helper.
+  const [filter, setFilter] = useState<ResultFilter>('all');
   const [search, setSearch] = useState('');
   const [expandedFindingIndex, setExpandedFindingIndex] = useState<number | null>(null);
   const findingsScrollerRef = useRef<HTMLElement | Window | null>(null);
@@ -752,7 +788,7 @@ function ResultsPanel({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
       <div className="review-pane-header">
         <div>
           <h2>{workspace.hasCheckMatrix ? '检查项判定' : '审查问题'}</h2>
-          <span>{workspace.hasCheckMatrix ? '按规则逐项复核审查结论' : '按问题查看判定依据与完整原文'}</span>
+          <span>{workspace.hasCheckMatrix ? '按原文顺序逐项复核审查结论' : '按原文顺序查看问题、判定依据与完整原文'}</span>
         </div>
         <Tag>{counts.total} 条</Tag>
       </div>
@@ -1128,6 +1164,7 @@ export function ReviewWorkspaceContent({ workspace }: { workspace: ReviewWorkspa
     <div className="review-page">
       <ReviewPageHeader workspace={workspace} onOpenRuntime={() => setRuntimeOpen(true)} />
       <ExecutionStrip workspace={workspace} />
+      <FailedChunksSummary workspace={workspace} />
       <ReviewMainSurface workspace={workspace} />
       <RuntimeDrawer workspace={workspace} open={runtimeOpen} onClose={() => setRuntimeOpen(false)} />
       <ManualReviewModal workspace={workspace} />

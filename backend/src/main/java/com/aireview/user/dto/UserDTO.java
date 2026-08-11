@@ -2,6 +2,7 @@ package com.aireview.user.dto;
 
 import lombok.Data;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 public class UserDTO {
@@ -27,4 +28,10 @@ public class UserDTO {
     private String idCardMasked;
 
     private Boolean mustChangePassword;
+
+    /** 当前账号可使用的业务功能；平台管理员返回全部功能。 */
+    private List<String> featureCodes;
+
+    /** 已显式分配的全文逐章规则库数量，用于统一成员列表摘要。 */
+    private Integer ruleLibraryCount;
 }

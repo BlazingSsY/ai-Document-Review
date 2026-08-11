@@ -26,9 +26,13 @@ export interface RegisterParams {
 
 export interface UserInfo {
   id: number;
-  email: string;
+  email?: string;
   name: string;
   role: string;
+  unitId?: number;
+  unitName?: string;
+  username?: string;
+  featureCodes?: string[];
 }
 
 export interface AuthResult {

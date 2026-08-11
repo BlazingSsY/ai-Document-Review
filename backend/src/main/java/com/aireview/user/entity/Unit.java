@@ -21,6 +21,9 @@ public class Unit {
 
     private String name;
 
+    /** 上级单位；null 表示平台直接管理的一级单位。 */
+    private Long parentId;
+
     /** 单位编号/简称，可空，便于与既有台账对齐。 */
     private String code;
 

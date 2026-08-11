@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 
 @Slf4j
@@ -30,6 +31,9 @@ public class AsyncConfig {
 
     @Value("${review.parallel.chunk-concurrency}")
     private int chunkConcurrency;
+
+    @Value("${review.parallel.global-ai-concurrency:8}")
+    private int globalAiConcurrency;
 
     @Value("${review.sar.check-concurrency:4}")
     private int sarCheckConcurrency;
@@ -77,6 +81,18 @@ public class AsyncConfig {
         log.info("Chunk review thread pool initialized: core=max={}, queue=0 "
                 + "(chunkConcurrency={} × maxTasks={})", core, chunkConcurrency, maxPoolSize);
         return executor;
+    }
+
+    /**
+     * Shared, fair outbound-call budget for all concurrently running CHUNK tasks.
+     * This preserves true multi-document execution while preventing N documents
+     * from each opening {@code chunkConcurrency} requests at the same instant.
+     */
+    @Bean(name = "reviewAiCallSemaphore")
+    public Semaphore reviewAiCallSemaphore() {
+        int permits = Math.max(2, globalAiConcurrency);
+        log.info("Global review AI concurrency initialized: permits={}, fair=true", permits);
+        return new Semaphore(permits, true);
     }
 
     /** SAR（结构化精准审查）路由/分组/复核的并发线程池。与 chunkReviewExecutor 同构、物理隔离。 */

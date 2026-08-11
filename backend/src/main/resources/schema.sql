@@ -593,7 +593,7 @@ ALTER TABLE sar_review_tasks ADD  CONSTRAINT sar_review_tasks_scenario_id_fkey
 -- Seed supervisor account (password: admin_root)
 INSERT INTO users (email, password_hash, name, role)
 VALUES ('admin_root', '$2a$10$ETZlQAgiNM5jbwyBXaG5tOcbZjq8g7Fl7DceMfUmajyOI0/4ASDB.', '项目主管', 'supervisor')
-ON CONFLICT (email) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 -- 内置质量规则编号统一：旧 R-BASIC-QUALITY → R-Q（存量库改名，避免与下方新种子重复创建）。
 UPDATE rule_checks SET check_code = replace(check_code, 'R-BASIC-QUALITY-', 'R-Q-')
@@ -706,3 +706,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_users_id_card
     ON users(id_card) WHERE id_card IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_users_unit ON users(unit_id);
+
+-- 组织树：parent_id 为空的是一级单位；单位管理员的管辖范围为本单位及全部后代单位。
+ALTER TABLE units ADD COLUMN IF NOT EXISTS parent_id BIGINT REFERENCES units(id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS idx_units_parent ON units(parent_id);
+
+-- 统一权限模型首次落库时执行一次兼容迁移：
+-- 1) 存量账号保留原先可使用的环境试验大纲审查功能；
+-- 2) 存量 admin 原本按角色隐式看到全部规则库，转换为显式分配，避免升级后突然失权；
+-- 3) 后续管理员主动撤销权限时不会因 schema.sql 再次执行而被重新授予。
+DO $permission_model$
+BEGIN
+    IF to_regclass('public.user_feature_assignment') IS NULL THEN
+        CREATE TABLE user_feature_assignment (
+            user_id       BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            feature_code  VARCHAR(64) NOT NULL,
+            PRIMARY KEY (user_id, feature_code)
+        );
+
+        INSERT INTO user_feature_assignment (user_id, feature_code)
+        SELECT id, 'ENV_TEST_OUTLINE_REVIEW'
+        FROM users
+        ON CONFLICT DO NOTHING;
+
+        INSERT INTO user_library_assignment (user_id, library_id)
+        SELECT u.id, lib.id
+        FROM users u
+        CROSS JOIN rule_libraries lib
+        WHERE u.role = 'admin'
+          AND lib.name <> '系统内置规则'
+        ON CONFLICT DO NOTHING;
+    END IF;
+END $permission_model$;
+
+-- 内部角色名 supervisor 保持不变以兼容 JWT 与存量数据，显示语义统一为“平台管理员”。
+UPDATE users
+SET name = '平台管理员'
+WHERE email = 'admin_root' AND name = '项目主管';

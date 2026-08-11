@@ -10,16 +10,16 @@ import {
   Space,
   Statistic,
   Select,
-  Tabs,
+  Steps,
   Typography,
   Modal,
   Form,
   Progress,
-  Alert,
   message,
   Popconfirm,
   Switch,
   Tooltip,
+  Result,
 } from 'antd';
 import {
   FileTextOutlined,
@@ -31,10 +31,16 @@ import {
   RedoOutlined,
   DeleteOutlined,
   BookOutlined,
-  AimOutlined,
+  FileSearchOutlined,
+  SafetyCertificateOutlined,
+  ArrowLeftOutlined,
+  ArrowRightOutlined,
+  RocketOutlined,
+  PaperClipOutlined,
+  LockOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { ReviewTask, ReviewMode } from '../../review/api/reviews';
+import type { ReviewTask } from '../../review/api/reviews';
 import type { Scenario } from '../../scenarios/api/scenarios';
 import { getEnabledModels, AIModel } from '../../modelConfig/api/models';
 import {
@@ -43,15 +49,15 @@ import {
 } from '../../review/api/pipelineApi';
 import {
   STATUS_LABELS, STATUS_COLORS, PAGE_SIZE,
-  REVIEW_CATEGORIES, DEFAULT_REVIEW_CATEGORY, reviewCategoryLabel,
+  DEFAULT_REVIEW_CATEGORY, reviewCategoryLabel,
 } from '../../../shared/utils/constants';
 import FileUploader from '../../review/components/FileUploader';
 import taskWebSocket, { TaskProgressMessage } from '../../../shared/utils/websocket';
 import useLogStore from '../../review/store/logStore';
+import useAuthStore from '../../auth/store/authStore';
+import '../styles/dashboard.css';
 
 const { Title, Text } = Typography;
-
-type ModeFilter = 'ALL' | ReviewMode;
 
 const EMPTY_STATS: UnifiedStats = {
   total: 0,
@@ -83,21 +89,18 @@ function countReviewProblems(task: ReviewTask): number | '-' {
 
 function DashboardPage() {
   const navigate = useNavigate();
+  const user = useAuthStore((state) => state.user);
+  const canUseEnvReview = user?.role === 'supervisor'
+    || Boolean(user?.featureCodes?.includes('ENV_TEST_OUTLINE_REVIEW'));
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
-  const [modeFilter, setModeFilter] = useState<ModeFilter>('ALL');
   const [stats, setStats] = useState<UnifiedStats>(EMPTY_STATS);
 
-  // Review creation modal state
+  // Review creation modal state — 当前前端只开放全文逐章审查。
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  // 审查类别同样不设默认值：现在只有一个可用类别，但后续会加试验报告、可靠性等，
-  // 让用户从一开始就意识到这是需要选择的维度，与下面「不默认选管线」的做法一致。
-  const [draftCategory, setDraftCategory] = useState<string | undefined>();
-  // 决策 #8：无默认管线，强制用户在 Tab 切换器上手动选择。
-  const [draftMode, setDraftMode] = useState<ReviewMode | undefined>();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -106,7 +109,6 @@ function DashboardPage() {
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
   const [qualityCheckEnabled, setQualityCheckEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [embeddingModelCount, setEmbeddingModelCount] = useState<number | null>(null);
 
   // Track if there are truly active processing tasks (for spinner)
   const [hasActiveProcessing, setHasActiveProcessing] = useState(false);
@@ -124,12 +126,13 @@ function DashboardPage() {
   };
 
   const fetchTasks = async () => {
+    if (!canUseEnvReview) return;
     setLoading(true);
     try {
       const res = await getUnifiedReviewList({
         page,
         pageSize: PAGE_SIZE,
-        mode: modeFilter === 'ALL' ? 'ALL' : modeFilter,
+        mode: 'CHUNK',
         status: statusFilter,
       });
       const data = res.data.data;
@@ -150,17 +153,20 @@ function DashboardPage() {
   };
 
   const fetchStats = async () => {
+    if (!canUseEnvReview) return;
     try {
       const res = await getUnifiedReviewStats();
       const s = res.data.data;
-      setStats(s);
-      setHasActiveProcessing(s.processing > 0);
+      const visibleStats = s.byMode.CHUNK;
+      setStats({ ...s, ...visibleStats });
+      setHasActiveProcessing(visibleStats.processing > 0);
     } catch {
       // handled
     }
   };
 
   useEffect(() => {
+    if (!canUseEnvReview) return undefined;
     fetchStats();
     // Connect websocket for global task updates
     taskWebSocket.connect();
@@ -189,7 +195,7 @@ function DashboardPage() {
     return () => {
       taskWebSocket.unsubscribe('*', globalHandler);
     };
-  }, []);
+  }, [canUseEnvReview]);
 
   // 从常驻的 logStore 回填每个任务的最近一次进度。
   // taskProgress 是组件本地 state：从详情页返回时本组件被卸载又重挂，state 归零，
@@ -210,59 +216,40 @@ function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    if (!canUseEnvReview) return;
     fetchTasks();
-  }, [page, statusFilter, modeFilter]);
+  }, [page, statusFilter, canUseEnvReview]);
 
-  // When the user switches the Tab in the create-review modal, reload the scenario
-  // list from that pipeline (CHUNK or RAG) and the chat-model list (shared, but we
-  // re-fetch alongside so the dropdown stays in sync). For RAG we also check that
-  // at least one embedding model is enabled — RAG can't run without one.
+  // 新建审查只加载全文逐章审查的场景和共享对话模型。
   useEffect(() => {
-    if (!reviewModalOpen || !draftMode) {
+    if (!canUseEnvReview) return;
+    if (!reviewModalOpen) {
       setScenarios([]);
       setModels([]);
       setScenarioId(undefined);
       setSelectedModel(undefined);
-      setEmbeddingModelCount(null);
       return;
     }
     const fetchData = async () => {
       try {
-        const scenarioApi = getScenarioApi(draftMode);
-        const fetches: Promise<unknown>[] = [
+        const scenarioApi = getScenarioApi('CHUNK');
+        const [scenarioRes, modelRes] = await Promise.all([
           scenarioApi.getScenarioList({ page: 1, pageSize: 1000 }),
           getEnabledModels('chat'),
-        ];
-        const needsEmbedding = draftMode === 'SAR';
-        if (needsEmbedding) {
-          fetches.push(getEnabledModels('embedding'));
-        }
-        const results = await Promise.all(fetches);
-        const scenRes = results[0] as Awaited<ReturnType<typeof scenarioApi.getScenarioList>>;
-        const modelRes = results[1] as Awaited<ReturnType<typeof getEnabledModels>>;
-        setScenarios(scenRes.data.data.records);
+        ]);
+        setScenarios(scenarioRes.data.data.records);
         setModels(modelRes.data.data);
-        if (needsEmbedding) {
-          const embedRes = results[2] as Awaited<ReturnType<typeof getEnabledModels>>;
-          setEmbeddingModelCount(embedRes.data.data.length);
-        }
       } catch {
-        // handled
+        // handled by interceptor
       }
     };
     fetchData();
-  }, [reviewModalOpen, draftMode]);
+  }, [reviewModalOpen, canUseEnvReview]);
 
   const handleSubmit = async () => {
-    if (!draftMode) { message.warning('请选择审查方式'); return; }
     if (!selectedFile) { message.warning('请先上传文件'); return; }
     if (!scenarioId) { message.warning('请选择审查场景'); return; }
     if (!selectedModel) { message.warning('请选择 AI 模型'); return; }
-    if ((draftMode === 'SAR') && embeddingModelCount === 0) {
-      message.error(`${PIPELINE_LABEL[draftMode]}需要至少启用一个 embedding 模型，请先到「模型管理」配置`);
-      return;
-    }
-
     setSubmitting(true);
     try {
       const formData = new FormData();
@@ -270,10 +257,10 @@ function DashboardPage() {
       formData.append('scenarioId', String(scenarioId));
       formData.append('selectedModel', selectedModel);
       formData.append('qualityCheckEnabled', String(qualityCheckEnabled));
-      formData.append('reviewCategory', draftCategory ?? DEFAULT_REVIEW_CATEGORY);
-      const reviewApi = getReviewApi(draftMode);
+      formData.append('reviewCategory', DEFAULT_REVIEW_CATEGORY);
+      const reviewApi = getReviewApi('CHUNK');
       await reviewApi.submitReview(formData);
-      message.success(`审查任务已提交（${PIPELINE_LABEL[draftMode]}）`);
+      message.success(`审查任务已提交（${PIPELINE_LABEL.CHUNK}）`);
     } catch {
       setSubmitting(false);
       setReviewModalOpen(false);
@@ -322,13 +309,10 @@ function DashboardPage() {
   };
 
   const resetReviewModal = () => {
-    setDraftCategory(undefined);
-    setDraftMode(undefined);
     setCurrentStep(0);
     setSelectedFile(null);
     setScenarioId(undefined);
     setSelectedModel(undefined);
-    setEmbeddingModelCount(null);
   };
 
   const columns: ColumnsType<ReviewTask> = [
@@ -464,6 +448,18 @@ function DashboardPage() {
     },
   ];
 
+  if (!canUseEnvReview) {
+    return (
+      <Card>
+        <Result
+          icon={<LockOutlined style={{ color: '#8c8c8c' }} />}
+          title="当前未分配审查功能"
+          subTitle="请联系本单位管理员或平台管理员，为您分配“环境试验大纲审查”功能及所需规则库。"
+        />
+      </Card>
+    );
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -521,16 +517,6 @@ function DashboardPage() {
           <Title level={5} style={{ margin: 0 }}>审查任务列表</Title>
           <Space>
             <Select
-              style={{ width: 160 }}
-              value={modeFilter}
-              onChange={(v) => { setModeFilter(v); setPage(1); }}
-              options={[
-                { label: '全部审查方式', value: 'ALL' },
-                { label: '全文逐章审查', value: 'CHUNK' },
-                { label: '结构化审查', value: 'SAR' },
-              ]}
-            />
-            <Select
               placeholder="状态筛选"
               allowClear
               style={{ width: 140 }}
@@ -564,235 +550,190 @@ function DashboardPage() {
       </Card>
 
       <Row gutter={16} style={{ marginTop: 16 }}>
-        <Col xs={12}>
+        <Col span={24}>
           <Card
+            className="review-library-entry"
             hoverable
             onClick={() => navigate('/chunk/rules')}
-            style={{ textAlign: 'center', cursor: 'pointer' }}
           >
-            <BookOutlined style={{ fontSize: 32, color: '#1677ff', marginBottom: 8 }} />
-            <div style={{ fontWeight: 500 }}>全文逐章审查 · 规则与场景</div>
-            <div style={{ color: '#8c8c8c', fontSize: 13 }}>按章节切片 + 批处理审查管线</div>
-          </Card>
-        </Col>
-        <Col xs={12}>
-          <Card
-            hoverable
-            onClick={() => navigate('/sar/rules')}
-            style={{ textAlign: 'center', cursor: 'pointer' }}
-          >
-            <AimOutlined style={{ fontSize: 32, color: '#389e0d', marginBottom: 8 }} />
-            <div style={{ fontWeight: 500 }}>结构化审查 · 规则与场景</div>
-            <div style={{ color: '#8c8c8c', fontSize: 13 }}>结构路由 + 区域取证 + 一致性</div>
+            <div className="review-library-entry__icon"><BookOutlined /></div>
+            <div>
+              <div className="review-library-entry__title">全文逐章审查 · 规则与场景</div>
+              <div className="review-library-entry__description">管理环境试验大纲的审查场景、规则文件与应用范围</div>
+            </div>
+            <ArrowRightOutlined className="review-library-entry__arrow" />
           </Card>
         </Col>
       </Row>
 
-      {/* New Review Modal — top Tabs select pipeline; content below mirrors the
-          previous 2-step flow (file → scenario+model) but is gated on a Tab choice. */}
+      {/* New Review Modal — 当前只开放全文逐章审查，采用两步式任务创建流程。 */}
       <Modal
-        title="新建文件审查"
+        className="review-create-modal"
+        title={(
+          <div className="review-create-modal__title">
+            <span className="review-create-modal__title-icon"><FileSearchOutlined /></span>
+            <div className="review-create-modal__title-copy">
+              <div className="review-create-modal__title-line">
+                <span className="review-create-modal__title-text">新建文件审查</span>
+                <Tag color="blue">环境试验大纲</Tag>
+                <Tag icon={<BookOutlined />}>全文逐章审查</Tag>
+              </div>
+              <div className="review-create-modal__title-sub">
+                上传环境试验大纲，系统将按章节自动拆分并执行规则审查
+              </div>
+            </div>
+          </div>
+        )}
         open={reviewModalOpen}
         onCancel={() => {
+          if (submitting) return;
           setReviewModalOpen(false);
           resetReviewModal();
         }}
-        footer={null}
-        destroyOnClose
-        width={680}
-      >
-        {/* 第一层：审查类别（业务域）。目前只开放环境试验大纲，其余置灰但仍然展示，
-            让用户看得到系统的能力边界与后续方向。 */}
-        <div style={{ marginBottom: 20 }}>
-          <Text strong style={{ display: 'block', marginBottom: 4 }}>1. 选择审查类别</Text>
-          <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
-            审查类别决定审的是什么文件，下一步的审查方式决定用什么方法审。
-          </Text>
-          <Row gutter={[12, 12]}>
-            {REVIEW_CATEGORIES.map((category) => {
-              const active = draftCategory === category.value;
-              return (
-                <Col span={8} key={category.value}>
-                  <Card
-                    size="small"
-                    hoverable={category.enabled}
-                    onClick={() => {
-                      if (!category.enabled || draftCategory === category.value) return;
-                      setDraftCategory(category.value);
-                      // 换类别就是换业务域，下游的方式/场景/模型全部作废重选。
-                      // 当前只有一个可用类别走不到这里，但类别一多就会踩到。
-                      setDraftMode(undefined);
-                      setScenarioId(undefined);
-                      setSelectedModel(undefined);
-                      setCurrentStep(0);
-                    }}
-                    style={{
-                      height: '100%',
-                      cursor: category.enabled ? 'pointer' : 'not-allowed',
-                      borderColor: active ? '#1677ff' : undefined,
-                      background: category.enabled ? undefined : '#fafafa',
-                      opacity: category.enabled ? 1 : 0.6,
-                      boxShadow: active ? '0 0 0 2px rgba(22,119,255,0.15)' : undefined,
-                    }}
-                  >
-                    <div style={{ fontWeight: 500, marginBottom: 4 }}>
-                      {category.label}
-                      {!category.enabled && (
-                        <Tag style={{ marginLeft: 6 }}>敬请期待</Tag>
-                      )}
-                    </div>
-                    <div style={{ color: '#8c8c8c', fontSize: 12, lineHeight: 1.5 }}>
-                      {category.description}
-                    </div>
-                  </Card>
-                </Col>
-              );
-            })}
-          </Row>
-        </div>
-
-        {!draftCategory && (
-          <Alert
-            type="info"
-            showIcon
-            message="请先选择审查类别"
-            description="目前已开放「环境试验大纲审查」；试验报告审查、可靠性审查正在规划中。"
-          />
-        )}
-
-        {/* 第二层：审查方式（管线）。选定类别后才出现。 */}
-        {draftCategory && (
+        footer={currentStep === 0 ? (
           <>
-            <Text strong style={{ display: 'block', marginBottom: 8 }}>2. 选择审查方式</Text>
-            <Tabs
-              activeKey={draftMode ?? ''}
-              onChange={(key) => {
-                setDraftMode(key as ReviewMode);
-                // 切换 Tab 时把已经填的场景/模型清空，避免选了另一个管线的项后串库。
-                setScenarioId(undefined);
-                setSelectedModel(undefined);
-                setCurrentStep(0);
+            <Button
+              onClick={() => {
+                setReviewModalOpen(false);
+                resetReviewModal();
               }}
-              items={[
-                {
-                  key: 'CHUNK',
-                  label: <span><BookOutlined /> 全文逐章审查</span>,
-                },
-                {
-                  key: 'SAR',
-                  label: <span><AimOutlined /> 结构化审查</span>,
-                },
-              ]}
-            />
-            {!draftMode && (
-              <Alert
-                type="info"
-                showIcon
-                message="请先在上方选择审查方式"
-                description="全文逐章审查（按章节切片）、结构化审查（结构路由 + 区域取证 + 一致性）两条管线使用各自独立的规则库与场景，互不可见。"
-              />
-            )}
+            >
+              取消
+            </Button>
+            <Button
+              type="primary"
+              icon={<ArrowRightOutlined />}
+              iconPosition="end"
+              disabled={!selectedFile}
+              onClick={() => setCurrentStep(1)}
+            >
+              下一步
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              icon={<ArrowLeftOutlined />}
+              disabled={submitting}
+              onClick={() => setCurrentStep(0)}
+            >
+              返回
+            </Button>
+            <Button
+              type="primary"
+              icon={<RocketOutlined />}
+              loading={submitting}
+              disabled={!scenarioId || !selectedModel}
+              onClick={handleSubmit}
+            >
+              开始审查
+            </Button>
           </>
         )}
+        closable={!submitting}
+        maskClosable={!submitting}
+        destroyOnClose
+        centered
+        width={600}
+      >
+        <Steps
+          className="review-create-modal__steps"
+          size="small"
+          current={currentStep}
+          responsive={false}
+          items={[
+            { title: '上传文档' },
+            { title: '审查配置' },
+          ]}
+        />
 
-        {draftMode && (draftMode === 'SAR') && embeddingModelCount === 0 && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="尚未启用 embedding 模型"
-            description={`${PIPELINE_LABEL[draftMode]}需要至少一个启用的 embedding 模型；请到「模型管理」配置。reranker 模型可选，若未配置则按召回分数顺序使用。`}
-          />
-        )}
+        {currentStep === 0 && (
+          <div className="review-create-stage">
+            <div className="review-create-upload">
+              <FileUploader
+                onFileSelect={setSelectedFile}
+                onFileRemove={() => setSelectedFile(null)}
+                description="支持 .docx / .doc 格式，单个文件不超过 20 MB"
+              />
+            </div>
 
-        {draftMode && currentStep === 0 && (
-          <div>
-            <Text strong style={{ display: 'block', marginBottom: 8 }}>3. 上传待审查文件</Text>
-            <FileUploader onFileSelect={(file) => setSelectedFile(file)} />
             {selectedFile && (
-              <div style={{ marginTop: 16, textAlign: 'center' }}>
-                <Text>
-                  已选择文件：<Text strong>{selectedFile.name}</Text>
-                  （{(selectedFile.size / 1024 / 1024).toFixed(2)} MB）
-                </Text>
+              <div className="review-create-file">
+                <span className="review-create-file__icon"><PaperClipOutlined /></span>
+                <div className="review-create-file__meta">
+                  <Text strong ellipsis>{selectedFile.name}</Text>
+                  <Text type="secondary">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</Text>
+                </div>
+                <Tag color="success">已就绪</Tag>
               </div>
             )}
-            <div style={{ marginTop: 24, textAlign: 'center' }}>
-              <Button
-                type="primary"
-                disabled={!selectedFile}
-                onClick={() => setCurrentStep(1)}
-              >
-                下一步
-              </Button>
-            </div>
           </div>
         )}
 
-        {draftMode && currentStep === 1 && (
-          <div>
-            <Text strong style={{ display: 'block', marginBottom: 8 }}>4. 配置场景与模型</Text>
-            <Form layout="vertical">
-              <Form.Item
-                label={`审查场景（${PIPELINE_LABEL[draftMode]}）`}
-                required
-              >
-                <Select
-                  placeholder={`请选择${PIPELINE_LABEL[draftMode]}场景`}
-                  value={scenarioId}
-                  onChange={setScenarioId}
-                  options={scenarios.map((s) => ({
-                    label: s.name,
-                    value: s.id,
-                  }))}
-                  showSearch
-                  filterOption={(input, option) =>
-                    (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-                  }
-                />
-              </Form.Item>
-              <Form.Item label="AI 对话模型" required>
-                <Select
-                  placeholder="请选择 chat 模型"
-                  value={selectedModel}
-                  onChange={setSelectedModel}
-                  options={models.map((m) => ({
-                    label: `${m.name} (${m.provider})`,
-                    value: m.name,
-                  }))}
-                />
-              </Form.Item>
-              <Form.Item
-                label={
-                  <Space size={6}>
-                    全文质量检查
-                    <Tooltip title="对全文每个章节执行基础文字质量审查：错别字/漏字/多字、语序不当/语病、章节内术语一致性、图号/表号引用一致性。关闭后，全文逐章审查将跳过仅有基础质量、未命中业务规则的章节，速度更快、更省 token；但不再做全文文字质量检查。（当前仅全文逐章审查执行该检查）">
-                      <span style={{ color: '#1677ff', cursor: 'help', fontSize: 12 }}>说明</span>
-                    </Tooltip>
-                  </Space>
-                }
-              >
-                <Space>
-                  <Switch checked={qualityCheckEnabled} onChange={setQualityCheckEnabled} />
-                  <Typography.Text type="secondary">
+        {currentStep === 1 && (
+          <div className="review-create-stage">
+            {selectedFile && (
+              <div className="review-create-file">
+                <span className="review-create-file__icon"><PaperClipOutlined /></span>
+                <div className="review-create-file__meta">
+                  <Text strong ellipsis>{selectedFile.name}</Text>
+                  <Text type="secondary">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</Text>
+                </div>
+                <Button type="link" size="small" onClick={() => setCurrentStep(0)}>更换文件</Button>
+              </div>
+            )}
+
+            <Form className="review-create-form" layout="vertical" requiredMark={false}>
+              <Row gutter={16}>
+                <Col xs={24} md={12}>
+                  <Form.Item label="审查场景" required>
+                    <Select
+                      placeholder="请选择审查场景"
+                      value={scenarioId}
+                      onChange={setScenarioId}
+                      options={scenarios.map((scenario) => ({
+                        label: scenario.name,
+                        value: scenario.id,
+                      }))}
+                      showSearch
+                      filterOption={(input, option) =>
+                        (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                      }
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item label="AI 对话模型" required>
+                    <Select
+                      placeholder="请选择 AI 模型"
+                      value={selectedModel}
+                      onChange={setSelectedModel}
+                      options={models.map((model) => ({
+                        label: `${model.name} (${model.provider})`,
+                        value: model.name,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <div className="review-create-quality">
+                <span className="review-create-quality__icon"><SafetyCertificateOutlined /></span>
+                <div className="review-create-quality__copy">
+                  <Text strong>全文质量检查</Text>
+                  <Text type="secondary">
                     {qualityCheckEnabled
-                      ? '已启用：逐章执行错别字/语病/术语一致性/图表引用一致性等文字质量审查'
-                      : '已关闭：跳过纯文字质量章节，仅跑命中的业务规则（更快）'}
-                  </Typography.Text>
-                </Space>
-              </Form.Item>
+                      ? '检查错别字、语病、术语一致性及图表引用，结果更完整。'
+                      : '仅执行命中的业务规则，审查更快且消耗更少。'}
+                  </Text>
+                </div>
+                <Tooltip title="关闭后将跳过未命中业务规则章节的基础文字质量审查。">
+                  <Switch checked={qualityCheckEnabled} onChange={setQualityCheckEnabled} />
+                </Tooltip>
+              </div>
             </Form>
-            <div style={{ textAlign: 'center' }}>
-              <Space size="middle">
-                <Button onClick={() => setCurrentStep(0)}>上一步</Button>
-                <Button type="primary" loading={submitting} onClick={handleSubmit}>
-                  提交审查
-                </Button>
-              </Space>
-            </div>
           </div>
         )}
-
       </Modal>
     </div>
   );

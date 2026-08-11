@@ -4,6 +4,9 @@ import com.aireview.auth.security.SecurityUtils;
 import com.aireview.common.dto.ApiResponse;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.user.dto.MemberImportResult;
+import com.aireview.user.dto.MemberPermissionUpdateRequest;
+import com.aireview.user.dto.MemberPermissionsDTO;
+import com.aireview.user.dto.SystemFeatureDTO;
 import com.aireview.user.dto.UserDTO;
 import com.aireview.user.entity.Unit;
 import com.aireview.user.service.MemberService;
@@ -35,26 +38,35 @@ public class MemberController {
     // ---------------- 单位 ----------------
 
     @GetMapping("/units")
-    public ApiResponse<List<Unit>> listUnits() {
-        return ApiResponse.success(memberService.listUnits());
+    public ApiResponse<List<Unit>> listUnits(Authentication authentication) {
+        try {
+            return ApiResponse.success(memberService.listUnits(SecurityUtils.getUserId(authentication)));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        }
     }
 
     @PostMapping("/units")
-    @PreAuthorize("hasRole('SUPERVISOR')")
-    public ApiResponse<Unit> createUnit(@RequestBody Map<String, String> body) {
+    public ApiResponse<Unit> createUnit(@RequestBody Map<String, String> body,
+                                        Authentication authentication) {
         try {
+            String parentIdText = body.get("parentId");
+            Long parentId = parentIdText == null || parentIdText.isBlank()
+                    ? null : Long.valueOf(parentIdText);
             return ApiResponse.success("单位已创建", memberService.createUnit(
-                    body.get("name"), body.get("code"), body.get("remark")));
+                    parentId, body.get("name"), body.get("code"), body.get("remark"),
+                    SecurityUtils.getUserId(authentication)));
+        } catch (NumberFormatException e) {
+            return ApiResponse.badRequest("上级单位参数格式不正确");
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         }
     }
 
     @DeleteMapping("/units/{unitId}")
-    @PreAuthorize("hasRole('SUPERVISOR')")
-    public ApiResponse<Void> deleteUnit(@PathVariable Long unitId) {
+    public ApiResponse<Void> deleteUnit(@PathVariable Long unitId, Authentication authentication) {
         try {
-            memberService.deleteUnit(unitId);
+            memberService.deleteUnit(unitId, SecurityUtils.getUserId(authentication));
             return ApiResponse.success("单位已删除", null);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
@@ -89,6 +101,55 @@ public class MemberController {
                     body.get("role"), SecurityUtils.getUserId(authentication)));
         } catch (NumberFormatException e) {
             return ApiResponse.badRequest("单位参数格式不正确");
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        }
+    }
+
+    @PostMapping("/platform-accounts")
+    @PreAuthorize("hasRole('SUPERVISOR')")
+    public ApiResponse<UserDTO> createPlatformAccount(@RequestBody Map<String, String> body,
+                                                       Authentication authentication) {
+        try {
+            return ApiResponse.success("平台账号已创建", memberService.createPlatformAccount(
+                    body.get("email"), body.get("password"), body.get("name"), body.get("role"),
+                    SecurityUtils.getUserId(authentication)));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        }
+    }
+
+    // ---------------- 角色、功能与规则库统一授权 ----------------
+
+    @GetMapping("/features")
+    public ApiResponse<List<SystemFeatureDTO>> listGrantableFeatures(Authentication authentication) {
+        try {
+            return ApiResponse.success(memberService.listGrantableFeatures(
+                    SecurityUtils.getUserId(authentication)));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        }
+    }
+
+    @GetMapping("/{memberId}/permissions")
+    public ApiResponse<MemberPermissionsDTO> getPermissions(@PathVariable Long memberId,
+                                                             Authentication authentication) {
+        try {
+            return ApiResponse.success(memberService.getMemberPermissions(
+                    memberId, SecurityUtils.getUserId(authentication)));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.badRequest(e.getMessage());
+        }
+    }
+
+    @PutMapping("/{memberId}/permissions")
+    public ApiResponse<Void> updatePermissions(@PathVariable Long memberId,
+                                                @RequestBody MemberPermissionUpdateRequest request,
+                                                Authentication authentication) {
+        try {
+            memberService.updateMemberPermissions(
+                    memberId, request, SecurityUtils.getUserId(authentication));
+            return ApiResponse.success("成员权限已保存", null);
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         }

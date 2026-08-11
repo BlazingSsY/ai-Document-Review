@@ -13,22 +13,21 @@ import {
   AppstoreOutlined,
   ProfileOutlined,
   BookOutlined,
-  AimOutlined,
   FundOutlined,
   ExperimentOutlined,
-  IdcardOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import useAuthStore from '../../features/auth/store/authStore';
 import useLogStore from '../../features/review/store/logStore';
 import taskWebSocket, { TaskProgressMessage } from '../utils/websocket';
+import { getUserProfile } from '../../features/auth/api/auth';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 
 const ROLE_TAG: Record<string, { label: string; color: string }> = {
-  supervisor: { label: '主管', color: 'red' },
-  admin: { label: '管理员', color: 'blue' },
+  supervisor: { label: '平台管理员', color: 'red' },
+  admin: { label: '单位管理员', color: 'blue' },
   user: { label: '用户', color: 'default' },
 };
 
@@ -36,12 +35,22 @@ function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout } = useAuthStore();
+  const { user, logout, updateUser } = useAuthStore();
   const { token: themeToken } = theme.useToken();
 
   const role = user?.role || 'user';
   const isSupervisor = role === 'supervisor';
   const isManager = role === 'supervisor' || role === 'admin';
+  const canUseEnvReview = isSupervisor || Boolean(
+    user?.featureCodes?.includes('ENV_TEST_OUTLINE_REVIEW'),
+  );
+
+  // 权限以数据库为准；路由切换时刷新一次资料，使管理员刚调整的功能授权及时反映到菜单。
+  useEffect(() => {
+    getUserProfile()
+      .then((res) => updateUser(res.data.data))
+      .catch(() => { /* 统一请求拦截器处理失效会话 */ });
+  }, [location.pathname, updateUser]);
 
   // Global log subscriber: keep accumulating WebSocket-driven log entries even
   // when the user is NOT on the workspace page, so returning later via 查看详情
@@ -93,7 +102,7 @@ function AppLayout() {
 
   const menuItems: MenuProps['items'] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
-    {
+    ...(canUseEnvReview ? [{
       key: 'exam-outline-section',
       icon: <ExperimentOutlined />,
       label: '环境试验大纲审查',
@@ -107,22 +116,13 @@ function AppLayout() {
             { key: '/chunk/rules', icon: <ProfileOutlined />, label: '审查规则' },
           ],
         },
-        {
-          key: 'sar-section',
-          icon: <AimOutlined />,
-          label: '结构化审查',
-          children: [
-            { key: '/sar/scenarios', icon: <AppstoreOutlined />, label: '审查场景' },
-            { key: '/sar/rules', icon: <ProfileOutlined />, label: '审查规则' },
-          ],
-        },
+
       ],
-    },
+    }] : []),
     { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
     ...(isManager ? [{ key: '/analytics', icon: <FundOutlined />, label: '数据看板' }] : []),
-    // 成员管理对单位管理员开放（只能管本单位）；用户管理仍是主管专属的平台级账号维护。
-    ...(isManager ? [{ key: '/members', icon: <IdcardOutlined />, label: '成员管理' }] : []),
-    ...(isSupervisor ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }] : []),
+    // 成员、组织与授权合并为一个入口；单位管理员的范围由后端组织树收敛。
+    ...(isManager ? [{ key: '/members', icon: <TeamOutlined />, label: '成员与权限' }] : []),
   ];
 
   const userMenuItems: MenuProps['items'] = [
@@ -142,15 +142,12 @@ function AppLayout() {
   ];
 
   // The sidebar is three-level (业务域 → 管线 → leaf). The menu's `selectedKey` must
-  // be the leaf path. We default every group open so users always see all four
-  // entries; they can manually collapse a group if they want.
+  // be the leaf path. We default the visible review group open.
   const path = location.pathname;
   const selectedKey = path.startsWith('/chunk/scenarios') ? '/chunk/scenarios'
     : path.startsWith('/chunk/rules') ? '/chunk/rules'
-    : path.startsWith('/sar/scenarios') ? '/sar/scenarios'
-    : path.startsWith('/sar/rules') ? '/sar/rules'
     : '/' + path.split('/')[1];
-  const openKeys = ['exam-outline-section', 'chunk-section', 'sar-section'];
+  const openKeys = ['exam-outline-section', 'chunk-section'];
   const roleTag = ROLE_TAG[role] || ROLE_TAG.user;
 
   return (

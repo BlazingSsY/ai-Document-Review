@@ -17,10 +17,12 @@ import {
   formatTime,
   isHighConfidenceNotApplicable,
   isProblemCheck,
+  isVisibleCheckResult,
   normalizeStatus,
   numericField,
   recordArray,
   scoreField,
+  sortReviewItemsByDocumentOrder,
   sourceCandidatesForItem,
   sourceChapterLabel,
   sourcePayload,
@@ -436,9 +438,11 @@ export function useReviewWorkspace() {
   const status = normalizeStatus(task?.status || '');
   const issues = extractIssues(task?.aiResult || null);
   const checkResults = extractCheckResults(task?.aiResult || null);
-  const hasCheckMatrix = checkResults.length > 0;
-  const visibleCheckResults = checkResults.filter((item) => !isHighConfidenceNotApplicable(item));
-  const reviewItems = hasCheckMatrix ? visibleCheckResults : issues;
+  const visibleCheckResults = checkResults.filter((item) => (
+    isVisibleCheckResult(item) && !isHighConfidenceNotApplicable(item)
+  ));
+  const hasCheckMatrix = visibleCheckResults.length > 0;
+  const reviewItems = sortReviewItemsByDocumentOrder(hasCheckMatrix ? visibleCheckResults : issues);
   const problemCount = hasCheckMatrix
     ? visibleCheckResults.filter(isProblemCheck).length
     : issues.length;

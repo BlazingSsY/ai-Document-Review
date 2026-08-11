@@ -102,6 +102,10 @@ review:
     # chunkReviewExecutor 池子大小 = 此值 × async.max-pool-size，会自动跟随，
     # 因此调这一处即可，不需要动 AsyncConfig。
     chunk-concurrency: 6
+    # All CHUNK review tasks share this fair outbound-call budget. Two documents
+    # can progress together without multiplying the per-document limit into an
+    # upstream timeout/rate-limit storm.
+    global-ai-concurrency: 8
   dispatch:
     # 【已废弃，默认关闭】一级章节号不大于该值时，仅执行内置文字质量检查，不注入业务规则。
     # 该档位在 dispatchForChunk 最开头就 return，会绕过全部规则元数据——你给第 3 章配的

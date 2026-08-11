@@ -9,7 +9,6 @@ import com.aireview.auth.security.SecurityUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,7 +21,6 @@ public class ScenarioController {
     private final ScenarioService scenarioService;
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<ScenarioDTO> createScenario(@Valid @RequestBody ScenarioCreateRequest request,
                                                     Authentication authentication) {
         try {
@@ -38,9 +36,11 @@ public class ScenarioController {
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<ScenarioDTO> getScenario(@PathVariable Long id) {
+    public ApiResponse<ScenarioDTO> getScenario(@PathVariable Long id,
+                                                 Authentication authentication) {
         try {
-            ScenarioDTO scenario = scenarioService.getScenarioById(id);
+            ScenarioDTO scenario = scenarioService.getScenarioById(
+                    id, SecurityUtils.getUserId(authentication));
             return ApiResponse.success(scenario);
         } catch (IllegalArgumentException e) {
             return ApiResponse.notFound(e.getMessage());
@@ -66,7 +66,6 @@ public class ScenarioController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<ScenarioDTO> updateScenario(@PathVariable Long id,
                                                     @Valid @RequestBody ScenarioCreateRequest request,
                                                     Authentication authentication) {
@@ -83,7 +82,6 @@ public class ScenarioController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<Void> deleteScenario(@PathVariable Long id, Authentication authentication) {
         try {
             Long userId = SecurityUtils.getUserId(authentication);

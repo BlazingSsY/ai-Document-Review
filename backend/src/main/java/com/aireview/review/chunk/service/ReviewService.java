@@ -17,6 +17,7 @@ import com.aireview.modelconfig.service.AiApiException;
 import com.aireview.modelconfig.service.AiCallOptions;
 import com.aireview.modelconfig.service.AiModelService;
 import com.aireview.rule.service.RuleService;
+import com.aireview.scenario.service.ScenarioService;
 import com.aireview.rule.repository.RuleCheckMapper;
 import com.aireview.rule.repository.RuleMapper;
 import com.aireview.review.core.ReviewCategory;
@@ -75,6 +76,7 @@ public class ReviewService {
     private final RuleCheckMapper ruleCheckMapper;
     private final RuleMapper ruleMapper;
     private final ReviewAuditLogMapper reviewAuditLogMapper;
+    private final ScenarioService scenarioService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -96,6 +98,17 @@ public class ReviewService {
     @Autowired
     @Qualifier("chunkReviewExecutor")
     private Executor chunkReviewExecutor;
+
+    /**
+     * Fair, process-wide gate for outbound CHUNK-pipeline chat calls. Per-task
+     * semaphores keep one document bounded; this gate additionally prevents two
+     * documents from multiplying that limit and overwhelming the same upstream
+     * service. Fair ordering lets a later document obtain permits as soon as the
+     * first document finishes an in-flight call.
+     */
+    @Autowired
+    @Qualifier("reviewAiCallSemaphore")
+    private Semaphore reviewAiCallSemaphore;
 
     /** Tracks cancelled task IDs so the async loop can exit early. */
     private final Set<String> cancelledTasks = ConcurrentHashMap.newKeySet();
@@ -177,6 +190,8 @@ public class ReviewService {
     private static final int CONVERGENCE_MAX_TOKENS = 8192;
     /** JSON 解析失败时的最大整体尝试次数（含首次）；每次换种子重新调用模型。 */
     private static final int JSON_PARSE_MAX_ATTEMPTS = 3;
+    /** Document batches are expensive; one format-repair retry is enough. */
+    private static final int DOCUMENT_JSON_PARSE_MAX_ATTEMPTS = 2;
 
     /**
      * Submit a review task: upload the document and start async processing.
@@ -203,6 +218,7 @@ public class ReviewService {
                                       boolean qualityCheckEnabled,
                                       String reviewCategory) throws IOException {
         String category = ReviewCategory.normalize(reviewCategory);
+        scenarioService.validateScenarioForReview(scenarioId, userId);
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
             throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
@@ -473,6 +489,7 @@ public class ReviewService {
         if (!original.getUserId().equals(userId)) {
             throw new IllegalArgumentException("You can only re-review your own tasks");
         }
+        scenarioService.validateScenarioForReview(original.getScenarioId(), userId);
 
         ReviewTask task = new ReviewTask();
         task.setUserId(userId);
@@ -483,7 +500,7 @@ public class ReviewService {
         // 重审要复现原任务的配置。qualityCheckEnabled 此前漏继承，导致重审一个关闭了
         // 全文质量检查的任务时，会因列默认值 TRUE 而重新跑满质量检查（SAR 侧一直是继承的）。
         task.setQualityCheckEnabled(original.getQualityCheckEnabled());
-        task.setReviewCategory(resolveCategory(original.getReviewCategory()));
+        task.setReviewCategory(ReviewCategory.resolveOrDefault(original.getReviewCategory()));
         task.setStatus(ReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -505,6 +522,7 @@ public class ReviewService {
         if (ReviewTask.STATUS_PROCESSING.equals(task.getStatus())) {
             throw new IllegalArgumentException("Task is currently processing");
         }
+        scenarioService.validateScenarioForReview(task.getScenarioId(), userId);
 
         Set<Integer> failedChunkNumbers = extractFailedChunkNumbers(task.getAiResult());
         if (failedChunkNumbers.isEmpty()) {
@@ -898,11 +916,24 @@ public class ReviewService {
                     String errorMessage = null;
                     try {
                         int minChecks = RuleParser.expectedCheckCount(batch);
-                        AiCallOptions docOptions = buildConvergenceOptions(modelConfig,
-                                stableSeed(taskId, /*chunkIdx*/ -1, batchIdx), minChecks);
-                        String docResponse = callWithRetry(modelConfig, docSystemPrompt,
-                                evidence.content(), docOptions);
-                        docParsed = tryParseAiJson(docResponse);
+                        String docResponse = null;
+                        for (int parseAttempt = 1;
+                             parseAttempt <= DOCUMENT_JSON_PARSE_MAX_ATTEMPTS && docParsed == null;
+                             parseAttempt++) {
+                            long seed = stableSeed(taskId, /*chunkIdx*/ -1, batchIdx)
+                                    + (parseAttempt - 1L);
+                            AiCallOptions docOptions = buildConvergenceOptions(modelConfig, seed, minChecks);
+                            docResponse = callWithRetry(modelConfig, docSystemPrompt,
+                                    evidence.content(), docOptions);
+                            docParsed = tryParseAiJson(docResponse);
+                            if (docParsed == null) {
+                                log.warn("Document-level review batch {}/{} JSON parse failed "
+                                                + "(attempt {}/{}), responseLength={}",
+                                        batchIdx + 1, docBatches.size(), parseAttempt,
+                                        DOCUMENT_JSON_PARSE_MAX_ATTEMPTS,
+                                        docResponse == null ? 0 : docResponse.length());
+                            }
+                        }
                         if (docParsed == null) {
                             fallbackReason = "文档级审查模型响应无法解析，系统已保留该规则并转为待复核。";
                         }
@@ -932,9 +963,10 @@ public class ReviewService {
                     docChunk.put("appliedRules", batch.stream().map(e -> e.name).toList());
                     docChunk.put("sourceRefs", buildDocumentRuleSourceRefs(evidence, rawChapters));
                     docChunk.put("reviewProfile", "document_rules");
-                    if (errorMessage != null) {
+                    if (fallbackReason != null) {
                         docChunk.put("degraded", true);
-                        docChunk.put("error", errorMessage);
+                        docChunk.put("error", errorMessage == null
+                                ? "unparseable_model_response" : errorMessage);
                     }
                     docChunk.put("result", docParsed);
                     chunkResults.add(docChunk);
@@ -1658,6 +1690,16 @@ public class ReviewService {
             samples.add(parsed);
         }
         Map<String, Object> merged = mergeSamples(samples, chunk.getLabel());
+        // A schema minItems constraint controls only the row count; it cannot stop a
+        // model from duplicating one check_code and omitting another. Reconcile by
+        // identity so every injected business rule/check always has exactly one row.
+        // Missing rows are explicit Review results instead of silently disappearing.
+        merged = DocumentRuleReviewSupport.ensureRuleCoverage(
+                merged,
+                ruleEntries,
+                chunk.getLabel(),
+                modelResponded ? null
+                        : "模型响应无法解析，本章规则未完成可靠判定，系统已转为待复核。");
         if (qualityCheck) {
             enrichBuiltInQualityChecks(
                     merged, chunkHasFiguresOrTables(chunk.getContent()), modelResponded);
@@ -2258,7 +2300,7 @@ public class ReviewService {
         Exception lastException = null;
         for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
             try {
-                return aiModelService.callAiModel(config, systemPrompt, userContent, options);
+                return callAiModelWithGlobalPermit(config, systemPrompt, userContent, options);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("Review interrupted", ie);
@@ -2301,6 +2343,20 @@ public class ReviewService {
         }
         String rootCause = lastException != null ? lastException.getMessage() : "unknown error";
         throw new RuntimeException("AI调用失败(重试" + maxRetryAttempts + "次): " + rootCause, lastException);
+    }
+
+    private String callAiModelWithGlobalPermit(AiModelConfig config, String systemPrompt,
+                                                String userContent, AiCallOptions options) throws Exception {
+        boolean acquired = false;
+        try {
+            reviewAiCallSemaphore.acquire();
+            acquired = true;
+            return aiModelService.callAiModel(config, systemPrompt, userContent, options);
+        } finally {
+            if (acquired) {
+                reviewAiCallSemaphore.release();
+            }
+        }
     }
 
     /**
@@ -2577,6 +2633,9 @@ public class ReviewService {
                     normalized.putIfAbsent("sourceChunk", chunk.get("chunk"));
                     normalized.putIfAbsent("sourceTitle", chapterTitle);
                     normalized.putIfAbsent("sourceRefs", chunk.get("sourceRefs"));
+                    if (!shouldExposeCheckResult(normalized)) {
+                        continue;
+                    }
                     allCheckResults.add(normalized);
                     checkStatusCounts.merge(String.valueOf(normalized.get("status")), 1, Integer::sum);
                 }
@@ -2637,6 +2696,20 @@ public class ReviewService {
         out.putIfAbsent("missing_items", new ArrayList<>());
         out.putIfAbsent("location", chapterLabel == null ? "" : chapterLabel);
         return out;
+    }
+
+    /**
+     * Business-rule rows are a complete decision matrix and must always remain
+     * visible, including Pass and Review. Basic text-quality checks are finding
+     * oriented: only actual failures belong in the user-facing check list.
+     * Their full per-chunk audit rows remain available inside chunkResults.
+     */
+    private boolean shouldExposeCheckResult(Map<String, Object> check) {
+        String ruleCode = Objects.toString(check.get("rule_code"), "").trim();
+        String checkCode = Objects.toString(check.get("check_code"), "").trim();
+        boolean textQuality = RuleDispatcher.BASIC_QUALITY_RULE_CODE.equals(ruleCode)
+                || checkCode.startsWith(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-");
+        return !textQuality || "Fail".equals(normalizeCheckStatus(check.get("status")));
     }
 
     private String normalizeCheckStatus(Object raw) {
@@ -2772,15 +2845,6 @@ public class ReviewService {
 
     private static String firstNonBlank(String a, String b) {
         return a == null || a.isBlank() ? (b == null ? "" : b) : a;
-    }
-
-    /**
-     * 存量任务的 review_category 可能为空（该列晚于任务表加入，且 light 查询之外的历史行
-     * 未必回填过），一律按环境试验大纲回显——加类别之前系统只审试验大纲，这个回落是
-     * 事实正确的，也让前端不必处理空值。
-     */
-    private static String resolveCategory(String raw) {
-        return raw == null || raw.isBlank() ? ReviewCategory.ENV_TEST_OUTLINE : raw;
     }
 
     private ReviewTask requireOwnedTask(String taskId, Long userId) {
@@ -2974,7 +3038,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
-        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
+        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
         return dto;
     }
 
@@ -2994,7 +3058,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
-        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
+        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
         return dto;
     }
 
@@ -3030,7 +3094,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
-        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
+        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
         return dto;
     }
 }

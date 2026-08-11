@@ -222,11 +222,31 @@ public class RuleService {
 
     /**
      * List rules with pagination, role-based filtering.
-     * supervisor/admin: see all rules.
-     * user: see only assigned rules.
+     * supervisor: see all rules.
+     * admin/user: see only assigned rules. 管理角色不再隐式绕过规则库授权。
      */
     public PageResponse<RuleDTO> listRules(int page, int size, Long userId, String role, Long libraryId) {
         return listRules(page, size, userId, role, libraryId, null, false);
+    }
+
+    public void requireLibraryAccess(Long libraryId, Long userId, String role) {
+        if ("supervisor".equals(role)) return;
+        if (libraryId == null
+                || !userRuleAssignmentMapper.findLibraryIdsByUserId(userId).contains(libraryId)) {
+            throw new IllegalArgumentException("无权访问该规则库");
+        }
+    }
+
+    public void requireFolderAccess(Long folderId, Long userId, String role) {
+        RuleFolder folder = ruleFolderMapper.selectById(folderId);
+        if (folder == null) throw new IllegalArgumentException("文件夹不存在");
+        requireLibraryAccess(folder.getLibraryId(), userId, role);
+    }
+
+    public void requireRuleAccess(Long ruleId, Long userId, String role) {
+        Rule rule = ruleMapper.selectById(ruleId);
+        if (rule == null) throw new IllegalArgumentException("规则不存在");
+        requireLibraryAccess(rule.getLibraryId(), userId, role);
     }
 
     /**
@@ -238,7 +258,7 @@ public class RuleService {
         Page<Rule> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<Rule> query = new LambdaQueryWrapper<>();
 
-        if ("user".equals(role)) {
+        if (!"supervisor".equals(role)) {
             List<Long> assignedLibraryIds = userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
             if (assignedLibraryIds.isEmpty()) {
                 return PageResponse.of(List.of(), 0, page, size);

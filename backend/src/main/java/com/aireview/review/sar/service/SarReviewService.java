@@ -407,7 +407,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
-        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
+        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
         return dto;
     }
 
@@ -484,7 +484,7 @@ public class SarReviewService {
         task.setScenarioId(original.getScenarioId());
         task.setSelectedModel(original.getSelectedModel());
         task.setQualityCheckEnabled(original.getQualityCheckEnabled());
-        task.setReviewCategory(resolveCategory(original.getReviewCategory()));
+        task.setReviewCategory(ReviewCategory.resolveOrDefault(original.getReviewCategory()));
         task.setStatus(SarReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -683,14 +683,6 @@ public class SarReviewService {
                 .bytes();
     }
 
-    /**
-     * 存量任务的 review_category 可能为空（该列晚于任务表加入），一律按环境试验大纲回显——
-     * 加类别之前系统只审试验大纲，这个回落是事实正确的，也让前端不必处理空值。
-     */
-    private static String resolveCategory(String raw) {
-        return raw == null || raw.isBlank() ? ReviewCategory.ENV_TEST_OUTLINE : raw;
-    }
-
     private SarReviewTask requireOwnedTask(String taskId, Long userId) {
         SarReviewTask task = sarReviewTaskMapper.selectById(taskId);
         if (task == null) {
@@ -721,7 +713,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
-        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
+        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
         return dto;
     }
 
@@ -764,7 +756,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
-        dto.setReviewCategory(resolveCategory(task.getReviewCategory()));
+        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
         return dto;
     }
 

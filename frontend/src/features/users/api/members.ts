@@ -4,6 +4,7 @@ import { PaginatedResult } from '../../rules/api/rules';
 export interface Unit {
   id: number;
   name: string;
+  parentId?: number;
   code?: string;
   remark?: string;
   createdAt?: string;
@@ -21,6 +22,21 @@ export interface Member {
   idCardMasked?: string;
   mustChangePassword?: boolean;
   createdAt?: string;
+  featureCodes?: string[];
+  ruleLibraryCount?: number;
+}
+
+export interface SystemFeature {
+  code: string;
+  name: string;
+  description: string;
+}
+
+export interface MemberPermissions {
+  userId: number;
+  role: string;
+  featureCodes: string[];
+  libraryIds: number[];
 }
 
 export interface MemberImportRow {
@@ -43,8 +59,11 @@ export function getUnits() {
   return request.get<ApiResponse<Unit[]>>(`${BASE}/units`);
 }
 
-export function createUnit(params: { name: string; code?: string; remark?: string }) {
-  return request.post<ApiResponse<Unit>>(`${BASE}/units`, params);
+export function createUnit(params: { parentId?: number; name: string; code?: string; remark?: string }) {
+  return request.post<ApiResponse<Unit>>(`${BASE}/units`, {
+    ...params,
+    parentId: params.parentId == null ? undefined : String(params.parentId),
+  });
 }
 
 export function deleteUnit(unitId: number) {
@@ -74,6 +93,31 @@ export function createMember(params: {
     ...params,
     unitId: String(params.unitId),
   });
+}
+
+export function createPlatformAccount(params: {
+  email: string;
+  password: string;
+  name: string;
+  role: string;
+}) {
+  return request.post<ApiResponse<Member>>(`${BASE}/platform-accounts`, params);
+}
+
+export function getGrantableFeatures() {
+  return request.get<ApiResponse<SystemFeature[]>>(`${BASE}/features`);
+}
+
+export function getMemberPermissions(memberId: number) {
+  return request.get<ApiResponse<MemberPermissions>>(`${BASE}/${memberId}/permissions`);
+}
+
+export function updateMemberPermissions(memberId: number, params: {
+  role: string;
+  featureCodes: string[];
+  libraryIds: number[];
+}) {
+  return request.put<ApiResponse<null>>(`${BASE}/${memberId}/permissions`, params);
 }
 
 export function updateMemberRole(memberId: number, role: string) {

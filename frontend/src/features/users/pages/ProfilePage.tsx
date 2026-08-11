@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Descriptions, Tag, Divider, Form, Input, Button, Typography, message } from 'antd';
+import { Card, Descriptions, Tag, Form, Input, Button, Typography, message } from 'antd';
 import { LockOutlined, SafetyOutlined } from '@ant-design/icons';
 import { changePassword } from '../../auth/api/auth';
 import useAuthStore from '../../auth/store/authStore';
@@ -7,8 +7,8 @@ import useAuthStore from '../../auth/store/authStore';
 const { Title } = Typography;
 
 const ROLE_MAP: Record<string, { label: string; color: string }> = {
-  supervisor: { label: '项目主管', color: 'red' },
-  admin: { label: '管理员', color: 'blue' },
+  supervisor: { label: '平台管理员', color: 'red' },
+  admin: { label: '单位管理员', color: 'blue' },
   user: { label: '普通用户', color: 'default' },
 };
 

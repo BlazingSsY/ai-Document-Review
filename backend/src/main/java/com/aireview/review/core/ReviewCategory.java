@@ -45,4 +45,18 @@ public final class ReviewCategory {
         }
         return value;
     }
+
+    /**
+     * 回显既有任务的类别（读路径）。
+     *
+     * <p>存量任务的 review_category 可能为空（该列晚于任务表加入，且 light 查询之外的历史行
+     * 未必回填过），一律按环境试验大纲回显——加类别之前系统只审试验大纲，这个回落是
+     * 事实正确的，也让前端不必处理空值。
+     *
+     * <p>与 {@link #normalize} 的区别：这里不校验 {@link #ENABLED}、也不抛异常。已经落库的
+     * 行只是被读出来展示，即便它带着一个后来停用的类别，也不该让整个查询失败。
+     */
+    public static String resolveOrDefault(String raw) {
+        return raw == null || raw.isBlank() ? ENV_TEST_OUTLINE : raw;
+    }
 }

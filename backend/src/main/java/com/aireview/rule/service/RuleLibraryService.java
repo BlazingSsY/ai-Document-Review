@@ -9,6 +9,7 @@ import com.aireview.rule.entity.RuleLibrary;
 import com.aireview.rule.repository.RuleFolderMapper;
 import com.aireview.rule.repository.RuleLibraryMapper;
 import com.aireview.rule.repository.RuleMapper;
+import com.aireview.user.entity.UserRuleAssignment;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,9 @@ public class RuleLibraryService {
         lib.setCreatedAt(LocalDateTime.now());
         lib.setUpdatedAt(LocalDateTime.now());
         ruleLibraryMapper.insert(lib);
+        // 非平台管理员创建的规则库也必须立即进入其显式授权集合，否则角色不再隐式
+        // 绕过规则库权限后，创建成功的库会马上从本人列表中消失。
+        userRuleAssignmentMapper.insert(new UserRuleAssignment(creatorId, lib.getId()));
         log.info("Rule library created: {} by user {}", name, creatorId);
         return toDTO(lib);
     }
@@ -70,7 +74,7 @@ public class RuleLibraryService {
     public PageResponse<RuleLibraryDTO> listLibraries(int page, int size, Long userId, String role) {
         Page<RuleLibrary> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<RuleLibrary> query = new LambdaQueryWrapper<>();
-        if ("user".equals(role)) {
+        if (!"supervisor".equals(role)) {
             List<Long> assignedIds = userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
             if (assignedIds.isEmpty()) {
                 return PageResponse.of(List.of(), 0, page, size);
@@ -84,11 +88,35 @@ public class RuleLibraryService {
         return PageResponse.of(records, result.getTotal(), page, size);
     }
 
-    public List<RuleLibraryDTO> listAllLibraries() {
+    public List<RuleLibraryDTO> listAllLibraries(Long userId, String role) {
         LambdaQueryWrapper<RuleLibrary> query = new LambdaQueryWrapper<>();
+        if (!"supervisor".equals(role)) {
+            List<Long> assignedIds = userRuleAssignmentMapper.findLibraryIdsByUserId(userId);
+            if (assignedIds.isEmpty()) return List.of();
+            query.in(RuleLibrary::getId, assignedIds);
+        }
         query.ne(RuleLibrary::getName, BUILTIN_LIBRARY_NAME); // 隐藏系统内置规则库
         query.orderByDesc(RuleLibrary::getUpdatedAt);
         return ruleLibraryMapper.selectList(query).stream().map(this::toDTO).toList();
+    }
+
+    /** 当前操作者允许继续向下授权的规则库集合。 */
+    public List<Long> grantableLibraryIds(Long userId, String role) {
+        return listAllLibraries(userId, role).stream().map(RuleLibraryDTO::getId).toList();
+    }
+
+    public void requireLibraryAccess(Long libraryId, Long userId, String role) {
+        if ("supervisor".equals(role)) return;
+        if (libraryId == null
+                || !userRuleAssignmentMapper.findLibraryIdsByUserId(userId).contains(libraryId)) {
+            throw new IllegalArgumentException("无权访问该规则库");
+        }
+    }
+
+    public void requireFolderAccess(Long folderId, Long userId, String role) {
+        RuleFolder folder = ruleFolderMapper.selectById(folderId);
+        if (folder == null) throw new IllegalArgumentException("文件夹不存在");
+        requireLibraryAccess(folder.getLibraryId(), userId, role);
     }
 
     private RuleLibraryDTO toDTO(RuleLibrary lib) {

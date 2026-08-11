@@ -668,7 +668,14 @@ public class AiModelService {
         }
         String provider = config.getProvider() == null ? "" : config.getProvider().toLowerCase(Locale.ROOT);
         String endpoint = config.getEndpoint() == null ? "" : config.getEndpoint().toLowerCase(Locale.ROOT);
-        if (provider.contains("deepseek") || endpoint.contains("api.deepseek.com")) {
+        String modelIdentity = ((config.getModelKey() == null ? "" : config.getModelKey()) + " "
+                + (config.getModelName() == null ? "" : config.getModelName())).toLowerCase(Locale.ROOT);
+        // Aggregation gateways often use their own provider/endpoint names even
+        // though the selected model is DeepSeek. Detect the model identity too;
+        // otherwise auto mode falls back to prompt-only output and reasoning text
+        // can consume the whole token budget before the JSON answer is emitted.
+        if (provider.contains("deepseek") || endpoint.contains("api.deepseek.com")
+                || modelIdentity.contains("deepseek")) {
             return RESPONSE_FORMAT_JSON_OBJECT;
         }
         if ("openai".equals(provider) || endpoint.contains("api.openai.com")) {

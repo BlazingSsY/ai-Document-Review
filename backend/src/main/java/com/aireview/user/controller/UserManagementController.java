@@ -4,7 +4,6 @@ import com.aireview.common.dto.*;
 import com.aireview.user.dto.UserDTO;
 import com.aireview.user.service.UserService;
 import com.aireview.auth.security.SecurityUtils;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;

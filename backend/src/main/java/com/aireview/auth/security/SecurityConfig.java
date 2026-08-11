@@ -25,6 +25,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final FeatureAuthorizationFilter featureAuthorizationFilter;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -35,7 +36,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/api/v1/auth/**").permitAll()
                 .requestMatchers("/ws/**").permitAll()
-                // 成员管理与数据看板对单位管理员开放：URL 层只放行到「是不是管理员」，
+                // 成员与权限、数据看板对单位管理员开放：URL 层只放行到「是不是管理员」，
                 // 「能不能管这个单位/看这个单位」由 MemberService / DashboardStatsService
                 // 按操作者在库里的 unit_id 逐次判定。两条更具体的规则必须排在下面的
                 // /admin/** 之前，否则会被它先匹配掉。
@@ -58,7 +59,8 @@ public class SecurityConfig {
                             ApiResponse.error(403, "权限不足")));
                 })
             )
-            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(featureAuthorizationFilter, JwtAuthenticationFilter.class);
 
         return http.build();
     }

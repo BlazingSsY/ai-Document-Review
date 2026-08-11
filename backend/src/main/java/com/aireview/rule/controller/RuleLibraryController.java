@@ -45,8 +45,12 @@ public class RuleLibraryController {
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<RuleLibraryDTO> update(@PathVariable Long id,
-                                               @RequestBody Map<String, String> body) {
+                                               @RequestBody Map<String, String> body,
+                                               Authentication authentication) {
         try {
+            ruleLibraryService.requireLibraryAccess(id,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             String name = body.get("name");
             String description = body.get("description");
             RuleLibraryDTO result = ruleLibraryService.updateLibrary(id, name, description);
@@ -61,8 +65,11 @@ public class RuleLibraryController {
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
-    public ApiResponse<Void> delete(@PathVariable Long id) {
+    public ApiResponse<Void> delete(@PathVariable Long id, Authentication authentication) {
         try {
+            ruleLibraryService.requireLibraryAccess(id,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             ruleLibraryService.deleteLibrary(id);
             return ApiResponse.success("规则库已删除", null);
         } catch (IllegalArgumentException e) {
@@ -90,9 +97,11 @@ public class RuleLibraryController {
     }
 
     @GetMapping("/all")
-    public ApiResponse<List<RuleLibraryDTO>> listAll() {
+    public ApiResponse<List<RuleLibraryDTO>> listAll(Authentication authentication) {
         try {
-            List<RuleLibraryDTO> result = ruleLibraryService.listAllLibraries();
+            Long userId = SecurityUtils.getUserId(authentication);
+            String role = SecurityUtils.getRoleFromAuthentication(authentication);
+            List<RuleLibraryDTO> result = ruleLibraryService.listAllLibraries(userId, role);
             return ApiResponse.success(result);
         } catch (Exception e) {
             log.error("Failed to list all rule libraries", e);
@@ -103,8 +112,12 @@ public class RuleLibraryController {
     // ===================== 二级文件夹 =====================
 
     @GetMapping("/{libraryId}/folders")
-    public ApiResponse<List<RuleFolderDTO>> listFolders(@PathVariable Long libraryId) {
+    public ApiResponse<List<RuleFolderDTO>> listFolders(@PathVariable Long libraryId,
+                                                         Authentication authentication) {
         try {
+            ruleLibraryService.requireLibraryAccess(libraryId,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             return ApiResponse.success(ruleLibraryService.listFolders(libraryId));
         } catch (Exception e) {
             log.error("Failed to list rule folders", e);
@@ -118,6 +131,9 @@ public class RuleLibraryController {
                                                    @RequestBody Map<String, String> body,
                                                    Authentication authentication) {
         try {
+            ruleLibraryService.requireLibraryAccess(libraryId,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             String name = body.get("name");
             if (name == null || name.isBlank()) {
                 return ApiResponse.badRequest("文件夹名称不能为空");
@@ -134,8 +150,12 @@ public class RuleLibraryController {
     @PutMapping("/folders/{folderId}")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<RuleFolderDTO> updateFolder(@PathVariable Long folderId,
-                                                   @RequestBody Map<String, Object> body) {
+                                                   @RequestBody Map<String, Object> body,
+                                                   Authentication authentication) {
         try {
+            ruleLibraryService.requireFolderAccess(folderId,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             String name = body.get("name") == null ? null : String.valueOf(body.get("name"));
             Boolean enabled = body.get("enabled") == null ? null : Boolean.valueOf(String.valueOf(body.get("enabled")));
             return ApiResponse.success("文件夹已更新",
@@ -150,8 +170,12 @@ public class RuleLibraryController {
 
     @DeleteMapping("/folders/{folderId}")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
-    public ApiResponse<Void> deleteFolder(@PathVariable Long folderId) {
+    public ApiResponse<Void> deleteFolder(@PathVariable Long folderId,
+                                           Authentication authentication) {
         try {
+            ruleLibraryService.requireFolderAccess(folderId,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             ruleLibraryService.deleteFolder(folderId);
             return ApiResponse.success("文件夹已删除（其规则已移至未分类）", null);
         } catch (IllegalArgumentException e) {

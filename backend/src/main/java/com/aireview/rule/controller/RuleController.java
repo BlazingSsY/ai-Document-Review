@@ -40,6 +40,9 @@ public class RuleController {
                                                  Authentication authentication) {
         try {
             Long userId = SecurityUtils.getUserId(authentication);
+            String role = SecurityUtils.getRoleFromAuthentication(authentication);
+            if (folderId != null) ruleService.requireFolderAccess(folderId, userId, role);
+            else ruleService.requireLibraryAccess(libraryId, userId, role);
             List<RuleDTO> rules = ruleService.uploadRuleAll(file, userId, libraryId, folderId, replaceExisting);
             String msg = rules.size() == 1
                     ? "规则上传成功"
@@ -57,8 +60,13 @@ public class RuleController {
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<List<RuleUploadConflictDTO>> uploadConflicts(@RequestParam("fileName") String fileName,
                                                                     @RequestParam(required = false) Long libraryId,
-                                                                    @RequestParam(required = false) Long folderId) {
+                                                                    @RequestParam(required = false) Long folderId,
+                                                                    Authentication authentication) {
         try {
+            Long userId = SecurityUtils.getUserId(authentication);
+            String role = SecurityUtils.getRoleFromAuthentication(authentication);
+            if (folderId != null) ruleService.requireFolderAccess(folderId, userId, role);
+            else ruleService.requireLibraryAccess(libraryId, userId, role);
             return ApiResponse.success(ruleService.findUploadConflicts(fileName, libraryId, folderId));
         } catch (Exception e) {
             log.error("Failed to check rule upload conflicts", e);
@@ -69,8 +77,12 @@ public class RuleController {
     @PutMapping("/{id}/metadata")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<RuleDTO> updateMetadata(@PathVariable Long id,
-                                               @RequestBody RuleMetadataUpdateRequest req) {
+                                               @RequestBody RuleMetadataUpdateRequest req,
+                                               Authentication authentication) {
         try {
+            ruleService.requireRuleAccess(id,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             RuleDTO updated = ruleService.updateMetadata(id, req);
             return ApiResponse.success("规则元信息已更新", updated);
         } catch (IllegalArgumentException e) {
@@ -84,8 +96,12 @@ public class RuleController {
     @PutMapping("/{id}/content")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
     public ApiResponse<RuleDTO> updateContent(@PathVariable Long id,
-                                              @RequestBody RuleContentUpdateRequest req) {
+                                              @RequestBody RuleContentUpdateRequest req,
+                                              Authentication authentication) {
         try {
+            ruleService.requireRuleAccess(id,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             RuleDTO updated = ruleService.updateContent(id, req);
             return ApiResponse.success("规则内容已更新", updated);
         } catch (IllegalArgumentException e) {
@@ -116,8 +132,11 @@ public class RuleController {
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<RuleDTO> getRule(@PathVariable Long id) {
+    public ApiResponse<RuleDTO> getRule(@PathVariable Long id, Authentication authentication) {
         try {
+            ruleService.requireRuleAccess(id,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             RuleDTO rule = ruleService.getRuleById(id);
             return ApiResponse.success(rule);
         } catch (IllegalArgumentException e) {
@@ -130,8 +149,11 @@ public class RuleController {
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPERVISOR', 'ADMIN')")
-    public ApiResponse<Void> deleteRule(@PathVariable Long id) {
+    public ApiResponse<Void> deleteRule(@PathVariable Long id, Authentication authentication) {
         try {
+            ruleService.requireRuleAccess(id,
+                    SecurityUtils.getUserId(authentication),
+                    SecurityUtils.getRoleFromAuthentication(authentication));
             ruleService.deleteRule(id);
             return ApiResponse.success("规则已删除", null);
         } catch (IllegalArgumentException e) {
