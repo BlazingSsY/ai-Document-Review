@@ -453,6 +453,52 @@ export function normalizeLocatorText(value: string): string {
     .trim();
 }
 
+/** 反向匹配（节点整体落在证据里）所需的最短节点长度，与后端 DocumentEvidenceLocator 保持一致。 */
+const MIN_REVERSE_MATCH_LENGTH = 14;
+/** 正向匹配所需的最短证据长度，与后端 MIN_CANDIDATE_LENGTH 保持一致。 */
+const MIN_FORWARD_MATCH_LENGTH = 6;
+
+/**
+ * 后端没给出 startNodeId 时的兜底定位：在渲染出来的节点里找**最可信**的一个。
+ *
+ * 早期实现是 findIndex + 「任一候选命中即可」，且 compact 正向匹配只要 4 个字符就算数。
+ * 结果是靠前节点里一个 4 字的弱匹配，会盖过靠后节点里整句的强匹配，高亮落到无关段落。
+ * 这里改为对所有 (节点, 候选) 组合打分取最优：正向匹配按长度加倍计权，反向匹配要求节点
+ * 本身足够长，避免标题这类短文本因被证据整体包含而抢先命中。
+ */
+function findBestLocatorNodeIndex(nodes: HTMLElement[], locator: string): number {
+  const candidates = locatorCandidates(locator);
+  if (candidates.length === 0) return -1;
+
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  nodes.forEach((node, index) => {
+    const nodeText = (node.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!nodeText) return;
+    const compactNodeText = normalizeLocatorText(nodeText);
+
+    for (const candidate of candidates) {
+      const value = candidate.replace(/\s+/g, ' ').trim();
+      const compactValue = normalizeLocatorText(value);
+      let score = 0;
+
+      if (compactValue.length >= MIN_FORWARD_MATCH_LENGTH && compactNodeText.includes(compactValue)) {
+        score = compactValue.length * 2;
+      } else if (compactNodeText.length >= MIN_REVERSE_MATCH_LENGTH && compactValue.includes(compactNodeText)) {
+        score = compactNodeText.length;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+  });
+
+  return bestIndex;
+}
+
 export function buildHighlightedSourceHtml(
   html: string,
   startNodeId: string,
@@ -486,19 +532,7 @@ export function buildHighlightedSourceHtml(
     : startIndex;
 
   if (startIndex < 0) {
-    const candidates = locatorCandidates(locator);
-    startIndex = nodes.findIndex((node) => {
-      const nodeText = (node.textContent || '').replace(/\s+/g, ' ').trim();
-      const compactNodeText = normalizeLocatorText(nodeText);
-      return candidates.some((candidate) => {
-        const value = candidate.replace(/\s+/g, ' ').trim();
-        const compactValue = normalizeLocatorText(value);
-        return nodeText.includes(value)
-          || (nodeText.length >= 8 && value.includes(nodeText))
-          || (compactValue.length >= 4 && compactNodeText.includes(compactValue))
-          || (compactNodeText.length >= 8 && compactValue.includes(compactNodeText));
-      });
-    });
+    startIndex = findBestLocatorNodeIndex(nodes, locator);
     endIndex = startIndex;
   }
 

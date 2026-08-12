@@ -1,39 +1,29 @@
 package com.aireview.modelconfig.service;
 
 import com.aireview.modelconfig.entity.AiModelConfig;
+import com.aireview.review.llm.ThinkingModeDetector;
 import com.alibaba.fastjson2.JSONObject;
 
 import java.util.Locale;
 
 /**
- * Translates the model-level {@code thinkingMode} switch into provider-specific
- * OpenAI-compatible request fields, in <em>both</em> directions.
+ * 把「统一关闭思考」这一策略翻译成各家 OpenAI 兼容接口的具体请求字段。
  *
- * <p>Semantics of {@code thinkingMode}:
- * <ul>
- *   <li>{@code true} — force thinking on ({@code thinking={type:enabled}} /
- *       {@code enable_thinking=true} / {@code reasoning_effort=medium}).</li>
- *   <li>{@code false} — force thinking <em>off</em> ({@code thinking={type:disabled}} /
- *       {@code enable_thinking=false} / {@code reasoning_effort=none}). Leaving the
- *       parameter out here is not equivalent: a hybrid model that reasons by default
- *       would keep burning the output budget on chain-of-thought and truncate the
- *       final JSON, which is exactly what the switch is meant to prevent.</li>
- *   <li>{@code null} — no stated intent, preserve the provider default and send nothing.
- *       Only reachable for in-memory probe configs; the persisted column is NOT NULL.</li>
- * </ul>
+ * <p>本系统对所有模型一律请求关闭思考，不再有用户可配的开关。原因见
+ * {@link com.aireview.review.llm.ThinkingModeDetector}：审查要的是严格按 schema 吐
+ * 结构化 JSON，思维链会和最终 JSON 抢同一份输出预算，经常把 JSON 挤没。
  *
- * <p>Both directions are gated on the same allow-list: only providers whose reasoning
- * switch we can name with confidence receive a parameter. Unknown/aggregation gateways
- * are left untouched. Two asymmetries are deliberate:
- * <ul>
- *   <li>Fixed-reasoning models (R1 / Reasoner / *-thinking) cannot be switched off, so a
- *       disable intent is dropped rather than sent and rejected.</li>
- *   <li>OpenAI o-series only accepts {@code low|medium|high} — there is no "off" — so a
- *       disable intent is a no-op there.</li>
- * </ul>
+ * <p><b>为什么必须显式发「关闭」，而不是什么都不发</b>：混合推理模型（DeepSeek V3/V4、
+ * Qwen3、GLM-4.5+、Kimi K2.x）默认是开着思考的。不发参数等于沿用它的默认值，照样烧预算。
+ * 这正是这个适配器存在的意义。
  *
- * <p>If a provider still rejects the parameter, the caller's one-time compatibility
- * fallback ({@link #isCompatibilityError}) retries without it and caches the result.
+ * <p>只对能叫得出名字的网关发参数，未知的聚合网关一律不动——发一个它不认识的字段会直接
+ * 400。若仍被拒，调用方有一次性兼容回退（{@link #isCompatibilityError}）会去掉参数重试
+ * 并缓存结果。
+ *
+ * <p>固定推理模型（R1 / Reasoner / *-thinking / o 系列）没有关闭档，对它们发 disable 是
+ * 白发甚至报错，因此直接跳过；这类模型由 {@code ThinkingModeDetector} 识别后走
+ * 「省略 temperature + 抬高 max_tokens」的兼容路径。
  */
 final class ReasoningModeAdapter {
 
@@ -58,65 +48,41 @@ final class ReasoningModeAdapter {
         if (config == null || body == null) {
             return AppliedControl.none();
         }
-        Boolean thinkingMode = config.getThinkingMode();
-        if (thinkingMode == null) {
-            return AppliedControl.none();
-        }
-        boolean enable = thinkingMode;
-
         String provider = normalize(config.getProvider());
         String endpoint = normalize(config.getEndpoint());
         String model = normalize((config.getModelKey() == null ? "" : config.getModelKey())
                 + " " + (config.getModelName() == null ? "" : config.getModelName()));
 
-        // DeepSeek's official V4 API supports an explicit thinking switch in both
-        // directions. Fixed-reasoning models (deepseek-reasoner / R1) have no "off",
-        // so drop a disable intent instead of sending a doomed parameter.
+        // 关不掉的模型不发 disable：DeepSeek reasoner / R1 / *-thinking / o 系列都没有
+        // 关闭档，发过去要么被忽略要么直接 400。
+        if (ThinkingModeDetector.reasonsUnconditionally(model)) {
+            return AppliedControl.none();
+        }
+
+        // DeepSeek 官方 V4 接口支持显式的思考开关。
         if (endpoint.contains("api.deepseek.com") || "deepseek".equals(provider)) {
-            if (!enable && isFixedReasoningModel(model)) {
-                return AppliedControl.none();
-            }
-            String type = enable ? "enabled" : "disabled";
             JSONObject thinking = new JSONObject();
-            thinking.put("type", type);
+            thinking.put("type", "disabled");
             body.put(CONTROL_THINKING, thinking);
-            return new AppliedControl(CONTROL_THINKING, type);
+            return new AppliedControl(CONTROL_THINKING, "disabled");
         }
 
-        // SiliconFlow exposes enable_thinking for hybrid Qwen/DeepSeek/GLM models.
-        // Do not add it to fixed-reasoning models (R1/Reasoner/Thinking) or MiniMax,
-        // whose endpoint contracts differ — supportsEnableThinking already excludes
-        // both, so the same gate serves the enable and disable directions. A
-        // provider-side 400 is handled by the caller's one-time compatibility
-        // fallback and cached for later requests.
+        // 硅基流动对 Qwen/DeepSeek/GLM/Kimi 等混合模型暴露 enable_thinking。
         if (isSiliconFlow(provider, endpoint) && supportsEnableThinking(model)) {
-            body.put(CONTROL_ENABLE_THINKING, enable);
-            return new AppliedControl(CONTROL_ENABLE_THINKING, Boolean.toString(enable));
+            body.put(CONTROL_ENABLE_THINKING, false);
+            return new AppliedControl(CONTROL_ENABLE_THINKING, "false");
         }
 
-        // DashScope/Bailian uses the same top-level extension for its hybrid model
-        // families. MiniMax direct models deliberately remain untouched.
+        // 阿里百炼/DashScope 对同系列混合模型用同一个顶层扩展字段。
         if (isDashScope(provider, endpoint) && supportsEnableThinking(model)) {
-            body.put(CONTROL_ENABLE_THINKING, enable);
-            return new AppliedControl(CONTROL_ENABLE_THINKING, Boolean.toString(enable));
+            body.put(CONTROL_ENABLE_THINKING, false);
+            return new AppliedControl(CONTROL_ENABLE_THINKING, "false");
         }
 
-        // OpenAI-compatible Google endpoints map reasoning_effort=none to a zero
-        // thinking budget where the selected model supports switching it off.
+        // Gemini 的 OpenAI 兼容端点用 reasoning_effort=none 表示零思考预算。
         if (isGeminiOpenAiEndpoint(provider, endpoint) && isConfigurableGemini(model)) {
-            String effort = enable ? "medium" : "none";
-            body.put(CONTROL_REASONING_EFFORT, effort);
-            return new AppliedControl(CONTROL_REASONING_EFFORT, effort);
-        }
-
-        // Only attach reasoning_effort on official OpenAI endpoints and known
-        // reasoning-capable families; ordinary GPT-4.x models should not receive it.
-        // The o-series accepts only low/medium/high — there is no "off" — so a
-        // disable intent is intentionally a no-op rather than a guaranteed 400.
-        if (enable && isOpenAi(provider, endpoint) && isOpenAiReasoningModel(model)) {
-            String effort = "medium";
-            body.put(CONTROL_REASONING_EFFORT, effort);
-            return new AppliedControl(CONTROL_REASONING_EFFORT, effort);
+            body.put(CONTROL_REASONING_EFFORT, "none");
+            return new AppliedControl(CONTROL_REASONING_EFFORT, "none");
         }
 
         return AppliedControl.none();
@@ -155,12 +121,9 @@ final class ReasoningModeAdapter {
                 || endpoint.contains("generativelanguage.googleapis.com");
     }
 
-    private static boolean isOpenAi(String provider, String endpoint) {
-        return "openai".equals(provider) || endpoint.contains("api.openai.com");
-    }
 
     private static boolean supportsEnableThinking(String model) {
-        if (model.contains("minimax") || isFixedReasoningModel(model)) {
+        if (model.contains("minimax") || ThinkingModeDetector.reasonsUnconditionally(model)) {
             return false;
         }
         return model.contains("qwen3") || model.contains("deepseek-v3") || model.contains("deepseek-v4")
@@ -169,19 +132,11 @@ final class ReasoningModeAdapter {
                 || model.contains("kimi-k2");
     }
 
-    private static boolean isFixedReasoningModel(String model) {
-        return model.contains("reasoner") || model.contains("thinking")
-                || model.contains("deepseek-r1") || model.matches(".*(?:^|[/_-])r1(?:$|[_-]).*");
-    }
 
     private static boolean isConfigurableGemini(String model) {
         return model.contains("gemini-2.5") || model.contains("gemini-3");
     }
 
-    private static boolean isOpenAiReasoningModel(String model) {
-        return model.contains("gpt-5") || model.contains("gpt-oss")
-                || model.matches(".*(?:^|[/_-])o[134](?:$|[._-]).*");
-    }
 
     private static String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);

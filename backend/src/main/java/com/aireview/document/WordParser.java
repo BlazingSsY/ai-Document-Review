@@ -1625,24 +1625,6 @@ public class WordParser {
         }
 
         /**
-         * Get the numId for a heading style, using the document's actual heading numbering.
-         *
-         * For heading styles, the style definition may specify a wrong numId (e.g., heading 2
-         * style may define numId=1, but heading 1 paragraphs actually use numId=9). To avoid
-         * counter conflicts, we find the numId used by the FIRST heading 1 paragraph in the
-         * document, and use that for all heading styles.
-         *
-         * @param styleId the style ID
-         * @param styles the document styles
-         * @return the correct numId for heading styles, or null if not applicable
-         */
-        private BigInteger getHeadingNumId(String styleId, XWPFStyles styles) {
-            // This will be determined during parsing by tracking heading 1's numId
-            // For now, return null - the actual logic is in formatNumber method
-            return null;
-        }
-
-        /**
          * Get the ilvl (indent level) for a heading style based on its level.
          *
          * heading 1 → ilvl 0

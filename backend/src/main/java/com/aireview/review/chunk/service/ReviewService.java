@@ -923,94 +923,66 @@ public class ReviewService {
                         "正在进行文档级综合审查（" + docRules.size() + " 条，"
                                 + docBatches.size() + " 批）...", 92);
 
-                for (int batchIdx = 0; batchIdx < docBatches.size(); batchIdx++) {
-                    List<RuleParser.RuleEntry> batch = docBatches.get(batchIdx);
-                    String docSystemPrompt = RuleParser.buildStructuredSystemPrompt(batch);
-                    String fallbackReason = null;
-                    Map<String, Object> docParsed = null;
-                    String errorMessage = null;
+                // 分批并行：每批一次独立调用，彼此不依赖（各自带同一份证据包、判定各自的规则）。
+                // 早期这里是 for 循环串行发，N 批就要串起来等 N 次模型往返；文档级证据包本身
+                // 又是全文里最大的一份，串行时这一段常常比前面整轮逐章审查还慢。
+                // 并发度取自本任务自己的 chunk-concurrency，且信号量在父线程 acquire（与逐章
+                // 一致），因此并行只压缩等待时间，不会把单个任务的对外调用量抬上去。
+                final int docBase = chunkResults.size();
+                final int totalChunksWithDoc = chunks.size() + docBatches.size();
+                final int docBatchCount = docBatches.size();
+                int docConcurrency = Math.max(1, Math.min(chunkConcurrency, docBatchCount));
+                Semaphore docSlots = new Semaphore(docConcurrency);
+                @SuppressWarnings({"unchecked", "rawtypes"})
+                final Map<String, Object>[] docOrdered = new Map[docBatchCount];
+                List<CompletableFuture<Void>> docFutures = new ArrayList<>(docBatchCount);
+                AtomicInteger docCompleted = new AtomicInteger(0);
+                log.info("Document-level review: task={}, rules={}, batches={}, concurrency={}",
+                        taskId, docRules.size(), docBatchCount, docConcurrency);
+
+                for (int b = 0; b < docBatchCount; b++) {
                     try {
-                        int minChecks = RuleParser.expectedCheckCount(batch);
-                        String docResponse = null;
-                        int docOutputTokenBudget = initialOutputTokenBudget(modelConfig, minChecks);
-                        boolean docRuntimeThinking = isRuntimeThinking(modelConfig);
-                        for (int parseAttempt = 1;
-                             parseAttempt <= DOCUMENT_JSON_PARSE_MAX_ATTEMPTS && docParsed == null;
-                             parseAttempt++) {
-                            long seed = stableSeed(taskId, /*chunkIdx*/ -1, batchIdx)
-                                    + (parseAttempt - 1L);
-                            AiCallOptions docOptions = buildConvergenceOptions(
-                                    modelConfig, seed, minChecks, docOutputTokenBudget,
-                                    docRuntimeThinking);
-                            docResponse = callWithRetry(modelConfig, docSystemPrompt,
-                                    evidence.content(), docOptions);
-                            docParsed = tryParseAiJson(docResponse);
-                            AiModelService.AiResponseMetadata metadata = aiModelService.getLastResponseMetadata();
-                            docRuntimeThinking = docRuntimeThinking
-                                    || responseReasoningLength(metadata) > 0
-                                    || hasReasoningMarker(docResponse);
-                            rememberRuntimeThinking(modelConfig, docRuntimeThinking);
-                            int expandedBudget = nextOutputTokenBudgetAfterLength(
-                                    modelConfig, docOutputTokenBudget, minChecks, metadata);
-                            if (expandedBudget > docOutputTokenBudget
-                                    && parseAttempt < DOCUMENT_JSON_PARSE_MAX_ATTEMPTS) {
-                                log.warn("Document-level review batch {}/{} reached max_tokens={} "
-                                                + "(reasoningLength={}, contentLength={}); retrying with max_tokens={}",
-                                        batchIdx + 1, docBatches.size(), docOutputTokenBudget,
-                                        responseReasoningLength(metadata), responseContentLength(metadata),
-                                        expandedBudget);
-                                docOutputTokenBudget = expandedBudget;
-                                rememberOutputTokenFloor(modelConfig, expandedBudget);
-                                docParsed = null;
-                                continue;
-                            }
-                            if (docParsed == null) {
-                                log.warn("Document-level review batch {}/{} JSON parse failed "
-                                                + "(attempt {}/{}), responseLength={}, finishReason={}, reasoningLength={}",
-                                        batchIdx + 1, docBatches.size(), parseAttempt,
-                                        DOCUMENT_JSON_PARSE_MAX_ATTEMPTS,
-                                        docResponse == null ? 0 : docResponse.length(),
-                                        responseFinishReason(metadata), responseReasoningLength(metadata));
-                            }
-                        }
-                        if (docParsed == null) {
-                            fallbackReason = unparseableResponseReason(
-                                    "文档级审查", aiModelService.getLastResponseMetadata());
-                        }
-                    } catch (Exception docEx) {
-                        errorMessage = docEx.getMessage();
-                        fallbackReason = "文档级审查调用失败（" + errorMessage
-                                + "），系统已保留该规则并转为待复核。";
-                        log.warn("Document-level review batch {}/{} failed: {}",
-                                batchIdx + 1, docBatches.size(), errorMessage);
+                        docSlots.acquire();
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    if (cancelledTasks.contains(taskId)) {
+                        docSlots.release();
+                        break;
                     }
 
-                    docParsed = DocumentRuleReviewSupport.ensureRuleCoverage(
-                            docParsed, batch, "全文综合审查", fallbackReason);
-                    if (Objects.toString(docParsed.get("summary"), "").isBlank()) {
-                        docParsed.put("summary", fallbackReason == null
-                                ? "文档级规则审查完成。"
-                                : "文档级规则审查降级完成，缺失结果已转为待复核。");
-                    }
+                    final int batchIdx = b;
+                    final List<RuleParser.RuleEntry> batch = docBatches.get(b);
 
-                    Map<String, Object> docChunk = new LinkedHashMap<>();
-                    docChunk.put("chunk", chunkResults.size() + 1);
-                    docChunk.put("chapterTitle", docBatches.size() == 1
-                            ? "全文综合审查（文档级规则）"
-                            : "全文综合审查（文档级规则 " + (batchIdx + 1) + "/" + docBatches.size() + "）");
-                    docChunk.put("totalChunks", chunks.size() + docBatches.size());
-                    docChunk.put("estimatedTokens", ChunkUtils.estimateTokens(evidence.content()));
-                    docChunk.put("appliedRules", batch.stream().map(e -> e.name).toList());
-                    docChunk.put("sourceRefs", buildDocumentRuleSourceRefs(evidence, rawChapters));
-                    docChunk.put("reviewProfile", "document_rules");
-                    putResponseDiagnostics(docChunk, aiModelService.getLastResponseMetadata());
-                    if (fallbackReason != null) {
-                        docChunk.put("degraded", true);
-                        docChunk.put("error", errorMessage == null
-                                ? "unparseable_model_response" : errorMessage);
-                    }
-                    docChunk.put("result", docParsed);
-                    chunkResults.add(docChunk);
+                    docFutures.add(CompletableFuture.runAsync(() -> {
+                        long startNs = System.nanoTime();
+                        long elapsedMs;
+                        try {
+                            Map<String, Object> docChunk = reviewDocumentRuleBatch(
+                                    taskId, batchIdx, docBatchCount, batch, evidence,
+                                    rawChapters, modelConfig,
+                                    docBase + batchIdx + 1, totalChunksWithDoc);
+                            elapsedMs = elapsedMs(startNs);
+                            docChunk.put("elapsedMs", elapsedMs);
+                            docOrdered[batchIdx] = docChunk;
+                        } finally {
+                            docSlots.release();
+                        }
+                        int done = docCompleted.incrementAndGet();
+                        log.info("Document-level batch completed: task={}, batch={}/{}, rules={}, elapsedMs={}",
+                                taskId, batchIdx + 1, docBatchCount, batch.size(), elapsedMs);
+                        webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
+                                "文档级综合审查 " + done + "/" + docBatchCount + " 批完成，耗时="
+                                        + elapsedMs + "ms",
+                                92 + (int) ((double) done / docBatchCount * 3));
+                    }, chunkReviewExecutor));
+                }
+                CompletableFuture.allOf(docFutures.toArray(new CompletableFuture[0])).join();
+
+                // 回填顺序按批次下标，与串行时一致；被取消而未执行的批次为 null，跳过。
+                for (Map<String, Object> docChunk : docOrdered) {
+                    if (docChunk != null) chunkResults.add(docChunk);
                 }
             }
             // 6. Aggregate results
@@ -1279,6 +1251,117 @@ public class ReviewService {
         }
         if (!current.isEmpty()) batches.add(List.copyOf(current));
         return batches;
+    }
+
+    /**
+     * 执行一批文档级规则，产出与逐章切片同构的结果 map。
+     *
+     * <p>各批之间互不依赖：都带同一份证据包，各自判定自己那几条规则，所以可以并行发出。
+     * 本方法**不抛异常**——调用失败或 JSON 解析失败都就地降级：调用
+     * {@link DocumentRuleReviewSupport#ensureRuleCoverage} 为每条规则补一条 Review，
+     * 并在结果上打 {@code degraded} 标记。这是文档级与逐章的关键差异：逐章失败可以事后
+     * 「重审失败切片」，文档级规则一旦漏掉就再也没有别的地方会覆盖它，所以宁可降级为
+     * 待复核，也不能让规则静默消失。
+     *
+     * @param chunkNumber         本批在整体结果里的序号（并行下必须由调用方按批次下标算好，
+     *                            不能再用 {@code chunkResults.size()+1}，否则顺序不确定）
+     * @param totalChunksWithDoc  逐章切片数 + 文档级批数
+     */
+    private Map<String, Object> reviewDocumentRuleBatch(
+            String taskId,
+            int batchIdx,
+            int batchCount,
+            List<RuleParser.RuleEntry> batch,
+            DocumentRuleReviewSupport.EvidenceBundle evidence,
+            List<WordParser.Chapter> rawChapters,
+            AiModelConfig modelConfig,
+            int chunkNumber,
+            int totalChunksWithDoc) {
+
+        String docSystemPrompt = RuleParser.buildStructuredSystemPrompt(batch);
+        String fallbackReason = null;
+        Map<String, Object> docParsed = null;
+        String errorMessage = null;
+        try {
+            int minChecks = RuleParser.expectedCheckCount(batch);
+            String docResponse = null;
+            int docOutputTokenBudget = initialOutputTokenBudget(modelConfig, minChecks);
+            boolean docRuntimeThinking = isRuntimeThinking(modelConfig);
+            for (int parseAttempt = 1;
+                 parseAttempt <= DOCUMENT_JSON_PARSE_MAX_ATTEMPTS && docParsed == null;
+                 parseAttempt++) {
+                long seed = stableSeed(taskId, /*chunkIdx*/ -1, batchIdx) + (parseAttempt - 1L);
+                AiCallOptions docOptions = buildConvergenceOptions(
+                        modelConfig, seed, minChecks, docOutputTokenBudget, docRuntimeThinking);
+                docResponse = callWithRetry(modelConfig, docSystemPrompt,
+                        evidence.content(), docOptions);
+                docParsed = tryParseAiJson(docResponse);
+                AiModelService.AiResponseMetadata metadata = aiModelService.getLastResponseMetadata();
+                docRuntimeThinking = docRuntimeThinking
+                        || responseReasoningLength(metadata) > 0
+                        || hasReasoningMarker(docResponse);
+                rememberRuntimeThinking(modelConfig, docRuntimeThinking);
+                int expandedBudget = nextOutputTokenBudgetAfterLength(
+                        modelConfig, docOutputTokenBudget, minChecks, metadata);
+                if (expandedBudget > docOutputTokenBudget
+                        && parseAttempt < DOCUMENT_JSON_PARSE_MAX_ATTEMPTS) {
+                    log.warn("Document-level review batch {}/{} reached max_tokens={} "
+                                    + "(reasoningLength={}, contentLength={}); retrying with max_tokens={}",
+                            batchIdx + 1, batchCount, docOutputTokenBudget,
+                            responseReasoningLength(metadata), responseContentLength(metadata),
+                            expandedBudget);
+                    docOutputTokenBudget = expandedBudget;
+                    rememberOutputTokenFloor(modelConfig, expandedBudget);
+                    docParsed = null;
+                    continue;
+                }
+                if (docParsed == null) {
+                    log.warn("Document-level review batch {}/{} JSON parse failed "
+                                    + "(attempt {}/{}), responseLength={}, finishReason={}, reasoningLength={}",
+                            batchIdx + 1, batchCount, parseAttempt,
+                            DOCUMENT_JSON_PARSE_MAX_ATTEMPTS,
+                            docResponse == null ? 0 : docResponse.length(),
+                            responseFinishReason(metadata), responseReasoningLength(metadata));
+                }
+            }
+            if (docParsed == null) {
+                fallbackReason = unparseableResponseReason(
+                        "文档级审查", aiModelService.getLastResponseMetadata());
+            }
+        } catch (Exception docEx) {
+            errorMessage = docEx.getMessage();
+            fallbackReason = "文档级审查调用失败（" + errorMessage
+                    + "），系统已保留该规则并转为待复核。";
+            log.warn("Document-level review batch {}/{} failed: {}",
+                    batchIdx + 1, batchCount, errorMessage);
+        }
+
+        docParsed = DocumentRuleReviewSupport.ensureRuleCoverage(
+                docParsed, batch, "全文综合审查", fallbackReason);
+        if (Objects.toString(docParsed.get("summary"), "").isBlank()) {
+            docParsed.put("summary", fallbackReason == null
+                    ? "文档级规则审查完成。"
+                    : "文档级规则审查降级完成，缺失结果已转为待复核。");
+        }
+
+        Map<String, Object> docChunk = new LinkedHashMap<>();
+        docChunk.put("chunk", chunkNumber);
+        docChunk.put("chapterTitle", batchCount == 1
+                ? "全文综合审查（文档级规则）"
+                : "全文综合审查（文档级规则 " + (batchIdx + 1) + "/" + batchCount + "）");
+        docChunk.put("totalChunks", totalChunksWithDoc);
+        docChunk.put("estimatedTokens", ChunkUtils.estimateTokens(evidence.content()));
+        docChunk.put("appliedRules", batch.stream().map(e -> e.name).toList());
+        docChunk.put("sourceRefs", buildDocumentRuleSourceRefs(evidence, rawChapters));
+        docChunk.put("reviewProfile", "document_rules");
+        putResponseDiagnostics(docChunk, aiModelService.getLastResponseMetadata());
+        if (fallbackReason != null) {
+            docChunk.put("degraded", true);
+            docChunk.put("error", errorMessage == null
+                    ? "unparseable_model_response" : errorMessage);
+        }
+        docChunk.put("result", docParsed);
+        return docChunk;
     }
 
     private List<Map<String, Object>> buildDocumentRuleSourceRefs(
@@ -2095,7 +2178,7 @@ public class ReviewService {
     }
 
     private boolean isRuntimeThinking(AiModelConfig modelConfig) {
-        return ThinkingModeDetector.isThinking(modelConfig)
+        return ThinkingModeDetector.reasonsUnconditionally(modelConfig)
                 || observedReasoningModels.contains(modelRuntimeKey(modelConfig));
     }
 
@@ -2447,10 +2530,12 @@ public class ReviewService {
 
     private Optional<DocumentEvidenceLocator.NodeRange> locateEvidenceNode(
             ChunkUtils.ChunkResult chunk, String evidence) {
-        WordParser.Chapter chapter = chunk == null ? null : chunk.getSourceChapter();
-        return chapter == null
+        // 必须在本片覆盖的全部章节内检索：通用段是十几章合并出来的，只搜首章会让绝大多数
+        // 证据要么定位失败、要么错误命中首章里的相似文字。
+        List<WordParser.DocumentNode> nodes = chunk == null ? List.of() : chunk.getSourceNodes();
+        return nodes.isEmpty()
                 ? Optional.empty()
-                : DocumentEvidenceLocator.locate(chapter.getNodes(), evidence);
+                : DocumentEvidenceLocator.locate(nodes, evidence);
     }
 
     private static long elapsedMs(long startNs) {
@@ -2531,6 +2616,17 @@ public class ReviewService {
         throw new RuntimeException("AI调用失败(重试" + maxRetryAttempts + "次): " + rootCause, lastException);
     }
 
+    /**
+     * 发起一次出站 AI 调用，并按需通过**跨任务**总闸门。
+     *
+     * <p>单任务的并发上限不在这里控制，而是由审查主流程里的 per-task {@code taskSlots}
+     * 信号量（大小 = {@code review.parallel.chunk-concurrency}）在父线程上 acquire 决定；
+     * 文档级批次是串行的，每个任务最多再叠加 1 次并发调用。
+     *
+     * <p>{@code reviewAiCallSemaphore} 是可选的跨任务总闸门，默认已关闭
+     * （{@code global-ai-concurrency: 0} → 许可数为 {@code Integer.MAX_VALUE}），
+     * 因此各任务的并发相互独立，不会互相拖慢。见 {@code AsyncConfig} 中该 bean 的说明。
+     */
     private String callAiModelWithGlobalPermit(AiModelConfig config, String systemPrompt,
                                                 String userContent, AiCallOptions options) throws Exception {
         boolean acquired = false;
@@ -2581,14 +2677,11 @@ public class ReviewService {
         Map<String, Object> direct = parseJsonSilently(text);
         if (direct != null) return direct;
 
-        // 3) Extract the first balanced {...} object from the (possibly noisy) text.
-        //    Custom providers often surround JSON with explanatory prose or
+        // 3) Extract the most result-like balanced {...} object from the (possibly noisy)
+        //    text. Custom providers often surround JSON with explanatory prose or
         //    "<think>...</think>" reasoning blocks.
-        String extracted = extractFirstJsonObject(text);
-        if (extracted != null) {
-            Map<String, Object> parsed = parseJsonSilently(extracted);
-            if (parsed != null) return parsed;
-        }
+        Map<String, Object> extracted = extractBestJsonObject(text, objectMapper);
+        if (extracted != null) return extracted;
 
         // 4) As a last resort, look inside any embedded ```json fence.
         int fenceStart = text.indexOf("```json");
@@ -2599,11 +2692,8 @@ public class ReviewService {
                 String inner = text.substring(contentStart + 1, fenceEnd).trim();
                 Map<String, Object> parsed = parseJsonSilently(inner);
                 if (parsed != null) return parsed;
-                String innerExtract = extractFirstJsonObject(inner);
-                if (innerExtract != null) {
-                    Map<String, Object> p2 = parseJsonSilently(innerExtract);
-                    if (p2 != null) return p2;
-                }
+                Map<String, Object> p2 = extractBestJsonObject(inner, objectMapper);
+                if (p2 != null) return p2;
             }
         }
 
@@ -2698,9 +2788,14 @@ public class ReviewService {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> parseJsonSilently(String json) {
+        return parseJsonSilently(json, objectMapper);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> parseJsonSilently(String json, ObjectMapper mapper) {
         if (json == null || json.isBlank()) return null;
         try {
-            Object obj = objectMapper.readValue(json, Object.class);
+            Object obj = mapper.readValue(json, Object.class);
             if (obj instanceof Map) return (Map<String, Object>) obj;
         } catch (JsonProcessingException ignored) {
             // fall through
@@ -2713,13 +2808,50 @@ public class ReviewService {
      * inside string literals (so braces inside quoted strings are not mis-counted) and
      * tolerates escaped characters.
      */
-    private String extractFirstJsonObject(String text) {
-        int start = text.indexOf('{');
-        if (start < 0) return null;
+    /**
+     * 审查结果对象的标志字段。命中任一个，就认为该对象是模型的**最终结果**，
+     * 而不是它在思考过程里试写的草稿。
+     */
+    private static final List<String> RESULT_MARKER_KEYS =
+            List.of("issues", "check_results", "passed_items", "chunks");
+
+    /**
+     * 从含噪文本中挑出**最像审查结果**的那个 JSON 对象。
+     *
+     * <p>原实现取的是「第一个」配平的 {...}。当网关把思考以无标签纯文本混进 content
+     * （{@link #stripDelimitedReasoningBlocks} 没有标签可剥），而 R1 这类模型又常在
+     * 思考里先试写一份 JSON 时，取第一个就会锁定草稿、丢掉真正的答案——而且草稿通常
+     * 条目更少，表现为「审查结果莫名其妙变少」，不会报错，很难发现。
+     *
+     * <p>改为遍历全部顶层配平对象后择优：带结果标志字段的优先；同档次内取**靠后**的，
+     * 因为最终答案总是排在思考之后。
+     */
+    static Map<String, Object> extractBestJsonObject(String text, ObjectMapper mapper) {
+        Map<String, Object> bestWithMarker = null;
+        Map<String, Object> bestAny = null;
+        for (String candidate : balancedJsonObjects(text)) {
+            Map<String, Object> parsed = parseJsonSilently(candidate, mapper);
+            if (parsed == null) continue;
+            bestAny = parsed;
+            if (RESULT_MARKER_KEYS.stream().anyMatch(parsed::containsKey)) {
+                bestWithMarker = parsed;
+            }
+        }
+        return bestWithMarker != null ? bestWithMarker : bestAny;
+    }
+
+    /**
+     * 扫出文本中全部**顶层**配平的 {...} 片段，按出现顺序返回。
+     * 扫描时跟踪字符串字面量与转义，避免把 JSON 字符串值里的花括号当成结构。
+     */
+    static List<String> balancedJsonObjects(String text) {
+        List<String> out = new ArrayList<>();
+        if (text == null || text.isEmpty()) return out;
         int depth = 0;
+        int start = -1;
         boolean inString = false;
         boolean escape = false;
-        for (int i = start; i < text.length(); i++) {
+        for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             if (escape) {
                 escape = false;
@@ -2733,15 +2865,18 @@ public class ReviewService {
             if (c == '"') {
                 inString = true;
             } else if (c == '{') {
+                if (depth == 0) start = i;
                 depth++;
             } else if (c == '}') {
+                if (depth == 0) continue;   // 孤立的右括号，忽略
                 depth--;
-                if (depth == 0) {
-                    return text.substring(start, i + 1);
+                if (depth == 0 && start >= 0) {
+                    out.add(text.substring(start, i + 1));
+                    start = -1;
                 }
             }
         }
-        return null;
+        return out;
     }
 
     /**

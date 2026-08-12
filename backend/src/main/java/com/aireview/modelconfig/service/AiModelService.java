@@ -3,6 +3,7 @@ package com.aireview.modelconfig.service;
 import com.aireview.modelconfig.dto.AiModelConfigDTO;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.modelconfig.entity.AiModelConfig;
+import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.modelconfig.repository.AiModelConfigMapper;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
@@ -98,7 +99,6 @@ public class AiModelService {
         if (dto.getTemperature() != null) config.setTemperature(dto.getTemperature());
         if (dto.getTimeout() != null) config.setTimeout(dto.getTimeout());
         if (dto.getEnabled() != null) config.setIsEnabled(dto.getEnabled());
-        if (dto.getThinkingMode() != null) config.setThinkingMode(dto.getThinkingMode());
         if (dto.getResponseFormatMode() != null) {
             config.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
         }
@@ -280,15 +280,6 @@ public class AiModelService {
             key = persistedFallback.getApiKey();
         }
         probe.setApiKey(key);
-        // Carry the thinking-mode flag through to the probe. Resolution order:
-        //   1. Explicit value from the DTO (the form's switch).
-        //   2. Saved value on the persisted row (when editing an existing model).
-        //   3. Null → isThinkingModel falls back to the regex heuristic on modelKey.
-        if (dto.getThinkingMode() != null) {
-            probe.setThinkingMode(dto.getThinkingMode());
-        } else if (persistedFallback != null && persistedFallback.getThinkingMode() != null) {
-            probe.setThinkingMode(persistedFallback.getThinkingMode());
-        }
         if (dto.getResponseFormatMode() != null) {
             probe.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
         } else if (persistedFallback != null) {
@@ -904,45 +895,18 @@ public class AiModelService {
     }
 
     /**
-     * Decide whether the API call should treat this config as a thinking-mode model
-     * (i.e. omit temperature and raise max_tokens; reasoning_content is never used as final output).
+     * 该模型是否会无条件产出思维链（即关不掉）。
      *
-     * <p>Resolution order:
-     * <ol>
-     *   <li>If the user explicitly set the {@code thinking_mode} flag in the model
-     *       config (via the UI), trust their choice — this lets new models be
-     *       configured without code changes, and lets a model that later relaxes
-     *       its temperature lock be switched back.</li>
-     *   <li>Otherwise fall back to the regex heuristic for legacy rows / configs
-     *       whose flag is null.</li>
-     * </ol>
+     * <p>系统对所有模型统一请求关闭思考（见 {@link ReasoningModeAdapter}），因此这里不再
+     * 读取任何用户配置——原先的「思考模式」开关已移除。只有 R1 / Reasoner / *-thinking /
+     * o 系列这类没有关闭档的模型才返回 true：它们仍需省略 temperature（服务端会锁定自己的
+     * 值）并抬高 max_tokens，否则思维链会把最终 JSON 挤没。
+     *
+     * <p>判定收敛在 {@link ThinkingModeDetector} 一处，避免多份正则互相走岔。
      */
     static boolean isThinkingModel(AiModelConfig config) {
-        if (config == null) return false;
-        Boolean explicit = config.getThinkingMode();
-        if (explicit != null) return explicit;
-        String key = config.getModelKey();
-        if (key == null || key.isBlank()) key = config.getModelName();
-        return matchesThinkingPattern(key);
+        return ThinkingModeDetector.reasonsUnconditionally(config);
     }
-
-    /**
-     * Heuristic: does this model id look like a thinking/reasoning model? Used as
-     * the auto-suggestion when the UI doesn't yet have a value, and as the
-     * fallback when {@link #isThinkingModel} sees no explicit flag.
-     */
-    public static boolean matchesThinkingPattern(String modelKeyOrName) {
-        if (modelKeyOrName == null || modelKeyOrName.isBlank()) return false;
-        return THINKING_MODEL_PATTERN.matcher(modelKeyOrName.toLowerCase(Locale.ROOT)).find();
-    }
-
-    private static final Pattern THINKING_MODEL_PATTERN = Pattern.compile(
-            // Kimi: kimi-k2-thinking, kimi-k2.5, kimi-k2.6, kimi-k2-5, kimi-k2-6, ...
-            "kimi-?k?2[.\\-]?(?:thinking|5|6|7|8|9)"
-            // GLM: glm-4.5, glm-4.6, glm-5, glm-5.1, glm-5-air, glm-4.5-thinking ...
-            + "|glm-?(?:4\\.5|4\\.6|4\\.7|5(?:\\.[0-9]+)?)"
-            // Generic catch-all: any name containing "thinking" / "reasoner" / "-r1"
-            + "|thinking|reasoner|-r1\\b|deepseek-r1");
 
     private Double resolveProbeTemperature(AiModelConfigDTO dto, AiModelConfig persistedFallback) {
         if (dto.getTemperature() != null) {
@@ -969,7 +933,6 @@ public class AiModelService {
         dto.setTimeout(config.getTimeout() != null ? config.getTimeout() : 180);
         dto.setEnabled(config.getIsEnabled());
         boolean isThinking = isThinkingModel(config);
-        dto.setThinkingMode(isThinking);
         dto.setResponseFormatMode(normalizeResponseFormatMode(config.getResponseFormatMode()));
         // 思维模型不能参与跨模型对比：温度服务器锁、seed 通常不支持、采样不收敛。
         dto.setCrossModelEligible(!isThinking);
@@ -992,11 +955,6 @@ public class AiModelService {
         config.setTemperature(dto.getTemperature() != null ? dto.getTemperature() : 0.7);
         config.setTimeout(dto.getTimeout() != null ? dto.getTimeout() : 180);
         config.setIsEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
-        // If the UI didn't provide a value, fall back to the regex heuristic so historic
-        // rows and forms-without-the-field still get sensible auto-detection.
-        config.setThinkingMode(dto.getThinkingMode() != null
-                ? dto.getThinkingMode()
-                : matchesThinkingPattern(dto.getModelKey() != null ? dto.getModelKey() : dto.getName()));
         config.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
         return config;
     }

@@ -1,29 +1,29 @@
 # AI 智能文件审查系统
 
-基于多种大语言模型的智能文档审查平台，支持 Word 文档的自动化审查、问题检测与改进建议。系统提供规则管理、场景配置、多模型接入和角色权限控制等功能。
+面向**环境试验大纲**的 AI 文档审查平台。上传 Word 文档，系统按配置的规则库自动逐章审查，输出「检查项判定矩阵」（Pass / Fail / Review + 证据 + 建议），支持人工复核、审计追溯与多格式导出。
 
-> **当前可用审查管线**：系统当前在前端开放两条物理隔离的审查管线，各自拥有独立的规则库 / 规则 / 场景 / 任务表：
-> - **全文逐章审查（CHUNK）**：按章节切片，每章节一次 AI 调用，命中规则 + 本章节切片 + 引用章节作为上下文。适合通用文档质量审查。
-> - **结构化精准审查（SAR）**：在向量化基础上，按「结构 + 词法 + 语义」三路定位每个检查项的预期区域，取整段区域判定；缺失类按"预期位置清单"判 Fail，再做自适应复核 + 跨章一致性。适合 DO-160G/QTP 这类强结构、缺失类为主的检查单。详见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。
+> **当前可用审查管线：CHUNK（全文逐章审查）**
 >
-> RAG 相关文档（如 [RAG_RECALL_TUNING.md](RAG_RECALL_TUNING.md)、[RAG_SPLIT_CHOICES.md](RAG_SPLIT_CHOICES.md)）保留为历史演进与技术背景；当前可操作入口以 CHUNK / SAR 为准。两条管线共享认证、用户管理、模型配置、WebSocket 进度与导出能力。历史任务按 `ai_result.reviewMode` 归属，缺失则视为 CHUNK。
+> 按章节切片，每章一次 AI 调用，注入命中规则 + 本章正文 + 被引用章节作上下文。
+>
+> **SAR（结构化精准审查）管线的后端实现完整保留**（`SarReviewService`、`sar_*` 表、`/api/v1/sar/**` 端点、前端 `sarRules`/`sarScenarios`/`sarReviews` API 层），但**前端入口当前已关闭**：`App.tsx` 将 `sar/scenarios`、`sar/rules` 重定向到 `/chunk/*`，侧边栏只保留「全文逐章审查」，新建审查不再提供管线切换。历史任务仍按 `reviewMode` 字段派发读取，缺失则视为 CHUNK。SAR 的设计与调参见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。
 
 ## 功能概览
 
-- **双管线文档审查**：CHUNK 全文逐章 / SAR 结构化精准，前端 Tab 切换；上传 Word 文档（.doc/.docx）自动审查并生成报告
-- **规则库管理**：上传 Markdown 或 JSON 格式规则文件，按规则库分类管理（CHUNK / SAR 各一套）；CHUNK 侧 Markdown 支持按 `##` 规则块拆分，多条规则可来自同一文件；SAR 侧支持 Excel 检查单导入（`POST /api/v1/sar/rules/import-checklist`）拆解为原子检查项
-- **规则文件夹**：规则库内可创建二级文件夹，按规则类型（通用/专项）分类管理；支持整个文件夹启用/停用
-- **规则上传增量合并**：重复上传规则文件时，系统按同一规则库/文件夹内的规则编号优先、规则名称兜底自动覆盖已有规则；文件中新增加的规则直接追加到库中
-- **规则元信息维护**：规则名称、编号、类型、适用章节、关键词、描述可在 UI 编辑；仅编辑元信息不会刷新规则排序时间，保存后列表位置保持不变
-- **审查场景配置**：将多个规则库组合为审查场景，针对不同业务场景灵活配置
-- **检查项判定矩阵**：以上传规则/原子检查项为单位输出三级判定（Pass / Fail / Review）+ 证据 + 缺失项 + 建议；CHUNK 会强制每条上传业务规则至少返回一条判定并写入规则快照，内置 `R-Q` 文字质量/图表编号检查仅在 Fail/Review 时显示，支持人工确认/改判与审计日志
-- **人工复核**：支持对系统判定进行人工确认、改判或驳回，记录完整审计日志（操作人、时间、前后值）；复核结果实时同步到导出文件
-- **全文术语一致性**：CHUNK 每个切片会筛选专业术语并生成 `术语表_*.json`，再基于术语表追加一次全文术语一致性审查，为后续维护标准术语库预留数据
-- **多模型支持**：按用途区分 chat / embedding / reranker 模型，接入 OpenAI、Anthropic、Moonshot、百度、阿里、讯飞等主流 AI 厂商，支持自定义厂商
-- **实时进度追踪**：WebSocket 实时推送审查进度、日志与结果
-- **角色权限控制**：项目主管 / 管理员 / 普通用户三级权限体系
-- **结果导出**：检查项判定矩阵 Excel、审查报告 Word（.docx）、审计 JSON
-- **用户管理**：用户注册、登录、密码修改、按管线分别分配规则库
+- **逐章文档审查**：上传 Word（.doc/.docx）自动切章、按规则调度、并行审查并生成报告
+- **规则三级管理**：规则库 → 文件夹 → 规则；文件夹可整组启用/停用
+- **多来源规则导入**：Markdown 按 `##` 拆多条规则、Rule JSON 拆原子检查项、Excel 检查单导入（SAR 侧 `/import-checklist`）
+- **增量 upsert 上传**：重复上传时按同一规则库/文件夹内的 `rule_code` 优先匹配、规则名称兜底覆盖，新增规则直接追加，不按 `source_file` 整批删除旧规则
+- **规则元信息维护**：名称、编号、类型、适用章节、关键词、描述可在 UI 编辑；仅改元信息不刷新排序时间
+- **审查场景配置**：将多个规则库组合为场景，按业务场景灵活切换
+- **检查项判定矩阵**：以规则/原子检查项为单位输出三级判定（Pass / Fail / Review）+ 证据 + 缺失项 + 建议；强制每条上传业务规则至少返回一条判定；内置 `R-Q` 文字质量检查仅在 Fail/Review 时显示
+- **人工复核**：确认、改判、驳回系统判定，记录完整审计日志（操作人、时间、前后值），结果实时同步到导出文件
+- **原文编辑与修订稿**：可在工作区修订原文片段，`DocumentRevisionWriter` 导出带修订的 Word
+- **多模型支持**：按用途区分 chat / embedding / reranker，接入 OpenAI、Anthropic、Moonshot、百度、阿里、讯飞等厂商，支持连通性测试与思考模式建议
+- **实时进度追踪**：WebSocket 推送审查进度、日志与结果，跨页面持久化
+- **成员与权限**：单位组织树 + 三级角色 + 功能码授权 + 批量导入
+- **结果导出**：判定矩阵 Excel、审查报告 Word、审计 JSON、修订稿 Word
+- **数据看板**：任务量、判定分布、资源统计（手写 SVG 图表，无图表库依赖）
 
 ## 技术栈
 
@@ -33,128 +33,145 @@
 |------|------|------|
 | Java | 17 | 运行环境 |
 | Spring Boot | 3.2.5 | Web 框架 |
-| Spring Security | - | 认证与授权 |
+| Spring Security | 随 parent | 认证与授权 |
 | MyBatis-Plus | 3.5.5 | ORM 框架 |
-| PostgreSQL + pgvector | 16 / 0.8.2 | 关系型数据库 + SAR 向量检索基础设施（HNSW） |
+| PostgreSQL + pgvector | 16 / 0.8.2 | 关系型数据库 + 向量检索（HNSW） |
 | JWT (jjwt) | 0.12.5 | Token 认证 |
-| Apache POI | 5.2.5 | Word 文档解析 |
+| Apache POI | 5.2.5 | Word 解析与生成（poi / poi-ooxml / poi-scratchpad） |
 | FastJSON2 | 2.0.47 | JSON 处理 |
-| WebSocket | - | 实时通信 |
+| json-schema-validator | 1.4.0 | 结构化输出校验 |
+| WebSocket | 随 parent | 实时通信 |
 
 ### 前端
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| React | 18.3 | UI 框架 |
-| TypeScript | 5.5 | 类型安全 |
-| Vite | 5.4 | 构建工具 |
-| Ant Design/Material UI | 5.21 | UI 组件库 |
-| Zustand | 4.5 | 状态管理 |
-| Axios | 1.7 | HTTP 请求 |
+| React | ^18.3 | UI 框架 |
+| TypeScript | ^5.5 | 类型安全 |
+| Vite | ^5.4 | 构建工具 |
+| Ant Design | ^5.21 | UI 组件库 |
+| Zustand | ^4.5 | 状态管理 |
+| Axios | ^1.7 | HTTP 请求 |
+| react-router-dom | ^6.26 | 路由 |
+| react-virtuoso | ^4.18 | 虚拟滚动 |
+| mammoth | ^1.8 | 浏览器端 Word 预览 |
+
+> 前端当前未配置测试框架与 ESLint/Prettier；依赖均为 caret 范围而非 pin。后端有 12 个测试类，覆盖 `document`、`export`、`modelconfig`、`review.chunk`、`review.core`、`review.sar`、`rule.engine`、`scenario`。
 
 ### 基础设施
 
 | 技术 | 用途 |
 |------|------|
-| Docker & Docker Compose | 容器化部署 |
-| Nginx | 反向代理与静态资源服务 |
+| Docker & Docker Compose | 容器化部署（db / backend / frontend 三服务） |
+| Nginx | 前端静态资源服务与反向代理 |
 
 ## 项目结构
 
+后端按**业务域**组织（而非 controller/service/entity 平铺），每个域自带 `controller` / `service` / `entity` / `repository` / `dto`。
+
 ```
-ai-review-system/
-├── backend/                          # Spring Boot 后端
-│   ├── src/main/java/com/aireview/
-│   │   ├── config/                   # 配置类（Security, JWT, WebSocket, MyBatis, Async）
-│   │   ├── controller/               # REST 控制器
-│   │   │   ├── AuthController        # 认证：注册、登录、刷新 Token
-│   │   │   ├── ReviewController / SarReviewController # CHUNK / SAR 审查（同构，前缀 /、/sar）
-│   │   │   ├── UnifiedReviewController # 跨管线：合并列表 /all、合并统计 /stats/all、按 ID 查详情 /by-id/{id}
-│   │   │   ├── ScenarioController / SarScenarioController     # 场景（CHUNK / SAR 各一套）
-│   │   │   ├── RuleController / SarRuleController # 规则；SAR 侧含 /import-checklist，CHUNK / SAR 上传均自动增量合并
-│   │   │   ├── RuleLibraryController / SarRuleLibraryController # 规则库（CHUNK / SAR 各一套）
-│   │   │   ├── AiModelConfigController # 模型配置：增删改查、启停、连接测试、按类型查启用
-│   │   │   ├── UserManagementController # 用户管理（主管权限，?mode=CHUNK|SAR 控库分配）
-│   │   │   ├── UserController        # 个人信息、修改密码
-│   │   │   └── HealthController      # 健康检查
-│   │   ├── entity/                   # 数据实体（共享 + CHUNK + SAR；RAG 遗留表结构保留为历史兼容）
-│   │   ├── dto/                      # 数据传输对象（18个）
-│   │   ├── repository/               # MyBatis Mapper（含 DocumentVectorRepository / SarDocumentVectorRepository 向量检索）
-│   │   ├── review/                   # 审查内核：ReviewResultSchema（schema/枚举）、ChunkBatchPlanner·ModelTier（旧批处理，保留未调用）、migration/
-│   │   ├── service/                  # 业务逻辑层（ReviewService / SarReviewService / ChecklistRuleImportService / ReviewExportUtil 等）
-│   │   ├── util/                     # 工具类
-│   │   │   ├── WordParser            # Word 文档解析（按一级标题切分章节）
-│   │   │   ├── ChunkUtils            # 文档切片（CJK 感知 Token 估算）chunkByChapters
-│   │   │   ├── RuleParser            # 规则文件解析与四段式提示词构建
-│   │   │   ├── RuleMetadata          # 解析 frontmatter/JSON 元数据（rule_code/rule_type/sections/keywords 等）
-│   │   │   ├── RuleDispatcher        # 按规则类型调度：全局、一级标题命中、试验项目章节、文档级
-│   │   │   ├── ChapterReferenceResolver # 识别"见第X章/参见X条"并附带被引用章节作上下文
-│   │   │   ├── MultiRuleParser       # 单文件拆分为多条规则
-│   │   │   ├── DocumentSourceMapper  # 解析结果映射为结构化原文（JSON/Markdown/HTML）
-│   │   │   └── SecurityUtils         # 安全工具
-│   │   └── websocket/                # WebSocket 处理器
-│   ├── src/main/resources/
-│   │   ├── application.yml           # 应用配置
-│   │   └── schema.sql                # 数据库初始化脚本
-│   ├── pom.xml                       # Maven 依赖
-│   └── Dockerfile                    # 后端镜像构建
+ai-Document-Review/
+├── backend/                                  # Spring Boot 后端
+│   └── src/main/java/com/aireview/
+│       ├── AiReviewApplication.java          # 启动入口
+│       ├── auth/                             # 认证域
+│       │   ├── controller/AuthController     # 注册、登录、刷新 Token、单位列表
+│       │   ├── security/                     # SecurityConfig、JwtTokenProvider
+│       │   │                                 # JwtAuthenticationFilter、FeatureAuthorizationFilter、SecurityUtils
+│       │   └── service/AuthService
+│       ├── common/                           # 跨域基础设施
+│       │   ├── config/AsyncConfig            # 三级线程池定义
+│       │   ├── dto/                          # ApiResponse、PageResponse
+│       │   ├── health/HealthController       # /api/health
+│       │   ├── persistence/                  # MyBatisPlusConfig、JSONB TypeHandler
+│       │   │                                 # DocumentVectorSchemaMigration（向量列迁移）
+│       │   ├── web/                          # GlobalExceptionHandler、WebConfig
+│       │   └── websocket/                    # TaskProgressHandler、WebSocketService
+│       ├── dashboard/                        # 统计看板域
+│       ├── document/                         # 文档处理工具集
+│       │   ├── WordParser                    # Word 解析，按一级标题切章
+│       │   ├── ChunkUtils                    # 切片（CJK 感知 Token 估算）
+│       │   ├── ChapterReferenceResolver      # 识别「见第X章 / 参见4.5条」并附带被引用章节
+│       │   ├── DocumentSourceMapper          # 解析结果 → 结构化原文
+│       │   ├── DocumentEvidenceLocator       # 证据定位
+│       │   └── DocumentRevisionWriter        # 生成修订稿 Word
+│       ├── export/ReviewExportUtil           # Excel / Word / 审计 JSON 导出
+│       ├── modelconfig/                      # AI 模型配置域
+│       │   └── service/                      # AiModelService、ReasoningModeAdapter、AiCallOptions
+│       ├── review/                           # 审查域（三层）
+│       │   ├── controller/UnifiedReviewController  # 跨管线合并查询
+│       │   ├── core/                         # ReviewResultSchema（JSON Schema）、ReviewCategory
+│       │   │                                 # DocumentRuleReviewSupport（文档级审查共用）、SourceEditStore
+│       │   ├── llm/                          # JsonExtractor、ThinkingModeDetector
+│       │   ├── chunk/                        # CHUNK 管线：controller / entity / repository / service
+│       │   │   └── service/ReviewService     # 核心审查逻辑
+│       │   └── sar/                          # SAR 管线（后端完整，前端入口已关闭）
+│       │       └── service/SarReviewService
+│       ├── rule/                             # 规则域
+│       │   ├── engine/                       # RuleParser（四段式提示词）、RuleMetadata
+│       │   │                                 # RuleDispatcher（按类型调度）、MultiRuleParser
+│       │   ├── entity/                       # Rule / RuleCheck / RuleFolder / RuleLibrary + Sar* 镜像
+│       │   └── service/                      # RuleService、RuleLibraryService、ChecklistRuleImportService
+│       ├── scenario/                         # 场景域（CHUNK / SAR 对称）
+│       └── user/                             # 用户与权限域
+│           ├── controller/                   # UserController、MemberController、UserManagementController
+│           ├── entity/                       # User、Unit、UserFeatureAssignment、UserRuleAssignment
+│           └── service/                      # UserService、MemberService、FeaturePermissionService、IdCardSupport
+│   └── src/main/resources/
+│       ├── application.yml                   # 应用配置
+│       └── schema.sql                        # 幂等建表 + 滚动迁移 + 种子数据
 │
-├── frontend/                         # React 前端
-│   ├── src/
-│   │   ├── pages/                    # 页面组件
-│   │   │   ├── LoginPage             # 登录/注册
-│   │   │   ├── DashboardPage         # 工作台（统计、跨管线任务列表、Tab 切换新建审查）
-│   │   │   ├── ReviewWorkspacePage   # 审查详情入口（壳）
-│   │   │   ├── reviewWorkspace/      # 工作区拆分：components.tsx / helpers.tsx / useReviewWorkspace.ts
-│   │   │   ├── ScenarioListPage      # 审查场景管理（接受 reviewMode prop，CHUNK/SAR 复用）
-│   │   │   ├── RuleListPage          # 审查规则管理（接受 reviewMode prop，CHUNK/SAR 复用）
-│   │   │   ├── ModelConfigPage       # 模型配置管理（按 model_type 分字段）
-│   │   │   ├── UserManagementPage    # 用户管理（主管权限，按管线配置规则库分配）
-│   │   │   └── ProfilePage           # 个人中心
-│   │   ├── components/               # 公共组件
-│   │   │   ├── AppLayout             # 侧边栏布局（全文逐章 / 结构化精准 两组）
-│   │   │   ├── FileUploader          # 文件上传
-│   │   │   ├── RuleUploader          # 规则文件上传
-│   │   │   └── ProtectedRoute        # 路由鉴权
-│   │   ├── api/                      # API 封装：reviews/rules/scenarios + sar* 镜像 + pipelineApi（按 mode 派发）+ request（Axios 拦截器）
-│   │   ├── store/                    # Zustand：authStore / logStore
-│   │   ├── styles/                   # global.css / reviewWorkspace.css
-│   │   └── utils/                    # constants / websocket（TaskWebSocket 单例）
-│   ├── nginx.conf                    # Nginx 配置
-│   ├── Dockerfile                    # 前端镜像构建
-│   └── package.json
+├── frontend/                                 # React 前端（feature-first）
+│   └── src/
+│       ├── main.tsx                          # 入口，挂载 App + antd ConfigProvider
+│       ├── app/App.tsx                       # 唯一路由表
+│       ├── features/
+│       │   ├── auth/                         # LoginPage、authStore
+│       │   ├── dashboard/                    # DashboardPage（工作台）、DataBoardPage（数据看板）
+│       │   ├── review/
+│       │   │   ├── api/                      # reviews / sarReviews / pipelineApi
+│       │   │   ├── pages/ReviewWorkspacePage # 30 行壳层
+│       │   │   ├── workspace/                # useReviewWorkspace（状态）+ components + helpers
+│       │   │   ├── components/FileUploader
+│       │   │   └── store/logStore            # WebSocket 日志
+│       │   ├── rules/                        # RuleListPage（三级视图）、RuleUploader
+│       │   ├── scenarios/                    # ScenarioListPage
+│       │   ├── modelConfig/                  # ModelConfigPage
+│       │   └── users/                        # MemberManagementPage、ProfilePage
+│       └── shared/
+│           ├── api/request.ts                # Axios 实例 + Token 拦截器
+│           ├── components/                   # AppLayout、ProtectedRoute
+│           ├── utils/                        # constants、websocket（TaskWebSocket 单例）
+│           └── styles/
 │
-├── docker/postgres/Dockerfile        # PostgreSQL 自定义镜像
-├── docker-compose.yml                # 容器编排
-├── .env                              # 环境变量
-├── .gitattributes                    # Git 行尾配置（保证跨平台兼容）
-└── .gitignore
+├── docker-compose.yml                        # 容器编排
+├── prompts/ · output/ · docs/                # 提示词、导出产物、文档
+└── SAR_PIPELINE.md                           # SAR 管线设计说明
 ```
 
 ## 快速开始
 
 ### 环境要求
 
-- Docker Desktop（Mac / Windows / Linux）
-- 无需本地安装 Java、Node.js、PostgreSQL
+Docker Desktop（Mac / Windows / Linux）。无需本地安装 Java、Node.js、PostgreSQL。
 
 ### 一键启动
 
 ```bash
 git clone <repo-url>
-cd ai-review-system
+cd ai-Document-Review
 docker compose up -d --build
 ```
 
-首次构建需要下载 Maven 和 npm 依赖，耗时取决于网速。后续构建仅编译源码，约 15 秒完成。
+首次构建需下载 Maven 与 npm 依赖，耗时取决于网速；后续仅编译源码。
 
 ### 访问地址
 
-| 服务 | 地址 |
-|------|------|
-| 前端界面 | http://localhost:3030 |
-| 后端 API | http://localhost:8080 |
-| 数据库 | localhost:5432 |
+| 服务 | 地址 | 容器 |
+|------|------|------|
+| 前端界面 | http://localhost:3030 | ai-review-frontend（内部 80） |
+| 后端 API | http://localhost:8080 | ai-review-backend |
+| 数据库 | localhost:5432 | ai-review-db |
 
 ### 默认管理员账号
 
@@ -162,120 +179,152 @@ docker compose up -d --build
 |------|-----|
 | 账号 | admin_root |
 | 密码 | admin_root |
-| 角色 | 项目主管（supervisor） |
+| 角色 | supervisor（显示为「平台管理员」） |
+
+### 子路径部署
+
+```bash
+APP_BASE=/office-app/ docker compose build frontend
+```
+
+Vite 通过 `BASE_URL` 自动处理资源前缀，默认根路径 `/`。
+
+### 停止与重建
+
+```bash
+docker compose down -t 3          # 停止
+docker compose down -v            # 停止并删除数据卷
+docker compose up -d --build      # 重新构建
+```
+
+后端容器设置了 `SPRING_SQL_INIT_MODE=always`，每次启动都会重跑 `schema.sql`。该脚本完全幂等（`CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `INSERT ... ON CONFLICT DO NOTHING`），因此**升级时无需删除数据卷**即可自动应用迁移。
 
 ## 数据库设计
 
-系统使用 **PostgreSQL 16 + pgvector**（镜像 `pgvector/pgvector:0.8.2-pg16`，启动时 `CREATE EXTENSION vector`），当前业务表分为共享 / CHUNK / SAR 三组；`rag_*` 表作为历史演进与兼容结构保留。
+PostgreSQL 16 + pgvector（镜像 `pgvector/pgvector:0.8.2-pg16`）。`schema.sql` 共建 23 张表，分为共享 / CHUNK / SAR 三组。
 
 **共享表**
 
 | 表名 | 说明 |
 |------|------|
-| users | 用户表（邮箱、密码哈希、角色） |
-| ai_model_config | AI 模型配置（厂商、密钥、端点、参数、`model_type`=chat/embedding/reranker、`embedding_dimension`） |
+| users | 账号即成员（登录名、密码哈希、角色、所属单位、身份证号） |
+| units | 单位组织树（`parent_id` 为空为一级单位） |
+| user_feature_assignment | 用户可用功能码授权（统一权限模型，在 DO 块内创建） |
+| ai_model_config | AI 模型配置（厂商、密钥、端点、参数、`model_type`=chat/embedding/reranker、`embedding_dimension`、推理模式开关） |
 
 **CHUNK 管线表**
 
 | 表名 | 说明 |
 |------|------|
-| rule_libraries / rules | 规则库 / 审查规则（含 `rule_code`、`rule_type` 等元数据列） |
-| scenarios / scenario_rule_mapping / scenario_library_mapping | 审查场景及其与规则/规则库的关联 |
-| user_library_assignment | 用户-规则库权限分配 |
-| review_tasks | 审查任务（UUID 主键、状态、`ai_result` JSONB） |
+| rule_libraries | 规则库 |
+| rule_folders | 规则库下的二级文件夹（按规则类型分组，可整组停用） |
+| rules | 规则正文与元数据（`rule_code`、`rule_type`、`sections`、`keywords` 等） |
+| rule_checks | 规则拆出的原子检查项 |
+| scenarios | 审查场景 |
+| scenario_library_mapping | 场景 ↔ 规则库关联 |
+| user_library_assignment | 用户 ↔ 规则库授权 |
+| review_tasks | 审查任务（UUID 主键、状态、`ai_result` JSONB、`problem_count`、`review_category`、`quality_check_enabled`） |
 | review_audit_logs | 人工复核审计（动作、前后 JSON、操作者） |
-| rule_checks / rule_check_examples / document_blocks / review_pipelines / review_findings / ai_call_logs | CHUNK 标准 Rule JSON 的原子检查项可写入 `rule_checks` 并参与检查矩阵覆盖；证据块/管线/明细/调用日志类检索数据主要由 SAR/RAG 表承载，CHUNK 侧保留兼容结构避免 schema drift |
+| document_blocks | 文档切块与向量（原生 `embedding vector` 列 + HNSW 索引） |
 
-**RAG 遗留表（`rag_*` 前缀，14 张）**
+**SAR 管线表（`sar_*` 前缀，10 张）**
 
-`rag_rule_libraries` / `rag_rules` / `rag_rule_checks` / `rag_rule_check_examples` / `rag_scenarios` / `rag_scenario_rule_mapping` / `rag_scenario_library_mapping` / `rag_user_library_assignment` / `rag_review_tasks` / `rag_review_audit_logs` / `rag_document_blocks`（原生 `embedding vector` 列 + HNSW 索引）/ `rag_review_pipelines` / `rag_review_findings` / `rag_ai_call_logs`。该组表用于保留历史 RAG 演进成果与迁移兼容；当前前端可操作审查入口以 CHUNK / SAR 为准。
+与 CHUNK 侧结构对称：`sar_rule_libraries` / `sar_rule_folders` / `sar_rules` / `sar_rule_checks` / `sar_scenarios` / `sar_scenario_library_mapping` / `sar_user_library_assignment` / `sar_review_tasks` / `sar_review_audit_logs` / `sar_document_blocks`（含向量列 + HNSW 索引）。表结构与端点均已就位，前端入口当前关闭。
 
-**SAR 管线表（`sar_*` 前缀，14 张）**
-
-与 `rag_*` 结构对称的全新一套：`sar_rule_libraries` / `sar_rules` / `sar_rule_checks` / `sar_rule_check_examples` / `sar_scenarios` / `sar_scenario_rule_mapping` / `sar_scenario_library_mapping` / `sar_user_library_assignment` / `sar_review_tasks` / `sar_review_audit_logs` / `sar_document_blocks`（原生 `embedding vector` 列 + HNSW 索引）/ `sar_review_pipelines` / `sar_review_findings` / `sar_ai_call_logs`。全新空库、无历史迁移块。
+> `schema.sql` 末尾包含滚动迁移（`ADD COLUMN IF NOT EXISTS`、外键改 `ON DELETE SET NULL`、`R-BASIC-QUALITY` → `R-Q` 改名）以及 supervisor 账号与内置「基础文字质量审查」规则的幂等种子数据。脚本用 `separator: "^^^ END OF SCRIPT ^^^"` 让 PG JDBC 整体解析，避免 `DO` 块被分号切断。
 
 ## 核心工作流程
 
-系统当前有两条可操作管线，用户在前端 Tab / 侧边栏选择进入；后端按管线物理隔离执行。
-
-### CHUNK 管线：全文逐章审查流程
+### CHUNK 管线：全文逐章审查
 
 ```
-上传文档 -> 选择场景+模型 -> 提交任务
+上传文档 -> 选择场景 + 模型 -> 提交任务
                                 |
                     WordParser 按一级标题切分章节
                                 |
-                    ChunkUtils 按 Token 限制切片
+                    ChunkUtils 按 Token 限制切片（上限 25600）
+                    通用章节段合并为一片，试验项目章节一章一片
                                 |
                     RuleDispatcher 为每个切片选出适用规则
-                    （global/output 全章；section_specific 一级标题命中；
-                     test_item_chapter 仅试验项目章节；document_specific 文档级）
                                 |
                     逐章节并行审查（每章节 = 一次 AI 调用）
-                    单元内容 = 命中规则 + 本章节切片 + 引用到的其他章节切片
+                    单元内容 = 命中规则 + 本章节切片 + 被引用章节切片
                                 |
                     单章节失败只标记为可重试切片，不影响其他章节
                                 |
-                    合并每章 term_observations -> 输出术语表
-                    基于术语表追加全文术语一致性审查
+                    document_specific 规则跑一次文档级综合审查
                                 |
                     aggregateResults 跨切片 fingerprint 去重 + 枚举归一化
                                 |
                     汇总结果 -> 审查完成
 ```
 
-### CHUNK 管线细节：逐章节单次调用
+### 管线细节
 
-审查以**章节切片**为最小单元，每个章节切片对应**一次独立 AI 调用**，调用量与章节数严格 1:1：
+1. **每章节单元**：system prompt = `RuleDispatcher` 为该章节命中的规则（四段式结构化提示词）；user message = 本章节正文 + 通过 `ChapterReferenceResolver` 识别到的被引用章节。被引用内容仅作上下文，不在其上套用本次规则。
 
-1. **每章节单元**：system prompt = `RuleDispatcher` 为该章节命中的规则（四段式结构化提示词）；user message = 本章节切片正文 + 该章节通过 `ChapterReferenceResolver` 识别到的、被引用的其他章节切片（“见第X章 / 参见 4.5 条 / 参考<标题>”等）。被引用章节内容仅作上下文，不在其上套用本次规则。
-2. **并发调度**：父线程 `Semaphore(review.parallel.chunk-concurrency)` 控制单任务的章节并发，提交到独立的 `chunkReviewExecutor` 线程池执行；各章节互不影响。
-3. **单章节失败隔离**：某章节 AI 调用失败（如 429）只把该切片标记为 `failed/retryable`，写入 `failedChunks`，不触发"拆批重发"之类的放大重试；任务照常完成，用户可在结果页"重审失败切片"单独补审。
-4. **收敛参数**：`temperature=0`、`top_p=1`、`max_tokens=4096+检查项数×512`（下限 8192、上限 24576）、`seed=sha1(taskId+chunkIdx+0)` 取前 8 字节，保证同任务可复现、跨模型可对比。
-5. **结构化输出**：OpenAI 兼容协议走 `response_format=json_schema`，Anthropic 走 `tool_use+tool_choice`，强制模型在解码阶段就生成合法 JSON。
-6. **文档级综合审查**：所有章节审完后，若场景含 `rule_type=document_specific` 规则，再用"章节目录 + 各章节摘要"跑一次文档级综合调用。
-7. **术语抽取与全文一致性**：每个被送审切片都必须返回 `term_observations`；后端合并去重为 `terminologyTable`，并在 `/app/output` 写出 `术语表_<文件>_<模型>_<时间>.json`。随后系统基于术语表追加一次 `reviewProfile=terminology_consistency` 的全文术语一致性审查，只在发现不一致或需复核时进入矩阵。
-8. **业务规则覆盖约束**：system prompt 会计算本章注入的上传业务规则/原子检查项数量，并要求 `check_results` 至少覆盖这些待判定项；无原子检查项的 Markdown 规则使用 `规则编号-C001` 作为默认检查项编号。若模型仍漏返，后端会补一条 Review 供矩阵复核。
-9. **全文质量检查开关**：基础文字质量规则 `R-Q` 默认注入每章，包含错别字/语句/本章内术语一致性以及图号、表号编号与引用检查；没有发现问题时不进入检查项矩阵，仅 Fail/Review 结果显示。新建任务关闭全文质量检查后，未命中任何业务规则的章节会被标记为 skipped，不再调用模型，也不会产生该切片的术语观察。
+2. **通用章节段合并**：`review.chunk.general-section-end-chapter=0` 时自动识别——取「第一个试验项目章节」之前的全部章节（含封面、目录等前置内容）合并为一个切片，让签署完整性、目录与正文一致性、术语一致性这类跨章检查能在同一次调用内完成。仅当试验概述写法不规范、提不出试验项目清单导致识别失败时，才需手动指定章节号。
 
-> **历史说明**：旧版曾用 `ChunkBatchPlanner`（按规则签名 + token 预算把多切片打包成批）+ 非思维模型双采样 + 校准波动态调整 + 批失败拆回单切片重发的"批处理 + 采样收敛"方案。该方案在模型提供方限流（HTTP 429）时，会因"双采样翻倍调用 + 批失败瞬间拆成大量单切片重发"形成"越限流越猛打"的失败风暴，导致大量切片审查失败。现已改为上述逐章节单次调用方案；`ChunkBatchPlanner`、`ModelTier`、`RuleParser.buildBatchStructuredSystemPrompt`、`ReviewResultSchema.batchSchema()` 等批处理类已不再被审查管线调用（暂保留代码，无业务影响）。
+3. **并发调度**：`Semaphore(review.parallel.chunk-concurrency)` 控制单任务的章节并发（默认 6），提交到独立的 `chunkReviewExecutor` 执行。`review.parallel.global-ai-concurrency` 默认 **0（关闭）**，各任务并发相互独立——设为正数会变成跨任务共享的总闸门，导致「另一个文档一审查，我这个就明显变慢」，仅在上游按账号而非按任务限流时才需开启。
 
-### SAR 管线：结构化精准审查流程
+4. **单章节失败隔离**：某章节 AI 调用失败（如 429）只把该切片标记为 `failed/retryable` 写入 `failedChunks`，不触发拆批重发放大。任务照常完成，用户可在结果页「重审失败切片」单独补审。
 
-```
-上传文档 -> 选择 SAR 场景+chat模型 -> 提交任务
-                                |
-            WordParser 解析 + 切块 + embedding 向量化（pgvector）
-                                |
-        构建结构索引（按 section_path/章节聚合块）+ 展开原子检查项
-                                |
-   ① 三路并联路由：结构(applies_to.sections/keywords) + 词法(术语命中) + 语义(向量召回)
-      为每个检查项定位"预期区域"，并给出路由置信度
-                                |
-   ② 区域级取证：取命中区域的整段原文（非碎片/非整章）按区域分组、一次调用评估多项
-   ③ 清单式缺失检测：presence 类按"本区域=预期位置，缺失即 Fail"
-                                |
-   ④ 自适应复核：仅对低置信/定位不确定的非 Pass 项复核（开关 verify.enabled，默认关）
-   ⑤ 跨章一致性：抽取关键实体，核对跨章节矛盾（图表号/术语/参数/类别）
-                                |
-            一违规一行写入 allCheckResults（含 CONSISTENCY 行）-> 审查完成
-```
+5. **收敛参数**：`temperature=0`、`top_p=1`、`max_tokens` 按 `4096+检查项数×512` 动态计算（下限 8192、初始上限 24576，截断时按第 8 条升档）、`seed=sha1(taskId+chunkIdx+0)` 取前 8 字节，保证同任务可复现、跨模型可对比。
 
-SAR 管线由 `SarReviewService` 实现，复用 pgvector / embedding / rerank 基础设施，叠加「结构路由 + 区域取证 + 清单缺失 + 自适应复核 + 跨章一致性」五个组件。参数见 `review.sar.*`，设计与调参见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。
+6. **结构化输出**：OpenAI 兼容协议走 `response_format=json_schema`，Anthropic 走 `tool_use + tool_choice`，强制模型在解码阶段生成合法 JSON，由 `ReviewResultSchema` 定义、`json-schema-validator` 校验。
+
+7. **文档级综合审查**：所有章节审完后，若场景含 `rule_type=document_specific` 规则，用「章节目录 + 各章节摘要」跑一次文档级调用。该侧预算独立（`review.document.rule-budget-tokens=4000`），**超预算是拆批而非丢规则**；证据包上限 `max-evidence-chars=55000`（实测 37 章大纲需 48300 字符才能全覆盖）。
+
+8. **JSON 截断升档**：确认因长度截断时，输出预算按 `24576 → 32768 → 65536` 升档重试（绝对上限 128000，防止 API 传入异常大值），最多 3 次整体尝试（`JSON_PARSE_MAX_ATTEMPTS`），每次换种子重新调用。
+
+9. **业务规则覆盖约束**：system prompt 会计算本章注入的业务规则/原子检查项数量，要求 `check_results` 至少覆盖这些待判定项。无原子检查项的 Markdown 规则使用 `规则编号-C001` 作为默认检查项编号；模型漏返时后端补一条 Review 供矩阵复核。
+
+10. **结果落盘**：汇总结果除写库外，还会导出一份 JSON 到容器内 `/app/output/审查结果_<文件名>_<模型>_<运行时间戳>.json`（路径在 `saveAiResultToFile` 中硬编码，docker-compose 通过 `./output:/app/output` 映射到宿主机 `output/`）。文件名中的不安全字符会被替换为下划线。写失败只记 `warn` 日志，不影响审查任务本身。
+
+11. **全文质量检查开关**：内置文字质量规则 `R-Q` 默认注入每章，内置默认 7 项（C001 错别字、C002 语句通顺、C003 本章内术语一致、C004~C007 图号表号的唯一性/引用真实性/顺序/被引用完整性）。这 7 项是 `defaultBasicQualityChecks()` 的**兜底值**：实际使用的检查项从数据库规则 `R-Q` 的 `rule_checks` 加载，可在界面上增删改，仅当该行缺失或无启用检查项时才回退到内置默认。无问题时不进入矩阵，仅 Fail/Review 显示。新建任务关闭该开关后，未命中任何业务规则的章节标记为 skipped，不再调用模型。
+
+### 规则调度矩阵
+
+`RuleMetadata` 定义 6 种 `rule_type`：
+
+| rule_type | 实际应用范围 |
+|---|---|
+| `global` | 注入每个章节切片 |
+| `output` | 注入每个章节切片（与 global 同等对待） |
+| `general_chapter` | 仅注入合并后的「通用章节段」切片 |
+| `test_item_chapter` | 不按关键词触发；系统先从「试验概述/试验项目概述」提取声明的试验项目清单，再注入被识别为试验项目的一级章节 |
+| `section_specific` | 只匹配一级章节标题；标题命中 `sections` 或 `keywords` 任一项才注入，不搜索正文或二三级标题 |
+| `document_specific` | 不参与逐章调用；所有章节完成后单独跑文档级综合审查 |
+
+无元数据的规则按 `global` 处理，保证旧规则库继续可用。规则列表页的「适用范围」展示的是 `keywords` 元数据——对 `section_specific` 它就是一级标题匹配关键词，对 `test_item_chapter` / `global` 更多是主题标签，真实范围以 `rule_type` 为准。
+
+> `review.dispatch.basic-only-max-chapter` **已废弃并默认关闭（0）**。该档位在 `dispatchForChunk` 最开头就 return，会绕过全部规则元数据——配给低序号章节的专项规则不管配得多准都不会生效，日志里只留一条 `basic_chapter_profile`，很难察觉。其职能已被「通用章节段合并 + `general_chapter` 规则类型」取代。
 
 ### 角色权限
 
-| 功能 | 普通用户 | 管理员 | 项目主管 |
-|------|---------|--------|---------|
-| 提交审查 | Y | Y | Y |
-| 查看自己的任务 | Y | Y | Y |
-| 管理规则/场景 | - | Y | Y |
-| 模型配置 | - | Y | Y |
-| 用户管理 | - | - | Y |
+内部角色名保持 `supervisor` / `admin` / `user` 以兼容 JWT 与存量数据，显示语义如下：
+
+| 功能 | user（用户） | admin（单位管理员） | supervisor（平台管理员） | 实现位置 |
+|------|---------|--------|---------|---------|
+| 提交审查 / 查看自己的任务 | Y | Y | Y | 按 `userId` 归属过滤 |
+| 管理规则与规则库 | - | Y | Y | Controller 方法级 `@PreAuthorize("hasAnyRole('SUPERVISOR','ADMIN')")` |
+| 管理审查场景 | Y | Y | Y | **无角色限制**，按创建者 `userId` 归属隔离 |
+| 模型配置 | Y | Y | Y | **无角色限制**，任何已登录用户可增删改 |
+| 数据看板 | - | Y | Y | `SecurityConfig`：`/admin/dashboard/**` 需 ADMIN/SUPERVISOR |
+| 成员与权限 | - | Y | Y | `SecurityConfig`：`/admin/members/**` 需 ADMIN/SUPERVISOR，单位范围由 `MemberService` 逐次判定 |
+| 用户角色与规则库授权 | - | - | Y | `SecurityConfig`：`/admin/**` 兜底需 SUPERVISOR |
+
+`SecurityConfig` 中 `/api/v1/admin/members/**` 与 `/api/v1/admin/dashboard/**` 两条规则必须排在 `/api/v1/admin/**` 之前，否则会被后者先匹配掉。URL 层只放行到「是不是管理员」，「能不能管这个单位」由 `MemberService` / `DashboardStatsService` 按操作者的 `unit_id` 逐次判定。
+
+> **注意**：场景管理与模型配置当前没有角色校验（无 `@PreAuthorize`、`SecurityConfig` 中也未匹配），任何已登录用户都能调用这些接口的写操作。前端仅通过菜单可见性区分，属于待收口的权限缺口。
+
+审查入口另受**功能码**控制：`FeaturePermissionService.ENV_TEST_OUTLINE_REVIEW`（对应 `ReviewCategory.ENV_TEST_OUTLINE`）。用户需被授予该功能码或具备 supervisor 角色，才能看到「环境试验大纲审查」菜单组。后端由 `FeatureAuthorizationFilter` 拦截。
+
+> 前端 `/analytics`（数据看板）路由本身未包 `ManagerProtectedRoute`，仅菜单项按 `isManager` 隐藏——非管理员直接输入 URL 仍可进入页面，实际数据拦截依赖后端。
 
 ## API 接口
 
-所有接口以 `/api/v1` 为前缀，返回统一格式：
+所有接口以 `/api/v1` 为前缀（健康检查除外），返回统一格式：
 
 ```json
 {
@@ -286,48 +335,67 @@ SAR 管线由 `SarReviewService` 实现，复用 pgvector / embedding / rerank �
 }
 ```
 
-| 模块 | 路径 | 说明 |
-|------|------|------|
-| 认证（共享） | /api/v1/auth/** | 注册、登录、刷新 Token（无需认证） |
-| CHUNK 审查 | /api/v1/review/** | 提交 `/submit`、详情 `/{id}` 和 `/{id}/light`、源文件 `/{id}/sources`、列表查询 `/tasks`、取消 `/{id}/cancel`、重审失败切片 `/{id}/retry-failed`、人工复核 `/{id}/manual-decision`、审计日志 `/{id}/audit-logs`、导出 `/export/{id}/excel` `/export/{id}/report` `/export/{id}/audit` |
-| CHUNK 场景 | /api/v1/scenarios/** | 场景 CRUD |
-| CHUNK 规则 | /api/v1/rules/** | 规则上传 `/upload`、冲突检查 `/check-conflicts`、规则 CRUD、元数据编辑 `/{id}/metadata`、内容编辑 `/{id}/content` |
-| CHUNK 规则库 | /api/v1/rule-libraries/** | 规则库 CRUD、文件夹管理 `/{libraryId}/folders/**` |
-| SAR 审查 | /api/v1/sar-review/** | 与 CHUNK 审查同构（结构化精准管线，端点对应） |
-| SAR 场景 | /api/v1/sar/scenarios/** | SAR 场景 CRUD |
-| SAR 规则 | /api/v1/sar/rules/** | SAR 规则管理，Excel 检查单导入 `/import-checklist` |
-| SAR 规则库 | /api/v1/sar/rule-libraries/** | SAR 规则库 CRUD、文件夹管理 |
-| 跨管线 | /api/v1/unified-review/** | 合并任务列表 `/tasks`（?mode=ALL\|CHUNK\|SAR）、合并统计 `/stats`、按ID查询 `/tasks/{id}` |
-| 模型（共享） | /api/v1/models/** | 模型 CRUD、连接测试 `/test-connection`、思考模式建议 `/suggest-thinking-mode`、启用列表 `/enabled?modelType=`、启停 `/{id}/toggle` |
-| 用户管理（共享） | /api/v1/users/** | 用户 CRUD、规则库分配 `/assign-libraries`（带 ?mode=CHUNK\|SAR）、已分配库查询 `/assigned-libraries` |
-| 个人（共享） | /api/v1/user/** | 个人信息 `/profile`、改密 `/change-password` |
-| 仪表盘（共享） | /api/v1/admin/dashboard | 系统统计（仅主管/管理员） |
-| 健康检查 | /api/health | 容器健康检查 |
+### 认证 `/api/v1/auth`（无需登录）
 
-规则上传接口现在采用增量 upsert：先解析上传文件中的每一条规则，再在同一规则库/文件夹内按 `rule_code` 匹配已有规则，匹配不到时按规则名称兜底；命中则覆盖该规则的正文、元数据和原子检查项，未命中则新增。`replaceExisting` 参数和 `/upload-conflicts` 查询接口保留兼容，但前端默认不再弹同文件冲突确认，也不会按 `source_file` 整批删除旧规则。
+`GET /units` 单位列表 · `POST /register` 注册 · `POST /login` 登录 · `POST /refresh` 刷新 Token
 
-## 部署说明
+### CHUNK 审查 `/api/v1/reviews`
 
-### 跨平台兼容
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/execute` | 提交审查任务 |
+| GET | `/tasks` | 任务列表 |
+| GET | `/tasks/{taskId}` | 任务详情 |
+| DELETE | `/tasks/{taskId}` | 删除任务 |
+| POST | `/tasks/{taskId}/re-review` | 整体重审 |
+| POST | `/tasks/{taskId}/retry-failed-chunks` | 重审失败切片 |
+| POST | `/tasks/{taskId}/cancel` | 取消任务 |
+| GET | `/stats` | 个人统计 |
+| PUT | `/tasks/{taskId}/check-decisions` | 人工复核判定 |
+| GET | `/tasks/{taskId}/audit` | 审计日志 |
+| GET | `/tasks/{taskId}/export` | 导出判定矩阵 Excel |
+| GET | `/tasks/{taskId}/audit/export` | 导出审计 JSON |
+| GET | `/tasks/{taskId}/report` | 导出审查报告 Word |
+| PUT / DELETE | `/tasks/{taskId}/source-edits` | 保存 / 清除原文修订 |
+| GET | `/tasks/{taskId}/revised-document` | 下载修订稿 Word |
 
-项目已做好 Mac / Windows / Linux 全平台兼容：
+### 跨管线查询 `/api/v1/reviews`（UnifiedReviewController）
 
-- `.gitattributes` 强制 LF 行尾，避免 Windows CRLF 导致容器内脚本出错
-- `.env` 配置 `COMPOSE_CONVERT_WINDOWS_PATHS=1` 兼容 Windows 路径
-- 所有 Docker 镜像支持 AMD64（Intel/Windows）和 ARM64（Apple Silicon）
+与上表同前缀但子路径不冲突：`GET /all` 合并任务列表 · `GET /by-id/{taskId}` 按 ID 查详情 · `GET /by-id/{taskId}/sources` 结构化原文 · `GET /stats/all` 合并统计
 
-### 停止服务
+### SAR 审查 `/api/v1/sar/reviews`
 
-```bash
-docker compose down -t 3
-```
+端点与 CHUNK 侧**完全对称**（同一组 `/execute`、`/tasks/**`、导出与修订接口）。后端可用，前端入口当前关闭。
 
-### 清除数据重建
+### 规则 `/api/v1/rules`（SAR 侧为 `/api/v1/sar/rules`）
 
-```bash
-docker compose down -v          # 删除数据卷
-docker compose up -d --build    # 重新构建
-```
+`POST /upload` 上传（增量 upsert） · `GET /upload-conflicts` 冲突查询（保留兼容） · `GET /{id}` 详情 · `DELETE /{id}` 删除 · `PUT /{id}/metadata` 编辑元信息 · `PUT /{id}/content` 编辑正文
+
+> `POST /import-checklist`（Excel 检查单导入）**仅 SAR 侧提供**，CHUNK 侧 `RuleController` 无此端点。
+
+### 规则库 `/api/v1/rule-libraries`（SAR 侧为 `/api/v1/sar/rule-libraries`）
+
+规则库 CRUD + `GET /all` · 文件夹：`GET|POST /{libraryId}/folders`、`PUT|DELETE /folders/{folderId}`
+
+### 场景 `/api/v1/scenarios`（SAR 侧为 `/api/v1/sar/scenarios`）
+
+场景 CRUD（列表、`GET|PUT|DELETE /{id}`）
+
+### 模型 `/api/v1/models`
+
+模型 CRUD · `GET /enabled?modelType=` 按类型查启用 · `POST /test-connection` 连通性测试 · `GET /suggest-thinking-mode` 思考模式建议 · `PUT /{id}/toggle` 启停
+
+### 用户与成员
+
+| 前缀 | 端点 |
+|---|---|
+| `/api/v1/user` | `GET /me` 个人信息 · `PUT /password` 改密 |
+| `/api/v1/admin/users` | 用户列表 · `PUT /{id}/role` 改角色 · `GET|POST /{id}/libraries` 规则库授权 · `DELETE /{id}` 删除 |
+| `/api/v1/admin/members` | `GET|POST /units`、`DELETE /units/{unitId}` 组织树 · `POST /platform-accounts` 平台账号 · `GET /features` 功能码 · `GET|PUT /{memberId}/permissions` 权限 · `PUT /{memberId}/role` · `POST /{memberId}/reset-password` · `DELETE /{memberId}` · `POST /import` 批量导入 · `GET /import-template-headers` 导入模板表头 |
+
+### 其他
+
+`GET /api/v1/admin/dashboard` 系统统计 · `GET /api/health` 容器健康检查
 
 ## 配置说明
 
@@ -336,46 +404,46 @@ docker compose up -d --build    # 重新构建
 | 配置 | 默认值 | 说明 |
 |------|--------|------|
 | server.port | 8080 | 后端端口 |
-| spring.servlet.multipart.max-file-size | 200MB | 最大上传文件大小 |
-| jwt.access-token-expiration | 3600000 | Access Token 有效期（1小时） |
-| jwt.refresh-token-expiration | 604800000 | Refresh Token 有效期（7天） |
-| review.chunk.max-tokens | 25600 | 每个文档切片最大 Token 数（章节超长时按段落再分） |
-| review.chunk.overlap-tokens | 0 | 切片之间的重叠 token 数 |
-| review.parallel.chunk-concurrency | 6 | CHUNK 单任务并行审查的章节切片数 |
-| review.dispatch.basic-only-max-chapter | 6 | 章节序号 ≤ 该值时只跑基础规则的调度阈值 |
-| review.retry.max-attempts | 4 | AI 调用失败重试次数（4xx 立即失败；5xx 指数退避；429 额外尊重 `Retry-After` 头并采用更陡退避，封顶 60s） |
-| review.retry.interval-ms | 1000 | 重试初始间隔（5xx 退避 1s→2s→4s；429 退避 2s→4s→8s 并不低于 `Retry-After`） |
-| review.rag.* | 见下 | RAG 历史调参项，保留为迁移与技术背景；当前前端可操作入口以 CHUNK / SAR 为准 |
-| review.sar.* | 见下 | SAR 管线参数：`recall-top-k=30`、`evidence-max-blocks=10`、`region-max-blocks=14`、`route-confidence-threshold=0.45`、`max-checks-per-call=8`、`verify.enabled=false` / `verify.adaptive=true`、`consistency.enabled=true` 等，详见 [SAR_PIPELINE.md](SAR_PIPELINE.md) |
-| review.prompts.path | ./prompts/prompts/prompts.json | v2 提示词迁移源文件 |
-| async.core-pool-size / max-pool-size / queue-capacity | 4 / 8 / 100 | 任务级异步线程池（`reviewTaskExecutor`） |
+| spring.datasource.hikari.maximum-pool-size | 20 | 数据库连接池 |
+| spring.servlet.multipart.max-file-size | 200MB | 最大上传文件（请求上限 210MB） |
+| spring.sql.init.mode | always | 每次启动重跑幂等 schema.sql |
+| jwt.access-token-expiration | 3600000 | Access Token 有效期（1 小时） |
+| jwt.refresh-token-expiration | 604800000 | Refresh Token 有效期（7 天） |
+| review.retry.max-attempts | 4 | 4 次尝试 = 3 次重试；只对 IOException / 5xx / 429 重试，4xx 立即失败 |
+| review.retry.interval-ms | 1000 | 指数退避 1s→2s→4s（总等待 7s） |
+| review.chunk.max-tokens | 25600 | 每个切片最大 Token（章节超长按段落再分） |
+| review.chunk.overlap-tokens | 0 | 切片重叠 token |
+| review.chunk.general-section-end-chapter | 0 | 通用章节段结束章节号；0 = 自动识别 |
+| review.chunk.rule-budget-tokens | 16000 | 逐章「规则清单」段 token 上限；**超限规则被静默跳过**，宁可调大 |
+| review.document.rule-budget-tokens | 4000 | 文档级单批规则预算；超限拆批，一条不丢 |
+| review.document.max-evidence-chars | 55000 | 文档级证据包字符上限（上限而非固定开销） |
+| review.parallel.chunk-concurrency | 6 | 单任务章节并发；`chunkReviewExecutor` 池大小自动跟随 |
+| review.parallel.global-ai-concurrency | 0 | 跨任务总闸门；0 = 关闭，任务间并发互不影响 |
+| review.dispatch.basic-only-max-chapter | 0 | **已废弃**，非 0 会绕过全部规则元数据 |
+| review.rag.* | 见 yml | 保留的 RAG 调参组；**`RagReviewService` 在代码中不存在**，该组配置当前无对应实现 |
+| review.sar.* | 见下 | SAR 管线参数 |
+| async.core-pool-size / max-pool-size / queue-capacity | 4 / 8 / 100 | 任务级线程池 `reviewTaskExecutor` |
+| logging.level.com.aireview | DEBUG | 业务日志级别 |
+
+> `jwt.secret` 与数据库密码当前硬编码在 `application.yml` 和 `docker-compose.yml` 中，生产部署应通过环境变量外置。
+
+### SAR 管线参数（`review.sar.*`）
+
+`check-concurrency=4` · `recall-top-k=30` · `evidence-max-blocks=10` · `region-max-blocks=14` · `route-confidence-threshold=0.45` · `max-checks-per-call=8` · `max-evidence-per-call=16` · `block-max-chars=1800` · `embedding-batch-size=24` · `verify.enabled=false` / `verify.adaptive=true` · `consistency.enabled=true`（`max-input-chars=48000`、`per-chapter-max-chars=4800`、`windows-per-chapter=4`） · `quality.full-scan`（`batch-blocks=4`、`concurrency=2`、`failure-threshold=4`） · `quality.structure-index.enabled=true` · `quality.terminology.enabled=true`（`max-observations=160`） · `vector-index.hnsw-ef-search=100`。详见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。
 
 ### 线程池架构（三级隔离避免死锁）
 
-系统使用三个独立线程池，避免任务间相互阻塞：
-
-1. **reviewTaskExecutor**（任务级）
-   - 配置：核心 4，最大 8，队列 100
-   - 用途：@Async 任务启动（一个审查任务 = 一个 async 方法调用）
-   - 配置项：`async.core-pool-size`, `async.max-pool-size`, `async.queue-capacity`
-
-2. **chunkReviewExecutor**（切片级）
-   - 配置：核心 20，最大 50，队列 100
-   - 用途：CHUNK 管线单章节并行审查
-   - 并发控制：由 `review.parallel.chunk-concurrency=6` 控制单任务内的章节并发度
-
-3. **sarCheckExecutor**（检查项级）
-   - 配置：核心 30，最大 60，队列 100
-   - 用途：SAR 管线检查项并行评估
-   - 并发控制：由 `review.sar.check-concurrency=4` 控制单任务内的并发度
+1. **reviewTaskExecutor**（任务级）：核心 4、最大 8、队列 100，前缀 `review-task-`。用于 `@Async` 任务启动，一个审查任务 = 一次 async 调用。
+2. **chunkReviewExecutor**（切片级）：池大小 = `review.parallel.chunk-concurrency × async.max-pool-size`，**自动跟随配置**，无需手动改 `AsyncConfig`。用于 CHUNK 单章节并行审查。
+3. **sarCheckExecutor**（检查项级）：用于 SAR 检查项并行评估，并发由 `review.sar.check-concurrency` 控制。
 
 **设计原则**：任务级、切片级、检查项级三层隔离，避免大任务占满线程池导致小任务饿死。
 
-> **收敛常量**（不开放配置，集中在 `ReviewService` 顶部）：`temperature=0`、`top_p=1`、输出预算按 `4096+检查项数×512` 动态计算（下限 8192、上限 24576）、规则段 token 预算由配置项控制。每章节单次调用（不再双采样）。这些值是"跨模型可比"的契约本身，因此不在普通审查参数中开放。
+> **收敛常量**（不开放配置，集中在 `ReviewService` 顶部）：`temperature=0`、`top_p=1`、输出预算按 `4096+检查项数×512` 动态计算（下限 8192、初始上限 24576，确认长度截断后升档至 32768 / 65536，绝对上限 128000）。每章节单次调用，不再双采样。这些值是「跨模型可比」的契约本身，因此不作为普通审查参数开放。
 
-### 审查结果字段说明（CHUNK 管线 `review_tasks.ai_result`）
+## 审查结果字段说明（`review_tasks.ai_result`）
 
-> SAR 管线的 `ai_result` 字段与 CHUNK 不同（`allCheckResults` 一违规一行、`retrievalStats` 等），详见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。SAR 的 `retrievalStats` 另含 `regionMaxBlocks` / `verifyAdaptive` / `consistencyFindings` 等，并可能有 `check_code=CONSISTENCY` 的跨章一致性行。两条当前可用管线判定枚举都只有三级 **Pass / Fail / Review**（旧的 Partial / N/A 已并入 Review），**不再有 severity**。
+判定枚举只有三级 **Pass / Fail / Review**（旧的 Partial / N/A 已并入 Review），**不再有 severity**。
 
 顶层字段：
 
@@ -384,148 +452,149 @@ docker compose up -d --build    # 重新构建
 | `totalChunks` / `chunkResults` | 切片总数与逐切片结果 |
 | `overallScore` | 平均分（模型未返回 `overall_score` 时不输出） |
 | `totalIssues` / `allIssues` | 跨切片 fingerprint 去重后的问题总数与扁平列表（旧问题视图） |
-| `allCheckResults` / `totalCheckResults` / `checkStatusCounts` | 检查项判定矩阵（当前主视图）与按 `status`（Pass/Fail/Review）的计数 |
-| `categoryCounts` | 按 `category`（格式/完整性/标准符合性/逻辑一致性/术语一致性/其他）的分桶计数 |
-| `confidenceCounts` | 按 `confidence`（high/medium/low/needs_review）的分桶计数 |
-| `passedRuleCoverage` | 各 `rule_code` 在 `passed_items` 中的命中次数（覆盖率指标） |
-| `terminologyTable` / `terminologyTableFile` | 本次审查从各切片筛选并合并的术语表，以及落盘的 `术语表_*.json` 路径 |
-| `failedChunks` / `failedChunkCount` | 因 AI 调用失败而保留的切片，可在 UI 中点击重审 |
-| `originalSources` / `sourceTextMode` | 重建的原文章节，供前端右侧原文定位/高亮 |
-| `modelName` / `modelKey` | 任务使用的模型，用于跨模型对比时归类 |
+| `allCheckResults` / `totalCheckResults` / `checkStatusCounts` | 检查项判定矩阵（当前主视图）与按 `status` 的计数 |
+| `categoryCounts` | 按 `category`（格式/完整性/标准符合性/逻辑一致性/术语一致性/其他）分桶 |
+| `confidenceCounts` | 按 `confidence`（high/medium/low/needs_review）分桶 |
+| `passedRuleCoverage` | 各 `rule_code` 在 `passed_items` 中的命中次数 |
+| `failedChunks` / `failedChunkCount` | 因 AI 调用失败保留的切片，可在 UI 重审 |
+| `originalSources` / `sourceTextMode` | 重建的原文章节，供前端右侧定位/高亮 |
+| `modelName` / `modelKey` | 任务使用的模型，用于跨模型对比归类 |
 | `crossModelEligible` | `false` 表示思维模型，不应参与跨模型对比 |
-| `samplingStrategy` | 固定为 `single`（逐章节方案每章节单次调用） |
-
-CHUNK 规则调度要点：
-
-| rule_type | 实际应用范围 |
-|---|---|
-| `global` / `output` | 注入每个章节切片 |
-| `section_specific` | 只匹配一级章节标题；标题命中 `sections` 或 `keywords` 任一项才注入，不搜索正文、二级标题或三级标题 |
-| `test_item_chapter` | 不按关键词触发；系统先从"试验概述/试验项目概述"提取声明的试验项目清单，再把规则注入识别为试验项目的一级章节 |
-| `document_specific` | 不参与逐章节调用；所有章节完成后单独跑文档级综合审查 |
-
-规则列表页的"适用范围"当前展示的是规则 `keywords` 元数据。对 `section_specific` 它就是一级标题匹配关键词；对 `test_item_chapter` / `global` 它更多是规则主题标签，真实应用范围以 `rule_type` 为准。
+| `samplingStrategy` | 顶层固定为 `single`；切片级在双采样路径下可能为 `double`（当前默认单采样） |
 
 `allIssues[i]` 字段：
 
 | 字段 | 含义 |
 |---|---|
-| `location` / `description` / `suggestion` / `rule` / `rule_code` / `evidence` | 与 prompt schema 完全一致；`rule_code` 在 manifest 之外的非法编号会被丢弃 |
+| `location` / `description` / `suggestion` / `rule` / `rule_code` / `evidence` | 与 prompt schema 一致；manifest 之外的非法 `rule_code` 会被丢弃 |
 | `category` | 强制映射到枚举；无法判断 → `其他`（无 severity 字段） |
-| `sourceChunk` / `sourceTitle` / `sourceRefs` | 关联到的切片号、章节标题与原文引用，用于前端定位 |
-| `fingerprint` | `sha1(归一化location + "|" + rule_code)`，跨切片去重的主键 |
-| `confidence` | `single`（单章节单次调用的默认值）；跨章节重复命中同一 fingerprint 时在 `aggregateResults` 中升为 `high` |
+| `sourceChunk` / `sourceTitle` / `sourceRefs` | 关联的切片号、章节标题与原文引用，用于前端定位 |
+| `fingerprint` | `sha1(归一化location + "\|" + rule_code)`，跨切片去重主键 |
+| `confidence` | 默认 `single`；跨章节重复命中同一 fingerprint 时在 `aggregateResults` 中升为 `high` |
 | `occurrences` | 跨切片去重后的命中次数 |
+
+> SAR 管线的 `ai_result` 结构不同（`allCheckResults` 一违规一行、`retrievalStats` 含 `regionMaxBlocks`/`verifyAdaptive`/`consistencyFindings`，并可能有 `check_code=CONSISTENCY` 的跨章一致性行），详见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。
 
 ## 前端架构
 
-### 目录结构
+### 路由表（`app/App.tsx`）
 
-```
-frontend/
-├── src/
-│   ├── app/                      # 应用入口和路由配置
-│   │   └── App.tsx               # 路由定义（双管线路由）
-│   ├── features/                 # 业务功能模块（按域组织）
-│   │   ├── auth/                 # 认证模块
-│   │   │   ├── api/              # 认证API
-│   │   │   ├── pages/            # LoginPage
-│   │   │   ├── store/            # authStore (Zustand)
-│   │   │   └── dto/              # 请求/响应类型
-│   │   ├── dashboard/            # 工作台
-│   │   │   ├── api/              # 统计API
-│   │   │   └── pages/            # DashboardPage, DataBoardPage
-│   │   ├── review/               # 审查模块
-│   │   │   ├── api/              # reviews.ts, sarReviews.ts, pipelineApi.ts
-│   │   │   ├── pages/            # ReviewWorkspacePage
-│   │   │   ├── workspace/        # useReviewWorkspace Hook, components, helpers
-│   │   │   ├── components/       # FileUploader
-│   │   │   └── store/            # logStore (WebSocket日志)
-│   │   ├── rules/                # 规则管理
-│   │   │   ├── api/              # rules.ts, sarRules.ts
-│   │   │   ├── pages/            # RuleListPage (三级视图)
-│   │   │   └── components/       # RuleUploader
-│   │   ├── scenarios/            # 场景管理
-│   │   │   ├── api/              # scenarios.ts, sarScenarios.ts
-│   │   │   └── pages/            # ScenarioListPage
-│   │   ├── modelConfig/          # 模型配置
-│   │   │   ├── api/              # models.ts
-│   │   │   └── pages/            # ModelConfigPage
-│   │   └── users/                # 用户管理
-│   │       ├── api/              # users.ts
-│   │       └── pages/            # UserManagementPage, ProfilePage
-│   ├── shared/                   # 共享模块
-│   │   ├── api/                  # request.ts (Axios封装+拦截器)
-│   │   ├── components/           # AppLayout, ProtectedRoute
-│   │   ├── utils/                # constants.ts, websocket.ts
-│   │   └── styles/               # 全局样式
-│   ├── main.tsx                  # Vite入口
-│   └── vite-env.d.ts
-```
+外层 `/` 包 `ProtectedRoute` + `AppLayout`：
+
+| path | 组件 / 行为 | 守卫 |
+|---|---|---|
+| `/login` | LoginPage | 无 |
+| `/`（index） | → `/dashboard` | — |
+| `dashboard` | DashboardPage | — |
+| `chunk/scenarios` | ScenarioListPage（`reviewMode="CHUNK"`） | FeatureProtectedRoute |
+| `chunk/rules` | RuleListPage（`reviewMode="CHUNK"`） | FeatureProtectedRoute |
+| `review/:taskId` | ReviewWorkspacePage | FeatureProtectedRoute |
+| `models` | ModelConfigPage | — |
+| `analytics` | DataBoardPage | 仅菜单隐藏，无路由守卫 |
+| `profile` | ProfilePage | — |
+| `members` | MemberManagementPage | ManagerProtectedRoute |
+| `sar/scenarios` · `sar/rules` | → `/chunk/*` | 重定向 |
+| `scenarios` · `rules` | → `/chunk/*` | 重定向 |
+| `review` · `users` · `*` | → `/dashboard` · `/members` · `/dashboard` | 重定向 |
+
+### 侧边栏菜单（`AppLayout`）
+
+- 工作台 → `/dashboard`
+- 环境试验大纲审查（需 `ENV_TEST_OUTLINE_REVIEW` 功能码或 supervisor）
+  - 全文逐章审查
+    - 审查场景 → `/chunk/scenarios`
+    - 审查规则 → `/chunk/rules`
+- 模型管理 → `/models`
+- 数据看板 → `/analytics`（仅管理员可见）
+- 成员与权限 → `/members`（仅管理员可见）
+
+右上角用户下拉：个人信息 → `/profile`、退出登录。角色标签：supervisor = 平台管理员（红）、admin = 单位管理员（蓝）、user = 用户。
+
+布局层挂了两个全局副作用：`*` 通道的 WebSocket 日志订阅（离开工作区仍持续累积），以及路由变化时 `Modal.destroyAll()` + 清理 body scroll lock。
+
+### 页面职责
+
+| 组件 | 职责 |
+|---|---|
+| LoginPage | 登录/注册，含单位选择 |
+| DashboardPage | 工作台：任务列表、新建审查弹窗、WebSocket 进度 |
+| DataBoardPage | 数据看板，手写 SVG 图表（Donut / BarList / LineTrend / ResourceStat） |
+| RuleListPage | 规则库 / 文件夹 / 规则三级管理，接收 `reviewMode` prop |
+| ScenarioListPage | 场景 CRUD，接收 `reviewMode` prop |
+| ReviewWorkspacePage | 审查工作区壳层（30 行），逻辑委托给 `workspace/` |
+| ModelConfigPage | 模型 CRUD、连通性测试、thinking mode 建议 |
+| MemberManagementPage | 组织树、成员、功能授权、批量导入 |
+| ProfilePage | 个人信息与改密 |
+
+`features/review/workspace/` 是唯一拆成 hook + 展示层的模块：`useReviewWorkspace.ts` 承载状态逻辑，`components.tsx` 与 `helpers.tsx` 负责渲染。
+
+### API 层
+
+`shared/api/request.ts` 提供 Axios 实例、`ApiResponse` 类型与 Token 拦截器。各 feature 自带 api 目录，CHUNK / SAR 双份（`rules.ts` / `sarRules.ts` 等），由 `features/review/api/pipelineApi.ts` 统一派发：`getScenarioApi/getRuleApi/getReviewApi(mode)` 按 CHUNK/SAR 返回同形状 client，另有 `getUnifiedReviewList/Stats` 与跨管线详情探测。
+
+> SAR 侧 API 文件完整存在，但由于路由已重定向、没有页面传入 `"SAR"`，`sarRules` / `sarScenarios` / `sarReviews` 目前仅通过 `pipelineApi` 的 mode 分支可达，实际处于未启用状态。
 
 ### 技术特性
 
-- **虚拟滚动**：审查工作区使用 react-virtuoso 优化长列表性能（千级检查项流畅滚动）
-- **状态管理**：Zustand 轻量级状态管理（authStore 认证状态、logStore WebSocket日志）
-- **实时通信**：WebSocket 订阅任务进度和日志，跨页面持久化到 logStore
-- **双管线架构**：通过路由（/chunk/* 和 /sar/*）和 reviewMode prop 区分管线
-- **管线派发层**：pipelineApi.ts 统一派发逻辑，避免组件中散落 if-else
-- **Token刷新**：全局单例 Promise 避免并发 401 时重复刷新
-- **懒加载**：详情页 light 模式 + 按需加载源文件，大任务秒开
-- **子路径部署**：支持挂载到子路径（如 /office-app/），通过 Vite BASE_URL 自动处理
+- **虚拟滚动**：检查项列表用 react-virtuoso，千级列表流畅交互
+- **状态管理**：Zustand（`authStore` 认证、`logStore` WebSocket 日志），无 react-query 一类数据层
+- **实时通信**：WebSocket 订阅任务进度与日志，跨页面持久化到 `logStore`
+- **Token 刷新**：全局单例 Promise，避免并发 401 时重复刷新
+- **懒加载**：详情页按需加载源文件，大任务秒开
+- **子路径部署**：通过 Vite `BASE_URL` 支持挂载到子路径
 
 ## 性能优化
 
-### 后端优化
+**后端**
 
-- **问题数缓存**：`review_tasks.problem_count` 字段缓存问题总数，工作台列表查询无需反序列化大型 `ai_result` JSON
-- **懒加载**：详情页提供 light 模式（`GET /tasks/{id}/light`），不含源文件；源文件按需加载（`GET /tasks/{id}/sources`）
-- **三级线程池**：任务/切片/检查项三级隔离避免死锁，大任务不阻塞小任务
-- **批量向量化**：SAR 管线嵌入批大小 24 条/批，减少网络往返
-- **HNSW 索引**：pgvector 使用 HNSW 索引加速向量检索（ef_search=100）
-- **单次调用**：CHUNK 每章节单次调用（避免旧版双采样+批处理的 429 限流风暴）
-- **失败隔离**：单章节失败只标记 retryable，不放大重试，可在 UI 单独补审
+- `review_tasks.problem_count` 缓存问题总数，列表查询无需反序列化大型 `ai_result` JSON
+- 源文件按需加载，详情接口不默认返回结构化原文
+- 三级线程池隔离，大任务不阻塞小任务
+- SAR 嵌入批大小 24 条/批，减少网络往返
+- pgvector HNSW 索引加速检索（`ef_search=100`）
+- CHUNK 每章节单次调用，规避双采样 + 批处理导致的 429 限流风暴
+- 单章节失败只标记 retryable，可在 UI 单独补审
 
-### 前端优化
+**前端**
 
-- **虚拟滚动**：审查工作区检查项列表使用 Virtuoso 虚拟滚动，千级列表流畅交互
-- **WebSocket 缓存**：进度数据内存缓存（ConcurrentHashMap），页面刷新后立即恢复
-- **Token 刷新优化**：全局单例 Promise 防止并发 401 时重复刷新（N 个请求共享一个刷新）
-- **懒加载原文**：结构化原文按需加载，避免初次加载过大
-- **动态列宽**：表格列宽响应式适配（ResizeObserver）
+- 检查项列表虚拟滚动
+- WebSocket 进度内存缓存（`ConcurrentHashMap`），页面刷新后立即恢复
+- Token 刷新单例 Promise，N 个 401 请求共享一次刷新
+- 结构化原文按需加载
+- 表格列宽响应式适配（ResizeObserver）
 
 ## 开发指南
 
-### 新增审查管线
-
-如需添加新的审查管线（如 XYZ 管线）：
-
-1. **数据库**：在 `schema.sql` 中创建 `xyz_*` 表（参考 `sar_*` 表结构）
-2. **后端 Entity**：创建 `XyzReviewTask`、`XyzRule` 等实体类
-3. **后端 Service**：实现 `XyzReviewService`（核心审查逻辑）
-4. **后端 Controller**：创建 `XyzReviewController`（API 端点：`/api/v1/xyz-review/**`）
-5. **前端 API**：创建 `xyzReviews.ts` 和 `xyzRules.ts`
-6. **前端路由**：在 `App.tsx` 中添加 `/xyz/scenarios` 和 `/xyz/rules` 路由
-7. **前端 UI**：在 `AppLayout` 中添加侧边栏入口
-8. **统一接口**：在 `UnifiedReviewController` 和 `pipelineApi.ts` 中添加 XYZ 模式支持
-
 ### 新增规则类型
 
-如需添加新的规则类型：
-
-1. 在 `RuleMetadata` 中添加新的 `rule_type` 枚举值
-2. 在 `RuleDispatcher.dispatchForChunk()` 中实现调度逻辑
-3. 更新 `ReviewResultSchema` 中的规则清单构建逻辑
+1. 在 `rule/engine/RuleMetadata` 中添加新的 `TYPE_*` 常量
+2. 在 `rule/engine/RuleDispatcher.dispatchForChunk()` 中实现调度逻辑
+3. 更新 `review/core/ReviewResultSchema` 中的规则清单构建逻辑
 4. 前端 `RuleListPage` 中添加类型选项
 
 ### 新增 AI 模型厂商
 
-如需接入新的 AI 厂商：
-
-1. 在 `AiModelConfig` 的 `provider` 字段添加新值
-2. 在 `EndpointResolver` 中实现端点解析逻辑（如需特殊处理）
-3. 在 `AiModelService` 中添加厂商特定逻辑（如需）
+1. 在 `modelconfig/entity/AiModelConfig` 的 `provider` 字段添加新值
+2. 在 `modelconfig/service/AiModelService` 中添加厂商特定的端点解析与请求构造逻辑
+3. 如涉及推理/思考模式，在 `ReasoningModeAdapter` 中补充适配
 4. 前端 `ModelConfigPage` 的供应商下拉中添加选项
+
+### 重新启用 SAR 前端入口
+
+后端与 API 层完整可用，只需前端改动：
+
+1. `app/App.tsx`：把 `sar/scenarios`、`sar/rules` 的 `Navigate` 重定向替换为 `ScenarioListPage` / `RuleListPage` 并传入 `reviewMode="SAR"`（两个页面已支持该 prop，`chunk/*` 路由就是这么传的）
+2. `shared/components/AppLayout`：菜单是三级结构（业务域 → 管线 → 叶子），`chunk-section` 同级现留有一个空位，在此补回「结构化精准审查」分组；同时要扩展下方按 `/chunk/*` 前缀计算 `selectedKey` 的逻辑，否则 SAR 页面高亮不到菜单项
+3. `DashboardPage`：改动量最大。`'CHUNK'` 在此页多处硬编码——提交任务时的 `mode: 'CHUNK'`、`getScenarioApi('CHUNK')`、`getReviewApi('CHUNK')`、成功提示里的 `PIPELINE_LABEL.CHUNK`，以及统计只取 `s.byMode.CHUNK`。需要在新建审查弹窗加入管线选择并把选中值贯穿这些调用点。任务列表侧无需改动：`apiForTask` 已按 `task.reviewMode` 分流
+
+### 新增审查管线
+
+1. **数据库**：在 `schema.sql` 中创建 `xyz_*` 表（参考 `sar_*` 表结构）
+2. **后端**：新建 `review/xyz/` 包，实现 `entity` / `repository` / `service/XyzReviewService` / `controller/XyzReviewController`（`/api/v1/xyz/reviews`）
+3. **规则与场景**：在 `rule` / `scenario` 域中添加 `Xyz*` 镜像实体、Mapper、Service、Controller
+4. **前端**：新增 `xyzReviews.ts` / `xyzRules.ts` / `xyzScenarios.ts`，在 `pipelineApi.ts` 中添加 mode 分支
+5. **路由与菜单**：在 `App.tsx` 添加 `/xyz/*` 路由，在 `AppLayout` 添加侧边栏入口
+6. **跨管线查询**：在 `UnifiedReviewController` 中纳入新管线的任务与统计
 
 ### 规则编写规范
 
@@ -541,7 +610,7 @@ frontend/
 
 ### 审查内容
 
-霉菌试验章节：核查"设备名称与件号"是否满足检查单确认目标。
+霉菌试验章节：核查“设备名称与件号”是否满足检查单确认目标。
 
 ### 审查步骤
 
@@ -578,25 +647,26 @@ frontend/
 }
 ```
 
-### 常见问题排查
+## 常见问题排查
 
-**问题：审查任务一直 PROCESSING**
+**审查任务一直 PROCESSING**
 - 检查 WebSocket 连接是否正常（浏览器控制台）
 - 检查后端日志是否有异常堆栈
 - 检查线程池是否耗尽（`review.parallel.chunk-concurrency` 是否过大）
 
-**问题：模型调用频繁 429**
-- 降低 `review.parallel.chunk-concurrency`（CHUNK）或 `review.sar.check-concurrency`（SAR）
-- 检查模型配额是否充足
-- 确认 `review.retry.max-attempts` 和重试间隔配置
+**模型调用频繁 429**
+- 降低 `review.parallel.chunk-concurrency`
+- 若上游按账号限流且多任务并行，可把 `review.parallel.global-ai-concurrency` 从 0 改为正数作为总闸门
+- 检查模型配额与 `review.retry.max-attempts` 配置
 
-**问题：前端 401 循环**
+**配好的专项规则不生效**
+- 确认规则 `is_valid` 为 true、所在文件夹已启用（`rule_folders.enabled`）
+- 确认场景关联了该规则库（`scenario_library_mapping`）
+- `section_specific` 只匹配**一级标题**，不搜正文与二三级标题——检查 `sections` / `keywords` 是否命中 H1
+- 确认 `review.dispatch.basic-only-max-chapter` 为 0；非 0 会让低序号章节绕过全部规则元数据
+- 规则清单超过 `review.chunk.rule-budget-tokens` 会被**静默跳过**，只留一行日志，需调大该值
+
+**前端 401 循环**
 - 检查 refresh token 是否过期（超过 7 天未活跃）
-- 检查 localStorage 中的 token 和 refreshToken
+- 检查 localStorage 中的 token 与 refreshToken
 - 清除浏览器缓存并重新登录
-
-**问题：规则未生效**
-- 检查规则的 `is_valid` 字段是否为 true
-- 检查规则所在文件夹是否启用（`rule_folders.enabled`）
-- 检查场景是否关联了该规则库（`scenario_library_mapping`）
-- CHUNK：检查规则 `rule_type` 和 `sections`/`keywords` 是否匹配章节标题

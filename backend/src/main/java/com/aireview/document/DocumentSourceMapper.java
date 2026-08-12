@@ -37,11 +37,14 @@ public final class DocumentSourceMapper {
                                                      int chunkIndex,
                                                      String sourceType) {
         WordParser.Chapter chapter = chunk.getSourceChapter();
+        // 合并片（通用章节段）跨十几章，正文/HTML/节点都必须取全部来源章节。早期这里只取
+        // 首章，导致右侧原文面板仅渲染第 1 章，第 2 章往后的证据高亮不出来，表现为
+        // 「审查项写的原文和右侧高亮的原文对不上」。
         String plainText = chapter != null
-                ? Objects.toString(chapter.getPlainText(), "")
+                ? chunk.getSourcePlainText()
                 : Objects.toString(chunk.getContent(), "");
-        String html = chapter != null ? Objects.toString(chapter.getHtml(), "") : "";
-        List<WordParser.DocumentNode> nodes = chapter != null ? chapter.getNodes() : List.of();
+        String html = chunk.getSourceHtml();
+        List<WordParser.DocumentNode> nodes = chunk.getSourceNodes();
 
         Map<String, Object> source = baseSource(
                 "CHUNK-" + String.format("%03d", chunkIndex),

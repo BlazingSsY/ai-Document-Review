@@ -103,10 +103,16 @@ review:
     # chunkReviewExecutor 池子大小 = 此值 × async.max-pool-size，会自动跟随，
     # 因此调这一处即可，不需要动 AsyncConfig。
     chunk-concurrency: 6
-    # All CHUNK review tasks share this fair outbound-call budget. Two documents
-    # can progress together without multiplying the per-document limit into an
-    # upstream timeout/rate-limit storm.
-    global-ai-concurrency: 8
+    # 跨任务的出站调用总闸门。0（或负数）= 关闭，各任务并发相互独立：
+    # 每个任务各自享有上面的 chunk-concurrency 个并发，别的任务在跑不会拖慢自己。
+    #
+    # 曾经设为 8（全任务共享且公平排队），后果是单任务能开 6 并发、两个任务同时跑
+    # 却只有 8（不是 12），三个任务时每个实际只剩约 2.7，且后发任务要排在先发任务
+    # 已入队的 acquire 之后 —— 表现为「另一个文档一审查，我这个就明显变慢」。
+    #
+    # 仅当上游按账号（而非按任务）限流、多任务并行频繁 429 时，才改回正数。
+    # 届时它是额外的总闸门，不改变单任务上限。
+    global-ai-concurrency: 0
   dispatch:
     # 【已废弃，默认关闭】一级章节号不大于该值时，仅执行内置文字质量检查，不注入业务规则。
     # 该档位在 dispatchForChunk 最开头就 return，会绕过全部规则元数据——你给第 3 章配的
@@ -181,14 +187,6 @@ review:
       enabled: true
       hnsw-ef-search: 100
       binary-candidate-multiplier: 4
-  # v2 管线提示词 → rule_checks 迁移配置。
-  # 把 run-on-startup 改成 true 并重启一次，迁移会跑一遍并把 markdown 报告
-  # 写到 report-dir；看完报告后改回 false。
-  prompts:
-    path: ./prompts/prompts/prompts.json
-    migration:
-      run-on-startup: false
-      report-dir: ./output/migration-reports
 
 logging:
   level:

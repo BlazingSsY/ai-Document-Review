@@ -267,19 +267,6 @@ public class ChecklistRuleImportService {
         return "presence";
     }
 
-    private String inferSeverity(Candidate c) {
-        String text = c.item() + c.question();
-        if (text.contains("鉴定等级") || text.contains("DO160") || text.contains("DO-160")
-                || text.contains("试验参数") || text.contains("合格判据")
-                || text.contains("工作高温") || text.contains("工作低温")) {
-            return "high";
-        }
-        if (text.contains("试验资质") || text.contains("试验程序") || text.contains("功能性能")) {
-            return "medium";
-        }
-        return "medium";
-    }
-
     private String inferCategory(Candidate c) {
         String text = c.item() + c.question();
         if (text.contains("一致")) return "逻辑一致性";

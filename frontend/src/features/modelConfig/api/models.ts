@@ -17,13 +17,6 @@ export interface AIModel {
   temperature: number;
   timeout: number;
   enabled: boolean;
-  /**
-   * When true the backend treats this as a thinking/reasoning model: temperature is
-   * omitted from the API call (server enforces its own default, e.g. Kimi K2.6
-   * locks it to 1.0) and max_tokens is bumped to ≥ 16 000 so the chain-of-thought
-   * has room to finish.
-   */
-  thinkingMode: boolean;
   responseFormatMode: ResponseFormatMode;
   createdAt: string;
   updatedAt: string;
@@ -41,7 +34,6 @@ export interface CreateModelParams {
   temperature: number;
   timeout: number;
   enabled: boolean;
-  thinkingMode: boolean;
   responseFormatMode: ResponseFormatMode;
 }
 
@@ -100,20 +92,4 @@ export interface TestConnectionParams extends Partial<CreateModelParams> {
 
 export function testModelConnection(params: TestConnectionParams) {
   return request.post<ApiResponse<TestConnectionResult>>('/models/test-connection', params);
-}
-
-export interface SuggestThinkingModeResult {
-  modelKey: string;
-  thinkingMode: boolean;
-}
-
-/**
- * Ask the backend whether the given modelKey looks like a thinking-mode model.
- * Used by the model-config dialog to pre-tick the switch as the user types.
- */
-export function suggestThinkingMode(modelKey: string) {
-  return request.get<ApiResponse<SuggestThinkingModeResult>>(
-    '/models/suggest-thinking-mode',
-    { params: { modelKey } },
-  );
 }

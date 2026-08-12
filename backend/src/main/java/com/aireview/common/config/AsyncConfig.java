@@ -84,14 +84,37 @@ public class AsyncConfig {
     }
 
     /**
-     * Shared, fair outbound-call budget for all concurrently running CHUNK tasks.
-     * This preserves true multi-document execution while preventing N documents
-     * from each opening {@code chunkConcurrency} requests at the same instant.
+     * 跨任务的出站调用总闸门。**默认关闭**（{@code global-ai-concurrency <= 0}），
+     * 此时各审查任务的并发相互独立：每个任务只受自己的 per-task
+     * {@link java.util.concurrent.Semaphore}（大小 = {@code chunk-concurrency}）约束，
+     * 不会因为别的任务在跑而被拖慢。
+     *
+     * <p>为什么默认关闭：之前这里是全任务共享的 8 个公平许可，导致单任务能开 6 并发、
+     * 两个任务同时跑却只有 8（而不是 12），三个任务时每个实际只剩约 2.7。更糟的是
+     * {@code fair=true} 让后发任务必须排在先发任务已入队的 acquire 之后，表现为
+     * "另一个文档一审查，我这个就变慢"。
+     *
+     * <p>关闭时返回一个 {@code Integer.MAX_VALUE} 许可的非公平信号量而不是 null：
+     * 调用方逻辑无需分支，acquire/release 退化成一次 CAS，相对一次 LLM HTTP 调用
+     * 的开销可忽略。
+     *
+     * <p>什么时候该重新打开：上游按账号（而非按任务）限流，多任务并行触发 429 时。
+     * 设为正数即可重新设总闸门；此时它是**额外**约束，不改变 per-task 上限。
+     * 线程池已按 {@code chunk-concurrency × async.max-pool-size} 配足，
+     * 关闭总闸门不会造成线程饥饿。
      */
     @Bean(name = "reviewAiCallSemaphore")
     public Semaphore reviewAiCallSemaphore() {
+        if (globalAiConcurrency <= 0) {
+            log.info("Global review AI concurrency DISABLED (global-ai-concurrency={}): "
+                            + "each task is bounded only by its own chunk-concurrency={}, "
+                            + "so tasks no longer throttle each other",
+                    globalAiConcurrency, chunkConcurrency);
+            return new Semaphore(Integer.MAX_VALUE, false);
+        }
         int permits = Math.max(2, globalAiConcurrency);
-        log.info("Global review AI concurrency initialized: permits={}, fair=true", permits);
+        log.info("Global review AI concurrency initialized: permits={}, fair=true "
+                + "(shared across ALL tasks — tasks will throttle each other)", permits);
         return new Semaphore(permits, true);
     }
 

@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Utility class for splitting large text into chunks suitable for AI model context windows.
@@ -185,10 +186,12 @@ public class ChunkUtils {
         String generalText = merged.toString().trim();
         if (!generalText.isBlank()) {
             int tokens = estimateTokens(generalText);
-            WordParser.Chapter first = generalChapters.isEmpty() ? null : generalChapters.get(0);
+            // 必须把被合并的全部章节都带上，而不是只留首章：右侧原文面板和证据定位都从
+            // 这份清单取节点，只给首章会让第 2 章往后的证据永远定位不到、也渲染不出来。
+            List<WordParser.Chapter> generalSources = List.copyOf(generalChapters);
             if (tokens <= maxTokens) {
                 results.add(new ChunkResult(GENERAL_SECTION_LABEL, generalText, tokens,
-                        0, first, true, mergedTitles));
+                        0, generalSources, true, mergedTitles));
             } else {
                 // 超限必须拆——否则这次调用会直接超模型上下文。拆出的每一片仍标记为
                 // 通用段并携带同一份标题清单，规则调度因此不受影响，只是模型的可见
@@ -201,7 +204,7 @@ public class ChunkUtils {
                     results.add(new ChunkResult(
                             GENERAL_SECTION_LABEL + " (" + (i + 1) + "/" + parts.size() + ")",
                             parts.get(i), estimateTokens(parts.get(i)),
-                            0, first, true, mergedTitles));
+                            0, generalSources, true, mergedTitles));
                 }
             }
         }
@@ -216,7 +219,7 @@ public class ChunkUtils {
                     chunk.getChapterIndex() < 0
                             ? chunk.getChapterIndex()
                             : chunk.getChapterIndex() + generalEndExclusive,
-                    chunk.getSourceChapter(), false, List.of()));
+                    chunk.getSourceChapters(), false, List.of()));
         }
 
         log.info("General-section chunking: {} chapter(s) → {} chunk(s) "
@@ -313,7 +316,7 @@ public class ChunkUtils {
         private final String content;
         private final int estimatedTokens;
         private final int chapterIndex;
-        private final WordParser.Chapter sourceChapter;
+        private final List<WordParser.Chapter> sourceChapters;
         private final boolean generalSection;
         private final List<String> mergedTitles;
 
@@ -323,17 +326,19 @@ public class ChunkUtils {
 
         public ChunkResult(String label, String content, int estimatedTokens,
                            int chapterIndex, WordParser.Chapter sourceChapter) {
-            this(label, content, estimatedTokens, chapterIndex, sourceChapter, false, List.of());
+            this(label, content, estimatedTokens, chapterIndex,
+                    sourceChapter == null ? List.of() : List.of(sourceChapter),
+                    false, List.of());
         }
 
         public ChunkResult(String label, String content, int estimatedTokens,
-                           int chapterIndex, WordParser.Chapter sourceChapter,
+                           int chapterIndex, List<WordParser.Chapter> sourceChapters,
                            boolean generalSection, List<String> mergedTitles) {
             this.label = label;
             this.content = content;
             this.estimatedTokens = estimatedTokens;
             this.chapterIndex = chapterIndex;
-            this.sourceChapter = sourceChapter;
+            this.sourceChapters = sourceChapters == null ? List.of() : List.copyOf(sourceChapters);
             this.generalSection = generalSection;
             this.mergedTitles = mergedTitles == null ? List.of() : List.copyOf(mergedTitles);
         }
@@ -342,7 +347,61 @@ public class ChunkUtils {
         public String getContent() { return content; }
         public int getEstimatedTokens() { return estimatedTokens; }
         public int getChapterIndex() { return chapterIndex; }
-        public WordParser.Chapter getSourceChapter() { return sourceChapter; }
+
+        /**
+         * 本片的首个来源章节。仅用于取 chapterIndex / documentSourceId 这类「代表章」信息。
+         *
+         * <p>要拿正文、节点或 HTML 一律用 {@link #getSourceNodes()} / {@link #getSourceHtml()}
+         * / {@link #getSourcePlainText()}：合并片跨十几章，只取首章会让后面各章的证据既
+         * 定位不到、也不会出现在右侧原文面板里。
+         */
+        public WordParser.Chapter getSourceChapter() {
+            return sourceChapters.isEmpty() ? null : sourceChapters.get(0);
+        }
+
+        /** 本片覆盖的全部来源章节；逐章片为单元素。 */
+        public List<WordParser.Chapter> getSourceChapters() { return sourceChapters; }
+
+        /** 本片覆盖的全部结构化节点，按章节顺序拼接——原文定位就在这个范围内检索。 */
+        public List<WordParser.DocumentNode> getSourceNodes() {
+            if (sourceChapters.size() == 1) {
+                return sourceChapters.get(0).getNodes();
+            }
+            List<WordParser.DocumentNode> all = new ArrayList<>();
+            for (WordParser.Chapter chapter : sourceChapters) {
+                all.addAll(chapter.getNodes());
+            }
+            return List.copyOf(all);
+        }
+
+        /** 本片覆盖的全部章节 HTML，按章节顺序拼接——右侧原文面板渲染的就是它。 */
+        public String getSourceHtml() {
+            if (sourceChapters.isEmpty()) return "";
+            if (sourceChapters.size() == 1) {
+                return Objects.toString(sourceChapters.get(0).getHtml(), "");
+            }
+            StringBuilder sb = new StringBuilder();
+            for (WordParser.Chapter chapter : sourceChapters) {
+                sb.append(Objects.toString(chapter.getHtml(), ""));
+            }
+            return sb.toString();
+        }
+
+        /** 本片覆盖的全部章节纯文本，按章节顺序拼接。 */
+        public String getSourcePlainText() {
+            if (sourceChapters.isEmpty()) return "";
+            if (sourceChapters.size() == 1) {
+                return Objects.toString(sourceChapters.get(0).getPlainText(), "");
+            }
+            StringBuilder sb = new StringBuilder();
+            for (WordParser.Chapter chapter : sourceChapters) {
+                String text = Objects.toString(chapter.getPlainText(), "");
+                if (text.isBlank()) continue;
+                if (sb.length() > 0) sb.append("\n\n");
+                sb.append(text.trim());
+            }
+            return sb.toString();
+        }
 
         /** 本片是否属于「通用章节段」（封面/目录 + 试验项目章节之前的通用章节）。 */
         public boolean isGeneralSection() { return generalSection; }

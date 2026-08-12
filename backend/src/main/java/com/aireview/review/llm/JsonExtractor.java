@@ -5,8 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Best-effort extractor for a single JSON object embedded in noisy LLM output.
- * Mirrors the behaviour of {@code ReviewService.tryParseAiJson} so the v2
- * pipeline sees the same parse leniency the legacy pipeline already relied on.
+ * Used by the SAR (structured review) pipeline.
  *
  * <p>Order of attempts:
  * <ol>
@@ -15,6 +14,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *   <li>Scan for the first balanced {...} object and parse that.</li>
  *   <li>Look inside any embedded ```json fence and repeat (1)+(3).</li>
  * </ol>
+ *
+ * <p><b>这里比逐章管线的 {@code ReviewService.tryParseAiJson} 弱两处</b>，改动前请留意：
+ * 一是不剥离 {@code <think>/<thinking>/<analysis>} 思考块，二是不做截断 JSON 的补全抢救；
+ * 且第 3 步取的是「第一个」配平对象，而逐章管线已改为在全部顶层对象里挑带
+ * {@code issues}/{@code check_results} 标志的那个，以免命中模型在思考里试写的草稿。
+ * 若 SAR 管线重新启用并接入思考模型，这三点需要同步过来。
  */
 public final class JsonExtractor {
 

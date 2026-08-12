@@ -26,7 +26,6 @@ import {
   deleteModel,
   toggleModel,
   testModelConnection,
-  suggestThinkingMode,
   AIModel,
   CreateModelParams,
   ModelType,
@@ -49,7 +48,6 @@ const BASE_COLUMN_WIDTHS = {
   modelKey: 140,
   apiEndpoint: 200,
   temperature: 110,
-  thinkingMode: 100,
   enabled: 80,
   action: 90,
 } as const;
@@ -70,8 +68,6 @@ function ModelConfigPage() {
   // Track whether the user has manually toggled the thinking switch in this form
   // session. While false, typing into modelKey can auto-suggest a value;
   // once the user flips the switch themselves we stop overriding their choice.
-  const [thinkingTouched, setThinkingTouched] = useState(false);
-  const thinkingMode = Form.useWatch('thinkingMode', form);
   const modelType = (Form.useWatch('modelType', form) || activeModelType) as ModelType;
   // 本地模型：用户需填写完整 URL，后端不补全 /v1、/chat/completions 等路径。
   const isLocalProvider = Form.useWatch('providerSelect', form) === 'local';
@@ -149,7 +145,6 @@ function ModelConfigPage() {
   const openCreateModal = () => {
     setEditingModel(null);
     setIsCustomProvider(false);
-    setThinkingTouched(false);
     form.resetFields();
     // 新增模型时，maxTokens 留空让用户按实际模型上下文窗口填写；temperature 默认 0.3（审查类任务偏稳定）
     form.setFieldsValue({
@@ -159,7 +154,6 @@ function ModelConfigPage() {
       temperature: 0.3,
       timeout: 180,
       enabled: true,
-      thinkingMode: false,
       responseFormatMode: 'auto',
     });
     setModalOpen(true);
@@ -169,9 +163,6 @@ function ModelConfigPage() {
     setEditingModel(model);
     const knownProvider = MODEL_PROVIDERS.some((p) => p.value === model.provider);
     setIsCustomProvider(!knownProvider);
-    // For existing models the saved value IS the user's choice, so treat the switch
-    // as already-touched and never auto-overwrite while they edit modelKey.
-    setThinkingTouched(true);
     form.setFieldsValue({
       name: model.name,
       modelType: model.modelType || 'chat',
@@ -185,33 +176,9 @@ function ModelConfigPage() {
       temperature: model.temperature,
       timeout: model.timeout || 180,
       enabled: model.enabled,
-      thinkingMode: !!model.thinkingMode,
       responseFormatMode: model.responseFormatMode || 'auto',
     });
     setModalOpen(true);
-  };
-
-  /**
-   * Debounced auto-suggestion: when the user finishes typing the modelKey we ask
-   * the backend whether that id looks like a thinking-mode model. We only apply
-   * the result if the user hasn't manually flipped the switch yet.
-   */
-  const handleModelKeyChange = (value: string) => {
-    if (!isChatModel || thinkingTouched) return;
-    const key = (value || '').trim();
-    if (!key) return;
-    suggestThinkingMode(key)
-      .then((res) => {
-        if (thinkingTouched) return; // user touched it while we were waiting
-        const suggested = !!res.data?.data?.thinkingMode;
-        const current = form.getFieldValue('thinkingMode');
-        if (current !== suggested) {
-          form.setFieldsValue({ thinkingMode: suggested });
-        }
-      })
-      .catch(() => {
-        // best-effort; swallow errors
-      });
   };
 
   const handleSave = async (values: Record<string, unknown>) => {
@@ -230,7 +197,6 @@ function ModelConfigPage() {
       temperature: (values.temperature as number) ?? 0.3,
       timeout: values.timeout as number,
       enabled: values.enabled as boolean,
-      thinkingMode: ((values.modelType as ModelType) || activeModelType) === 'chat' ? !!values.thinkingMode : false,
       responseFormatMode: ((values.modelType as ModelType) || activeModelType) === 'chat'
         ? ((values.responseFormatMode as ResponseFormatMode) || 'auto')
         : 'auto',
@@ -294,7 +260,6 @@ function ModelConfigPage() {
         apiKey: values.apiKey as string,
         temperature: values.temperature as number,
         timeout: values.timeout as number,
-        thinkingMode: ((values.modelType as ModelType) || activeModelType) === 'chat' ? !!form.getFieldValue('thinkingMode') : false,
         responseFormatMode: ((values.modelType as ModelType) || activeModelType) === 'chat'
           ? ((form.getFieldValue('responseFormatMode') as ResponseFormatMode) || 'auto')
           : 'auto',
@@ -371,31 +336,8 @@ function ModelConfigPage() {
       onHeaderCell: () => ({ style: { whiteSpace: 'nowrap' } }),
       render: (val: number, record) => (
         <span style={{ whiteSpace: 'nowrap' }}>
-          {record.modelType !== 'chat' ? (
-            <Text type="secondary">不适用</Text>
-          ) : record.thinkingMode ? (
-            <Tooltip title="思考模式下服务端会强制使用默认 temperature（如 Kimi K2.6 = 1.0），此字段仅作展示，发送请求时会被忽略">
-              <span style={{ color: '#bfbfbf', textDecoration: 'line-through' }}>{val}</span>
-            </Tooltip>
-          ) : (
-            val
-          )}
+          {record.modelType !== 'chat' ? <Text type="secondary">不适用</Text> : val}
         </span>
-      ),
-    },
-    {
-      title: '思考模式',
-      dataIndex: 'thinkingMode',
-      key: 'thinkingMode',
-      width: scaledWidths.thinkingMode,
-      align: 'center',
-      onHeaderCell: () => ({ style: { whiteSpace: 'nowrap' } }),
-      render: (val: boolean, record) => (
-        record.modelType !== 'chat'
-          ? <Tag color="default">不适用</Tag>
-          : val
-          ? <Tag color="purple">开启</Tag>
-          : <Tag color="default">默认</Tag>
       ),
     },
     {
@@ -505,7 +447,7 @@ function ModelConfigPage() {
           form={form}
           onFinish={handleSave}
           layout="vertical"
-          initialValues={{ modelType: 'chat', temperature: 0.3, timeout: 180, enabled: true, thinkingMode: false, responseFormatMode: 'auto' }}
+          initialValues={{ modelType: 'chat', temperature: 0.3, timeout: 180, enabled: true, responseFormatMode: 'auto' }}
         >
           <Form.Item name="modelType" hidden>
             <Input />
@@ -546,14 +488,13 @@ function ModelConfigPage() {
             label="模型标识"
             rules={[{ required: true, message: '请输入模型标识' }]}
             extra={isChatModel
-              ? '填写官方模型ID，例：deepseek-chat、kimi-k2-thinking、kimi-k2.6、glm-5.1。系统会据此自动建议是否开启思考模式。'
+              ? '填写官方模型ID，例：deepseek-chat、deepseek-v4-flash、kimi-k2.6、glm-5.1。'
               : isEmbeddingModel
                 ? '填写向量模型ID，例：bge-m3、text-embedding-v3。'
                 : '填写重排模型ID，例：bge-reranker-v2-m3。'}
           >
             <Input
               placeholder={isChatModel ? '例：deepseek-chat, kimi-k2-thinking, glm-5.1' : isEmbeddingModel ? '例：bge-m3' : '例：bge-reranker-v2-m3'}
-              onBlur={(e) => handleModelKeyChange(e.target.value)}
             />
           </Form.Item>
           <Form.Item
@@ -611,7 +552,6 @@ function ModelConfigPage() {
                 name="maxTokens"
                 label="最大 Token"
                 rules={[{ required: true, message: '请输入' }]}
-                extra={thinkingMode ? '思考模式下后端会保证 ≥ 16000' : undefined}
               >
                 <InputNumber min={100} max={256000} placeholder="请输入" style={{ width: 160 }} />
               </Form.Item>
@@ -637,9 +577,8 @@ function ModelConfigPage() {
                   </span>
                 }
                 rules={[{ required: true, message: '请输入' }]}
-                extra={thinkingMode ? '已开启思考模式，发送请求时会自动省略此参数（服务端强制默认值）' : undefined}
               >
-                <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} disabled={thinkingMode} />
+                <InputNumber min={0} max={1} step={0.1} style={{ width: 160 }} />
               </Form.Item>
             )}
             <Form.Item
@@ -652,26 +591,6 @@ function ModelConfigPage() {
             </Form.Item>
           </Space>
           <Space size="large" style={{ width: '100%' }}>
-            {isChatModel && (
-              <Form.Item
-                name="thinkingMode"
-                label={
-                  <span>
-                    思考模式&nbsp;
-                    <Tooltip title="开启后，系统会按供应商、接口地址和模型能力显式启用思考，并为推理保留预算；结构化审查只解析最终 content，不把 reasoning_content 当作审查结果。关闭表示不强制启用，保留供应商默认行为；未知接口不发送猜测参数。">
-                      <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
-                    </Tooltip>
-                  </span>
-                }
-                valuePropName="checked"
-              >
-                <Switch
-                  checkedChildren="开启"
-                  unCheckedChildren="关闭"
-                  onChange={() => setThinkingTouched(true)}
-                />
-              </Form.Item>
-            )}
             <Form.Item name="enabled" label="启用状态" valuePropName="checked">
               <Switch checkedChildren="启用" unCheckedChildren="禁用" />
             </Form.Item>

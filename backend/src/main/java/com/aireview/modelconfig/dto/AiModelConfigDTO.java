@@ -24,21 +24,14 @@ public class AiModelConfigDTO {
     private Integer timeout;
     private Boolean enabled;
     /**
-     * When true the backend treats this model as a thinking/reasoning model: temperature
-     * is omitted from the API call (server enforces its own default, e.g. Kimi K2.6
-     * locks it to 1.0) and max_tokens is bumped to ≥ 16 000 so the chain-of-thought
-     * has room to finish.
-     */
-    private Boolean thinkingMode;
-    /**
      * Structured-output mode for chat models:
      * auto / json_schema / json_object / prompt_only.
      */
     private String responseFormatMode;
     /**
-     * 是否可参与"跨模型对比"。思维模型温度由服务器锁定、不支持 seed、参数对齐不完整，
-     * 因此跨模型对比时结果不可比，前端应在选择列表里给出"仅单模型"角标。
-     * 由后端基于 thinkingMode 自动派生，前端不需要写。
+     * 是否可参与"跨模型对比"。固定推理模型（R1/Reasoner/*-thinking/o 系列）温度由服务器
+     * 锁定、不支持 seed、参数对齐不完整，因此结果不可比，前端应给出"仅单模型"角标。
+     * 由后端按模型 id 自动派生，前端不需要写。
      */
     private Boolean crossModelEligible;
     private LocalDateTime createdAt;

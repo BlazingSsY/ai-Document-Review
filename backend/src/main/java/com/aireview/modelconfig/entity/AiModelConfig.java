@@ -36,9 +36,6 @@ public class AiModelConfig {
 
     private Boolean isEnabled;
 
-    /** See {@link com.aireview.modelconfig.dto.AiModelConfigDTO#thinkingMode}. */
-    private Boolean thinkingMode;
-
     /**
      * Structured-output capability used by document review:
      * auto / json_schema / json_object / prompt_only.

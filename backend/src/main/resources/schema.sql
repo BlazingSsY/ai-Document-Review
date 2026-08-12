@@ -61,12 +61,6 @@ CREATE TABLE IF NOT EXISTS scenarios (
     creator_id      BIGINT          NOT NULL REFERENCES users(id)
 );
 
-CREATE TABLE IF NOT EXISTS scenario_rule_mapping (
-    scenario_id     BIGINT          NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
-    rule_id         BIGINT          NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
-    PRIMARY KEY (scenario_id, rule_id)
-);
-
 CREATE TABLE IF NOT EXISTS scenario_library_mapping (
     scenario_id     BIGINT          NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
     library_id      BIGINT          NOT NULL REFERENCES rule_libraries(id) ON DELETE CASCADE,
@@ -145,10 +139,6 @@ CREATE TABLE IF NOT EXISTS ai_model_config (
     temperature     DECIMAL(3,2)    NOT NULL DEFAULT 0.70,
     timeout         INTEGER         NOT NULL DEFAULT 180,
     is_enabled      BOOLEAN         NOT NULL DEFAULT TRUE,
-    -- Thinking-mode models (Kimi K2.6, GLM-5.x, ...) fix temperature server-side and
-    -- need a much larger max_tokens budget for the chain-of-thought. When true the
-    -- backend omits temperature from the API call and ensures max_tokens >= 16000.
-    thinking_mode   BOOLEAN         NOT NULL DEFAULT FALSE,
     -- Structured-output compatibility: auto / json_schema / json_object / prompt_only.
     -- "auto" selects a provider-safe mode and can downgrade when an API rejects
     -- response_format. Existing rows default to auto for backward compatibility.
@@ -160,7 +150,9 @@ CREATE TABLE IF NOT EXISTS ai_model_config (
 -- Rolling migration: add the column for existing databases that pre-date the flag.
 ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS model_type VARCHAR(32) NOT NULL DEFAULT 'chat';
 ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER;
-ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS thinking_mode BOOLEAN NOT NULL DEFAULT FALSE;
+-- 已废弃的「思考模式」开关：系统现在对所有模型统一请求关闭思考，关不掉的固定推理模型
+-- （R1/Reasoner/*-thinking/o 系列）按模型 id 自动识别，不再需要这一列。存在则丢弃。
+ALTER TABLE ai_model_config DROP COLUMN IF EXISTS thinking_mode;
 ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS response_format_mode VARCHAR(32) NOT NULL DEFAULT 'auto';
 ALTER TABLE ai_model_config ALTER COLUMN timeout SET DEFAULT 180;
 UPDATE ai_model_config SET timeout = 180 WHERE timeout = 60;
@@ -205,95 +197,6 @@ CREATE TABLE IF NOT EXISTS rule_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_rule_checks_rule ON rule_checks(rule_id);
 ALTER TABLE rule_checks DROP COLUMN IF EXISTS fail_severity;
-
--- 每条 check 的正/反例 few-shot，用于在 prompt 中锚定"什么算 pass / fail"。
-CREATE TABLE IF NOT EXISTS rule_check_examples (
-    id              BIGSERIAL       PRIMARY KEY,
-    check_id        BIGINT          NOT NULL REFERENCES rule_checks(id) ON DELETE CASCADE,
-    polarity        VARCHAR(8)      NOT NULL,   -- 'positive' 或 'negative'
-    example_text    TEXT            NOT NULL,
-    explanation     TEXT,
-    display_order   INTEGER         NOT NULL DEFAULT 0,
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_rule_check_examples_check ON rule_check_examples(check_id);
-
--- 单次审查任务的执行计划与统计（与 review_tasks 1:1）。
-CREATE TABLE IF NOT EXISTS review_pipelines (
-    id                      BIGSERIAL       PRIMARY KEY,
-    task_id                 VARCHAR(36)     NOT NULL UNIQUE REFERENCES review_tasks(id) ON DELETE CASCADE,
-    total_chunks            INTEGER         NOT NULL DEFAULT 0,
-    -- 计划要执行的 (chunk, rule) 对总数；执行完毕后用来计算覆盖率
-    total_rule_invocations  INTEGER         NOT NULL DEFAULT 0,
-    executed_invocations    INTEGER         NOT NULL DEFAULT 0,
-    -- 解析失败 / 模型拒答的 (chunk, rule) 对数；这些不计入 finding 但要展示
-    inconclusive_invocations INTEGER        NOT NULL DEFAULT 0,
-    stage1_findings         INTEGER         NOT NULL DEFAULT 0,
-    -- 二阶段复核确认/驳回计数
-    stage2_confirmed        INTEGER         NOT NULL DEFAULT 0,
-    stage2_rejected         INTEGER         NOT NULL DEFAULT 0,
-    -- 'PLANNED' / 'RECALLING' / 'VERIFYING' / 'DONE' / 'FAILED'
-    status                  VARCHAR(16)     NOT NULL DEFAULT 'PLANNED',
-    started_at              TIMESTAMP,
-    finished_at             TIMESTAMP,
-    created_at              TIMESTAMP       NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_review_pipelines_task ON review_pipelines(task_id);
-
--- 最终展示给前端的 finding 来源（aiResult.allIssues 即从此表渲染）。
-CREATE TABLE IF NOT EXISTS review_findings (
-    id                  BIGSERIAL       PRIMARY KEY,
-    pipeline_id         BIGINT          NOT NULL REFERENCES review_pipelines(id) ON DELETE CASCADE,
-    -- 该 finding 首次被发现时所在的切片
-    chunk_index         INTEGER         NOT NULL,
-    chunk_label         TEXT,
-    rule_id             BIGINT          NOT NULL,
-    rule_code           VARCHAR(160)    NOT NULL,
-    check_id            BIGINT          NOT NULL,
-    check_code          VARCHAR(160)    NOT NULL,
-    category            VARCHAR(64),
-    description         TEXT            NOT NULL,
-    suggestion          TEXT,
-    -- 模型给出的、必须在原文中能找到的子串
-    evidence_span       TEXT            NOT NULL,
-    -- 去重用的归一化 span（空白折叠、去标点、转小写）
-    normalized_span     TEXT            NOT NULL,
-    -- 跨切片合并后所有出现位置: [{"chunkIndex":1,"charOffset":234}, ...]
-    occurrences         JSONB,
-    stage1_confidence   DOUBLE PRECISION,
-    -- 'N/A'（低/中优先级不复核） / 'CONFIRMED' / 'REJECTED' / 'UNCERTAIN'
-    stage2_status       VARCHAR(16)     NOT NULL DEFAULT 'N/A',
-    stage2_reason       TEXT,
-    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
-    -- 同一 pipeline 内 (check + 归一化 span) 唯一，天然去重
-    UNIQUE (pipeline_id, check_code, normalized_span)
-);
-CREATE INDEX IF NOT EXISTS idx_review_findings_pipeline ON review_findings(pipeline_id);
-ALTER TABLE review_findings DROP COLUMN IF EXISTS severity;
-
--- 每一次 LLM 调用的完整原始审计（用户已确认接受每任务多几 MB 存储成本）。
--- 用于事后诊断"为什么这两个模型的结果差距大"——直接对比 request/response。
-CREATE TABLE IF NOT EXISTS ai_call_logs (
-    id              BIGSERIAL       PRIMARY KEY,
-    pipeline_id     BIGINT          REFERENCES review_pipelines(id) ON DELETE CASCADE,
-    -- 'RECALL' / 'VERIFY' / 'MIGRATION'
-    stage           VARCHAR(16)     NOT NULL,
-    chunk_index     INTEGER,
-    rule_id         BIGINT,
-    check_id        BIGINT,
-    model_key       VARCHAR(128)    NOT NULL,
-    attempt         INTEGER         NOT NULL DEFAULT 1,
-    request_body    JSONB           NOT NULL,
-    response_body   JSONB,
-    parsed_output   JSONB,
-    schema_valid    BOOLEAN,
-    http_status     INTEGER,
-    duration_ms     INTEGER,
-    error_message   TEXT,
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_ai_call_logs_pipeline ON ai_call_logs(pipeline_id);
-CREATE INDEX IF NOT EXISTS idx_ai_call_logs_stage ON ai_call_logs(stage);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_rules_creator ON rules(creator_id);
@@ -355,28 +258,11 @@ CREATE TABLE IF NOT EXISTS sar_rule_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_sar_rule_checks_rule ON sar_rule_checks(rule_id);
 
-CREATE TABLE IF NOT EXISTS sar_rule_check_examples (
-    id              BIGSERIAL       PRIMARY KEY,
-    check_id        BIGINT          NOT NULL REFERENCES sar_rule_checks(id) ON DELETE CASCADE,
-    polarity        VARCHAR(8)      NOT NULL,
-    example_text    TEXT            NOT NULL,
-    explanation     TEXT,
-    display_order   INTEGER         NOT NULL DEFAULT 0,
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_sar_rule_check_examples_check ON sar_rule_check_examples(check_id);
-
 CREATE TABLE IF NOT EXISTS sar_scenarios (
     id              BIGSERIAL       PRIMARY KEY,
     name            VARCHAR(255)    NOT NULL,
     description     TEXT,
     creator_id      BIGINT          NOT NULL REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS sar_scenario_rule_mapping (
-    scenario_id     BIGINT          NOT NULL REFERENCES sar_scenarios(id) ON DELETE CASCADE,
-    rule_id         BIGINT          NOT NULL REFERENCES sar_rules(id) ON DELETE CASCADE,
-    PRIMARY KEY (scenario_id, rule_id)
 );
 
 CREATE TABLE IF NOT EXISTS sar_scenario_library_mapping (
@@ -444,67 +330,6 @@ CREATE INDEX IF NOT EXISTS idx_sar_document_blocks_vector_filter
     ON sar_document_blocks(task_id, embedding_model, embedding_dimension)
     WHERE embedding IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS sar_review_pipelines (
-    id                      BIGSERIAL       PRIMARY KEY,
-    task_id                 VARCHAR(36)     NOT NULL UNIQUE REFERENCES sar_review_tasks(id) ON DELETE CASCADE,
-    total_chunks            INTEGER         NOT NULL DEFAULT 0,
-    total_rule_invocations  INTEGER         NOT NULL DEFAULT 0,
-    executed_invocations    INTEGER         NOT NULL DEFAULT 0,
-    inconclusive_invocations INTEGER        NOT NULL DEFAULT 0,
-    stage1_findings         INTEGER         NOT NULL DEFAULT 0,
-    stage2_confirmed        INTEGER         NOT NULL DEFAULT 0,
-    stage2_rejected         INTEGER         NOT NULL DEFAULT 0,
-    status                  VARCHAR(16)     NOT NULL DEFAULT 'PLANNED',
-    started_at              TIMESTAMP,
-    finished_at             TIMESTAMP,
-    created_at              TIMESTAMP       NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_sar_review_pipelines_task ON sar_review_pipelines(task_id);
-
-CREATE TABLE IF NOT EXISTS sar_review_findings (
-    id                  BIGSERIAL       PRIMARY KEY,
-    pipeline_id         BIGINT          NOT NULL REFERENCES sar_review_pipelines(id) ON DELETE CASCADE,
-    chunk_index         INTEGER         NOT NULL,
-    chunk_label         TEXT,
-    rule_id             BIGINT          NOT NULL,
-    rule_code           VARCHAR(160)    NOT NULL,
-    check_id            BIGINT          NOT NULL,
-    check_code          VARCHAR(160)    NOT NULL,
-    category            VARCHAR(64),
-    description         TEXT            NOT NULL,
-    suggestion          TEXT,
-    evidence_span       TEXT            NOT NULL,
-    normalized_span     TEXT            NOT NULL,
-    occurrences         JSONB,
-    stage1_confidence   DOUBLE PRECISION,
-    stage2_status       VARCHAR(16)     NOT NULL DEFAULT 'N/A',
-    stage2_reason       TEXT,
-    created_at          TIMESTAMP       NOT NULL DEFAULT NOW(),
-    UNIQUE (pipeline_id, check_code, normalized_span)
-);
-CREATE INDEX IF NOT EXISTS idx_sar_review_findings_pipeline ON sar_review_findings(pipeline_id);
-
-CREATE TABLE IF NOT EXISTS sar_ai_call_logs (
-    id              BIGSERIAL       PRIMARY KEY,
-    pipeline_id     BIGINT          REFERENCES sar_review_pipelines(id) ON DELETE CASCADE,
-    stage           VARCHAR(16)     NOT NULL,
-    chunk_index     INTEGER,
-    rule_id         BIGINT,
-    check_id        BIGINT,
-    model_key       VARCHAR(128)    NOT NULL,
-    attempt         INTEGER         NOT NULL DEFAULT 1,
-    request_body    JSONB           NOT NULL,
-    response_body   JSONB,
-    parsed_output   JSONB,
-    schema_valid    BOOLEAN,
-    http_status     INTEGER,
-    duration_ms     INTEGER,
-    error_message   TEXT,
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_sar_ai_call_logs_pipeline ON sar_ai_call_logs(pipeline_id);
-CREATE INDEX IF NOT EXISTS idx_sar_ai_call_logs_stage ON sar_ai_call_logs(stage);
-
 CREATE INDEX IF NOT EXISTS idx_sar_rules_creator ON sar_rules(creator_id);
 CREATE INDEX IF NOT EXISTS idx_sar_rules_library ON sar_rules(library_id);
 CREATE INDEX IF NOT EXISTS idx_sar_scenarios_creator ON sar_scenarios(creator_id);
@@ -512,7 +337,6 @@ CREATE INDEX IF NOT EXISTS idx_sar_review_tasks_user ON sar_review_tasks(user_id
 CREATE INDEX IF NOT EXISTS idx_sar_review_tasks_status ON sar_review_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_sar_review_audit_logs_task ON sar_review_audit_logs(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_sar_user_library_assignment_user ON sar_user_library_assignment(user_id);
-
 
 -- Dashboard list performance: store a scalar problem count per task so the unified
 -- task list never has to read/deserialize the large ai_result JSON just to show "问题数".
