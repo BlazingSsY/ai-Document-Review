@@ -30,6 +30,7 @@ class RuleParserTest {
                 .contains("基础文字质量检查始终适用")
                 .contains("evidence 必须是可在输入原文中逐字搜索到的最小片段")
                 .contains("reason 必须用中文引号“”引用同一片段")
+                .contains("禁止输出任何解释、前后缀、markdown 围栏")
                 .contains("原文“在常温下进行”未给出明确温度上下限")
                 .contains("\"evidence\":\"在常温下进行\"")
                 .doesNotContain("\"evidence\":\"原文仅写")

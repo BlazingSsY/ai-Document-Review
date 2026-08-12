@@ -113,6 +113,10 @@ public class ReviewService {
     /** Tracks cancelled task IDs so the async loop can exit early. */
     private final Set<String> cancelledTasks = ConcurrentHashMap.newKeySet();
 
+    /** Runtime observations; these adapt budgets without changing provider thinking switches. */
+    private final Set<String> observedReasoningModels = ConcurrentHashMap.newKeySet();
+    private final Map<String, Integer> learnedOutputTokenFloors = new ConcurrentHashMap<>();
+
     @Value("${file.documents-dir}")
     private String documentsDir;
 
@@ -159,8 +163,9 @@ public class ReviewService {
      * <p>两者约束的对象不同：逐章预算管「一次调用能塞多少规则」，超了丢规则；这里管
      * 「一批放几条规则」，超了拆批、一条不丢。
      *
-     * <p>真正的瓶颈不在输入而在输出：模型输出上限固定 {@link #CONVERGENCE_MAX_TOKENS}
-     * (8192)，而文档级规则要逐行列出跨章核对结果，十几条规则挤在一批必然写不完、JSON 被
+     * <p>真正的瓶颈不在输入而在输出：模型输出预算虽会按检查项数量动态增长，但仍有
+     * {@link #CONVERGENCE_MAX_OUTPUT_TOKENS} 上限；文档级规则要逐行列出跨章核对结果，
+     * 十几条规则挤在一批仍可能写不完、JSON 被
      * 截断，只能靠 salvage 抢救回前几条。因此本值要显著小于逐章预算——用批数换输出余量，
      * 每批规则少了，那一批的输出才装得下。
      */
@@ -187,11 +192,21 @@ public class ReviewService {
      */
     private static final double CONVERGENCE_TEMPERATURE = 0.0;
     private static final double CONVERGENCE_TOP_P = 1.0;
-    private static final int CONVERGENCE_MAX_TOKENS = 8192;
+    /** Dynamic structured-output budget: enough room per required check without giving every call a huge cap. */
+    private static final int CONVERGENCE_MIN_OUTPUT_TOKENS = 8192;
+    private static final int CONVERGENCE_BASE_OUTPUT_TOKENS = 4096;
+    private static final int CONVERGENCE_TOKENS_PER_CHECK = 512;
+    private static final int CONVERGENCE_MAX_OUTPUT_TOKENS = 24576;
+    /** First retry after a confirmed length truncation must leave room for hidden reasoning plus final JSON. */
+    private static final int CONVERGENCE_LENGTH_RETRY_MIN_OUTPUT_TOKENS = 32768;
+    /** Safe retry ceiling when an old model row still has the legacy 4096-token default. */
+    private static final int CONVERGENCE_LENGTH_RETRY_DEFAULT_MAX_OUTPUT_TOKENS = 65536;
+    /** Protect the review worker from an accidentally enormous value entered through the API. */
+    private static final int CONVERGENCE_LENGTH_RETRY_ABSOLUTE_MAX_OUTPUT_TOKENS = 128000;
     /** JSON 解析失败时的最大整体尝试次数（含首次）；每次换种子重新调用模型。 */
     private static final int JSON_PARSE_MAX_ATTEMPTS = 3;
-    /** Document batches are expensive; one format-repair retry is enough. */
-    private static final int DOCUMENT_JSON_PARSE_MAX_ATTEMPTS = 2;
+    /** Allows 8192/24576 -> 32768 -> 65536 escalation after confirmed length truncation. */
+    private static final int DOCUMENT_JSON_PARSE_MAX_ATTEMPTS = 3;
 
     /**
      * Submit a review task: upload the document and start async processing.
@@ -917,25 +932,50 @@ public class ReviewService {
                     try {
                         int minChecks = RuleParser.expectedCheckCount(batch);
                         String docResponse = null;
+                        int docOutputTokenBudget = initialOutputTokenBudget(modelConfig, minChecks);
+                        boolean docRuntimeThinking = isRuntimeThinking(modelConfig);
                         for (int parseAttempt = 1;
                              parseAttempt <= DOCUMENT_JSON_PARSE_MAX_ATTEMPTS && docParsed == null;
                              parseAttempt++) {
                             long seed = stableSeed(taskId, /*chunkIdx*/ -1, batchIdx)
                                     + (parseAttempt - 1L);
-                            AiCallOptions docOptions = buildConvergenceOptions(modelConfig, seed, minChecks);
+                            AiCallOptions docOptions = buildConvergenceOptions(
+                                    modelConfig, seed, minChecks, docOutputTokenBudget,
+                                    docRuntimeThinking);
                             docResponse = callWithRetry(modelConfig, docSystemPrompt,
                                     evidence.content(), docOptions);
                             docParsed = tryParseAiJson(docResponse);
+                            AiModelService.AiResponseMetadata metadata = aiModelService.getLastResponseMetadata();
+                            docRuntimeThinking = docRuntimeThinking
+                                    || responseReasoningLength(metadata) > 0
+                                    || hasReasoningMarker(docResponse);
+                            rememberRuntimeThinking(modelConfig, docRuntimeThinking);
+                            int expandedBudget = nextOutputTokenBudgetAfterLength(
+                                    modelConfig, docOutputTokenBudget, minChecks, metadata);
+                            if (expandedBudget > docOutputTokenBudget
+                                    && parseAttempt < DOCUMENT_JSON_PARSE_MAX_ATTEMPTS) {
+                                log.warn("Document-level review batch {}/{} reached max_tokens={} "
+                                                + "(reasoningLength={}, contentLength={}); retrying with max_tokens={}",
+                                        batchIdx + 1, docBatches.size(), docOutputTokenBudget,
+                                        responseReasoningLength(metadata), responseContentLength(metadata),
+                                        expandedBudget);
+                                docOutputTokenBudget = expandedBudget;
+                                rememberOutputTokenFloor(modelConfig, expandedBudget);
+                                docParsed = null;
+                                continue;
+                            }
                             if (docParsed == null) {
                                 log.warn("Document-level review batch {}/{} JSON parse failed "
-                                                + "(attempt {}/{}), responseLength={}",
+                                                + "(attempt {}/{}), responseLength={}, finishReason={}, reasoningLength={}",
                                         batchIdx + 1, docBatches.size(), parseAttempt,
                                         DOCUMENT_JSON_PARSE_MAX_ATTEMPTS,
-                                        docResponse == null ? 0 : docResponse.length());
+                                        docResponse == null ? 0 : docResponse.length(),
+                                        responseFinishReason(metadata), responseReasoningLength(metadata));
                             }
                         }
                         if (docParsed == null) {
-                            fallbackReason = "文档级审查模型响应无法解析，系统已保留该规则并转为待复核。";
+                            fallbackReason = unparseableResponseReason(
+                                    "文档级审查", aiModelService.getLastResponseMetadata());
                         }
                     } catch (Exception docEx) {
                         errorMessage = docEx.getMessage();
@@ -963,6 +1003,7 @@ public class ReviewService {
                     docChunk.put("appliedRules", batch.stream().map(e -> e.name).toList());
                     docChunk.put("sourceRefs", buildDocumentRuleSourceRefs(evidence, rawChapters));
                     docChunk.put("reviewProfile", "document_rules");
+                    putResponseDiagnostics(docChunk, aiModelService.getLastResponseMetadata());
                     if (fallbackReason != null) {
                         docChunk.put("degraded", true);
                         docChunk.put("error", errorMessage == null
@@ -976,7 +1017,7 @@ public class ReviewService {
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在汇总审查结果...", 95);
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
             // 在结果里冻结模型的可对比性，避免历史任务在跨模型对比 UI 里被误算进来
-            boolean crossModelEligible = !ThinkingModeDetector.isThinking(modelConfig);
+            boolean crossModelEligible = !isRuntimeThinking(modelConfig);
             aggregatedResult.put("crossModelEligible", crossModelEligible);
             // 逐章节方案每章节单次调用，统一标记为 single 采样
             aggregatedResult.put("samplingStrategy", "single");
@@ -1670,19 +1711,42 @@ public class ReviewService {
             // 解析在 HTTP 重试之后，原先一旦失败直接降级为“原始文本”，导致整章 R-Q 检查项被补成
             // “模型未返回→待复核”。这里在解析失败时换种子重试（temperature=0 须换种子才能改变输出），
             // 多数能拿到合法 JSON，显著减少无定位的待复核噪声。
+            int outputTokenBudget = initialOutputTokenBudget(modelConfig, minChecks);
+            boolean runtimeThinking = isRuntimeThinking(modelConfig);
             for (int attempt = 1; attempt <= JSON_PARSE_MAX_ATTEMPTS && parsed == null; attempt++) {
                 long seed = stableSeed(taskId, chunkIdx, s) + (attempt - 1);
-                AiCallOptions options = buildConvergenceOptions(modelConfig, seed, minChecks);
+                AiCallOptions options = buildConvergenceOptions(
+                        modelConfig, seed, minChecks, outputTokenBudget, runtimeThinking);
                 aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent, options);
                 parsed = tryParseAiJson(aiResponse);
+                AiModelService.AiResponseMetadata metadata = aiModelService.getLastResponseMetadata();
+                runtimeThinking = runtimeThinking
+                        || responseReasoningLength(metadata) > 0
+                        || hasReasoningMarker(aiResponse);
+                rememberRuntimeThinking(modelConfig, runtimeThinking);
+                int expandedBudget = nextOutputTokenBudgetAfterLength(
+                        modelConfig, outputTokenBudget, minChecks, metadata);
+                if (expandedBudget > outputTokenBudget && attempt < JSON_PARSE_MAX_ATTEMPTS) {
+                    log.warn("Chunk {} sample {} reached max_tokens={} "
+                                    + "(reasoningLength={}, contentLength={}); retrying with max_tokens={}",
+                            chunkNum, s + 1, outputTokenBudget,
+                            responseReasoningLength(metadata), responseContentLength(metadata),
+                            expandedBudget);
+                    outputTokenBudget = expandedBudget;
+                    rememberOutputTokenFloor(modelConfig, expandedBudget);
+                    parsed = null;
+                    continue;
+                }
                 if (parsed == null) {
-                    log.warn("Chunk {} sample {} JSON 解析失败（第 {}/{} 次），响应长度={}",
+                    log.warn("Chunk {} sample {} JSON 解析失败（第 {}/{} 次），响应长度={}，"
+                                    + "finishReason={}，reasoningLength={}",
                             chunkNum, s + 1, attempt, JSON_PARSE_MAX_ATTEMPTS,
-                            aiResponse != null ? aiResponse.length() : 0);
+                            aiResponse != null ? aiResponse.length() : 0,
+                            responseFinishReason(metadata), responseReasoningLength(metadata));
                 }
             }
             if (parsed == null) {
-                log.warn("Chunk {} sample {} 多次解析仍失败，降级为原始文本 issue。", chunkNum, s + 1);
+                log.warn("Chunk {} sample {} 多次解析仍失败，生成不含原始响应的待复核项。", chunkNum, s + 1);
                 parsed = buildFallbackResult(chunk.getLabel(), aiResponse);
             } else {
                 modelResponded = true;
@@ -1698,8 +1762,8 @@ public class ReviewService {
                 merged,
                 ruleEntries,
                 chunk.getLabel(),
-                modelResponded ? null
-                        : "模型响应无法解析，本章规则未完成可靠判定，系统已转为待复核。");
+                modelResponded ? null : unparseableResponseReason(
+                        "本章规则", aiModelService.getLastResponseMetadata()));
         if (qualityCheck) {
             enrichBuiltInQualityChecks(
                     merged, chunkHasFiguresOrTables(chunk.getContent()), modelResponded);
@@ -1723,6 +1787,7 @@ public class ReviewService {
         chunkResult.put("appliedRules", appliedRuleNames);
         chunkResult.put("reviewProfile", dispatch.getAppliedRules().isEmpty()
                 ? (qualityCheck ? "basic_quality" : "skipped") : "rule_based");
+        putResponseDiagnostics(chunkResult, aiModelService.getLastResponseMetadata());
         chunkResult.put("samplingStrategy", sampleCount > 1 ? "double" : "single");
         chunkResult.put("sampleCount", sampleCount);
         chunkResult.put("result", merged);
@@ -1980,7 +2045,8 @@ public class ReviewService {
     /**
      * 构造收敛性 AI 调用参数：
      * <ul>
-     *   <li>非思维模型：temperature=0、top_p=1、seed=stable、结构化输出={@link ReviewResultSchema}；</li>
+     *   <li>非思维模型：temperature=0、top_p=1、seed=stable、按检查项数量动态计算输出预算、
+     *       结构化输出={@link ReviewResultSchema}；</li>
      *   <li>思维模型：temperature 由 server 强制，仍传 seed（不支持的 provider 会忽略）和结构化 schema。</li>
      * </ul>
      */
@@ -1994,20 +2060,140 @@ public class ReviewService {
      * schema is used.
      */
     private AiCallOptions buildConvergenceOptions(AiModelConfig modelConfig, long seed, int minChecks) {
-        boolean thinking = ThinkingModeDetector.isThinking(modelConfig);
+        return buildConvergenceOptions(
+                modelConfig, seed, minChecks, initialOutputTokenBudget(modelConfig, minChecks));
+    }
+
+    private AiCallOptions buildConvergenceOptions(AiModelConfig modelConfig, long seed, int minChecks,
+                                                   int outputTokenBudget) {
+        return buildConvergenceOptions(modelConfig, seed, minChecks, outputTokenBudget,
+                isRuntimeThinking(modelConfig));
+    }
+
+    private AiCallOptions buildConvergenceOptions(AiModelConfig modelConfig, long seed, int minChecks,
+                                                   int outputTokenBudget, boolean runtimeThinking) {
         com.alibaba.fastjson2.JSONObject schema = minChecks > 0
                 ? ReviewResultSchema.schemaWithMinChecks(minChecks)
                 : ReviewResultSchema.schema();
         AiCallOptions.AiCallOptionsBuilder b = AiCallOptions.builder()
                 .seed(seed)
-                .maxTokensOverride(thinking ? null : CONVERGENCE_MAX_TOKENS)
+                .maxTokensOverride(outputTokenBudget)
+                .omitTemperature(runtimeThinking)
                 .structuredSchema(com.alibaba.fastjson2.JSON.parseObject(
                         com.alibaba.fastjson2.JSON.toJSONString(schema)))
                 .structuredSchemaName(ReviewResultSchema.SCHEMA_NAME);
-        if (!thinking) {
+        if (!runtimeThinking) {
             b.temperature(CONVERGENCE_TEMPERATURE).topP(CONVERGENCE_TOP_P);
         }
         return b.build();
+    }
+
+    private int initialOutputTokenBudget(AiModelConfig modelConfig, int checkCount) {
+        int budget = dynamicOutputTokenBudget(checkCount);
+        if (isRuntimeThinking(modelConfig)) budget = Math.max(16000, budget);
+        return Math.max(budget, learnedOutputTokenFloors.getOrDefault(modelRuntimeKey(modelConfig), 0));
+    }
+
+    private boolean isRuntimeThinking(AiModelConfig modelConfig) {
+        return ThinkingModeDetector.isThinking(modelConfig)
+                || observedReasoningModels.contains(modelRuntimeKey(modelConfig));
+    }
+
+    private void rememberRuntimeThinking(AiModelConfig modelConfig, boolean observed) {
+        if (observed) observedReasoningModels.add(modelRuntimeKey(modelConfig));
+    }
+
+    private void rememberOutputTokenFloor(AiModelConfig modelConfig, int floor) {
+        learnedOutputTokenFloors.merge(modelRuntimeKey(modelConfig), floor, Math::max);
+    }
+
+    private String modelRuntimeKey(AiModelConfig modelConfig) {
+        if (modelConfig == null) return "unknown";
+        return String.join("|",
+                Objects.toString(modelConfig.getProvider(), "").toLowerCase(Locale.ROOT),
+                Objects.toString(modelConfig.getEndpoint(), "").toLowerCase(Locale.ROOT),
+                Objects.toString(modelConfig.getModelKey(), Objects.toString(modelConfig.getModelName(), ""))
+                        .toLowerCase(Locale.ROOT));
+    }
+
+    static int nextOutputTokenBudgetAfterLength(AiModelConfig modelConfig, int currentBudget,
+                                                int checkCount,
+                                                AiModelService.AiResponseMetadata metadata) {
+        if (metadata == null || !"length".equalsIgnoreCase(metadata.finishReason())) {
+            return currentBudget;
+        }
+        int finalJsonReserve = dynamicOutputTokenBudget(checkCount);
+        int consumed = metadata.completionTokens() != null && metadata.completionTokens() > 0
+                ? metadata.completionTokens() : currentBudget;
+        long desired = Math.max((long) currentBudget * 2L, (long) consumed + finalJsonReserve);
+        desired = Math.max(desired, CONVERGENCE_LENGTH_RETRY_MIN_OUTPUT_TOKENS);
+        return (int) Math.min(lengthRetryOutputCeiling(modelConfig), desired);
+    }
+
+    private static int lengthRetryOutputCeiling(AiModelConfig modelConfig) {
+        int configured = modelConfig != null && modelConfig.getMaxTokens() != null
+                ? Math.max(0, modelConfig.getMaxTokens()) : 0;
+        // Historic rows commonly contain 4096/32768 even though this pipeline already
+        // overrides them. Always allow the safe 64K recovery tier; a larger explicit
+        // model value may raise (but never exceed) the 128K guardrail.
+        int ceiling = Math.max(CONVERGENCE_LENGTH_RETRY_DEFAULT_MAX_OUTPUT_TOKENS, configured);
+        return Math.min(CONVERGENCE_LENGTH_RETRY_ABSOLUTE_MAX_OUTPUT_TOKENS, ceiling);
+    }
+
+    private static boolean hasReasoningMarker(String response) {
+        if (response == null || response.isBlank()) return false;
+        String lower = response.toLowerCase(Locale.ROOT);
+        return lower.contains("<think>") || lower.contains("</think>")
+                || lower.contains("<thinking>") || lower.contains("</thinking>")
+                || lower.contains("<analysis>") || lower.contains("</analysis>");
+    }
+
+    static int dynamicOutputTokenBudget(int checkCount) {
+        long desired = CONVERGENCE_BASE_OUTPUT_TOKENS
+                + (long) Math.max(0, checkCount) * CONVERGENCE_TOKENS_PER_CHECK;
+        return (int) Math.max(CONVERGENCE_MIN_OUTPUT_TOKENS,
+                Math.min(CONVERGENCE_MAX_OUTPUT_TOKENS, desired));
+    }
+
+    private String unparseableResponseReason(String scope, AiModelService.AiResponseMetadata metadata) {
+        if (metadata != null && "length".equalsIgnoreCase(metadata.finishReason())) {
+            return scope + "模型在请求 max_tokens=" + metadata.requestedMaxTokens()
+                    + " 时输出达到长度上限并被截断，未形成完整JSON，系统已保留规则并转为待复核。";
+        }
+        if (metadata != null && metadata.contentLength() == 0 && metadata.reasoningLength() > 0) {
+            return scope + "模型仅返回思考内容、未返回最终JSON，系统已保留规则并转为待复核。";
+        }
+        return scope + "模型响应无法解析，系统已保留规则并转为待复核。";
+    }
+
+    private String responseFinishReason(AiModelService.AiResponseMetadata metadata) {
+        return metadata == null || metadata.finishReason() == null ? "unknown" : metadata.finishReason();
+    }
+
+    private int responseReasoningLength(AiModelService.AiResponseMetadata metadata) {
+        return metadata == null ? 0 : metadata.reasoningLength();
+    }
+
+    private int responseContentLength(AiModelService.AiResponseMetadata metadata) {
+        return metadata == null ? 0 : metadata.contentLength();
+    }
+
+    private void putResponseDiagnostics(Map<String, Object> target,
+                                        AiModelService.AiResponseMetadata metadata) {
+        if (target == null || metadata == null) return;
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        diagnostics.put("finishReason", metadata.finishReason());
+        diagnostics.put("contentLength", metadata.contentLength());
+        diagnostics.put("reasoningLength", metadata.reasoningLength());
+        diagnostics.put("requestedMaxTokens", metadata.requestedMaxTokens());
+        if (metadata.promptTokens() != null) diagnostics.put("promptTokens", metadata.promptTokens());
+        if (metadata.completionTokens() != null) diagnostics.put("completionTokens", metadata.completionTokens());
+        if (metadata.totalTokens() != null) diagnostics.put("totalTokens", metadata.totalTokens());
+        if (metadata.reasoningControl() != null && !metadata.reasoningControl().isBlank()) {
+            diagnostics.put("reasoningControl", metadata.reasoningControl());
+            diagnostics.put("reasoningControlValue", metadata.reasoningControlValue());
+        }
+        target.put("responseDiagnostics", diagnostics);
     }
 
     /** taskId+chunkIdx+sampleIdx → 稳定 long seed（同任务复现，跨任务隔离）。 */
@@ -2370,6 +2556,13 @@ public class ReviewService {
         String text = aiResponse.trim();
         if (text.isEmpty()) return null;
 
+        // Some OpenAI-compatible gateways flatten provider reasoning into content
+        // instead of exposing reasoning_content. Remove only explicitly delimited
+        // reasoning blocks; never guess based on prose because that could discard
+        // legitimate JSON string values.
+        text = stripDelimitedReasoningBlocks(text);
+        if (text.isEmpty()) return null;
+
         // 1) Strip a single fenced code block (```json ... ``` or ``` ... ```) if the
         //    whole response is wrapped in one.
         if (text.startsWith("```")) {
@@ -2420,6 +2613,41 @@ public class ReviewService {
         if (salvaged != null) return salvaged;
 
         return null;
+    }
+
+    static String stripDelimitedReasoningBlocks(String text) {
+        if (text == null || text.isBlank()) return "";
+        String stripped = stripTaggedBlock(text, "think");
+        stripped = stripTaggedBlock(stripped, "thinking");
+        stripped = stripTaggedBlock(stripped, "analysis");
+        return stripped.trim();
+    }
+
+    private static String stripTaggedBlock(String text, String tag) {
+        String result = text;
+        String openTag = "<" + tag + ">";
+        String closeTag = "</" + tag + ">";
+        while (true) {
+            String lower = result.toLowerCase(Locale.ROOT);
+            int start = lower.indexOf(openTag);
+            if (start < 0) {
+                // Qwen3.5's chat template may place <think> in the prompt, so an
+                // unparsed OpenAI-compatible response can contain only
+                // "reasoning...</think>final content". Treat the explicit orphan
+                // closing tag as the boundary and keep only the final content.
+                int orphanClose = lower.lastIndexOf(closeTag);
+                return orphanClose < 0
+                        ? result
+                        : result.substring(orphanClose + closeTag.length());
+            }
+            int end = lower.indexOf(closeTag, start + openTag.length());
+            if (end < 0) {
+                // An unclosed reasoning block means the provider never emitted a
+                // separable final answer. Keep only anything before that block.
+                return result.substring(0, start);
+            }
+            result = result.substring(0, start) + result.substring(end + closeTag.length());
+        }
     }
 
     /** 抢救被截断的 JSON：裁剪到最后一个已闭合的 } / ]，再按未闭合栈补齐结尾括号后尝试解析。 */
@@ -2522,12 +2750,11 @@ public class ReviewService {
      */
     private Map<String, Object> buildFallbackResult(String chapterLabel, String rawText) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("summary", "AI返回内容无法解析为JSON，已保留原始文本");
+        result.put("summary", "AI未返回可解析的最终JSON，思考内容已过滤");
         Map<String, Object> issue = new LinkedHashMap<>();
         issue.put("location", chapterLabel != null ? chapterLabel : "");
-        issue.put("description", "模型未按要求返回JSON格式，原始响应：\n"
-                + (rawText == null ? "" : rawText.trim()));
-        issue.put("suggestion", "请在【模型管理】中确认该模型是否支持指令跟随，或调低 temperature 后重试");
+        issue.put("description", "模型未返回可解析的最终JSON；思考过程不会作为审查结果展示。");
+        issue.put("suggestion", "请重审该切片；若重复发生，请检查模型的思考模式和结构化输出兼容性。");
         issue.put("rule", "解析失败");
         List<Map<String, Object>> issues = new ArrayList<>();
         issues.add(issue);

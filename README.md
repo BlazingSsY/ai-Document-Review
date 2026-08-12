@@ -231,7 +231,7 @@ docker compose up -d --build
 1. **每章节单元**：system prompt = `RuleDispatcher` 为该章节命中的规则（四段式结构化提示词）；user message = 本章节切片正文 + 该章节通过 `ChapterReferenceResolver` 识别到的、被引用的其他章节切片（“见第X章 / 参见 4.5 条 / 参考<标题>”等）。被引用章节内容仅作上下文，不在其上套用本次规则。
 2. **并发调度**：父线程 `Semaphore(review.parallel.chunk-concurrency)` 控制单任务的章节并发，提交到独立的 `chunkReviewExecutor` 线程池执行；各章节互不影响。
 3. **单章节失败隔离**：某章节 AI 调用失败（如 429）只把该切片标记为 `failed/retryable`，写入 `failedChunks`，不触发"拆批重发"之类的放大重试；任务照常完成，用户可在结果页"重审失败切片"单独补审。
-4. **收敛参数**：`temperature=0`、`top_p=1`、`max_tokens=8192`、`seed=sha1(taskId+chunkIdx+0)` 取前 8 字节，保证同任务可复现、跨模型可对比。
+4. **收敛参数**：`temperature=0`、`top_p=1`、`max_tokens=4096+检查项数×512`（下限 8192、上限 24576）、`seed=sha1(taskId+chunkIdx+0)` 取前 8 字节，保证同任务可复现、跨模型可对比。
 5. **结构化输出**：OpenAI 兼容协议走 `response_format=json_schema`，Anthropic 走 `tool_use+tool_choice`，强制模型在解码阶段就生成合法 JSON。
 6. **文档级综合审查**：所有章节审完后，若场景含 `rule_type=document_specific` 规则，再用"章节目录 + 各章节摘要"跑一次文档级综合调用。
 7. **术语抽取与全文一致性**：每个被送审切片都必须返回 `term_observations`；后端合并去重为 `terminologyTable`，并在 `/app/output` 写出 `术语表_<文件>_<模型>_<时间>.json`。随后系统基于术语表追加一次 `reviewProfile=terminology_consistency` 的全文术语一致性审查，只在发现不一致或需复核时进入矩阵。
@@ -371,7 +371,7 @@ docker compose up -d --build    # 重新构建
 
 **设计原则**：任务级、切片级、检查项级三层隔离，避免大任务占满线程池导致小任务饿死。
 
-> **收敛常量**（不开放配置，写死在 `ReviewService` 顶部）：`temperature=0`、`top_p=1`、`max_tokens=8192`、规则段 token 预算 `RULE_BUDGET_TOKENS=6000`。每章节单次调用（不再双采样）。这些值是"跨模型可对比"的契约本身，调动一次会让历史 `ai_result` 与新结果失去可比性，因此不放配置文件。
+> **收敛常量**（不开放配置，集中在 `ReviewService` 顶部）：`temperature=0`、`top_p=1`、输出预算按 `4096+检查项数×512` 动态计算（下限 8192、上限 24576）、规则段 token 预算由配置项控制。每章节单次调用（不再双采样）。这些值是"跨模型可比"的契约本身，因此不在普通审查参数中开放。
 
 ### 审查结果字段说明（CHUNK 管线 `review_tasks.ai_result`）
 
@@ -600,4 +600,3 @@ frontend/
 - 检查规则所在文件夹是否启用（`rule_folders.enabled`）
 - 检查场景是否关联了该规则库（`scenario_library_mapping`）
 - CHUNK：检查规则 `rule_type` 和 `sections`/`keywords` 是否匹配章节标题
-

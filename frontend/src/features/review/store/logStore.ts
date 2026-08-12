@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 
 export interface LogEntry {
   time: string;
@@ -14,12 +15,18 @@ interface LogState {
   getLogs: (taskId: string) => LogEntry[];
 }
 
-// Persist logs across route changes so navigating from the workspace back to the
-// dashboard and re-entering 查看详情 keeps the full log timeline. We cap each task
-// at 1000 entries so a long-running review can't grow this map without bound.
-const MAX_LOGS_PER_TASK = 1000;
+interface PersistedLogState {
+  logsByTask: Record<string, LogEntry[]>;
+}
 
-const useLogStore = create<LogState>((set, get) => ({
+// Persist logs across route changes and page refreshes so navigating back into
+// 查看详情 keeps the runtime timeline. Bound both per-task logs and task count so
+// the browser session store cannot grow indefinitely.
+const MAX_LOGS_PER_TASK = 1000;
+const MAX_PERSISTED_TASKS = 50;
+const LOG_STORAGE_KEY = 'ai-review-task-logs-v1';
+
+const useLogStore = create<LogState>()(persist<LogState, [], [], PersistedLogState>((set, get) => ({
   logsByTask: {},
 
   appendLog: (taskId, entry) => set((state) => {
@@ -35,7 +42,12 @@ const useLogStore = create<LogState>((set, get) => ({
     const next = existing.length >= MAX_LOGS_PER_TASK
       ? [...existing.slice(existing.length - MAX_LOGS_PER_TASK + 1), entry]
       : [...existing, entry];
-    return { logsByTask: { ...state.logsByTask, [taskId]: next } };
+    const logsByTask = { ...state.logsByTask, [taskId]: next };
+    const taskIds = Object.keys(logsByTask);
+    if (taskIds.length > MAX_PERSISTED_TASKS) {
+      delete logsByTask[taskIds[0]];
+    }
+    return { logsByTask };
   }),
 
   clearLogs: (taskId) => set((state) => {
@@ -44,6 +56,14 @@ const useLogStore = create<LogState>((set, get) => ({
   }),
 
   getLogs: (taskId) => get().logsByTask[taskId] || [],
+}), {
+  name: LOG_STORAGE_KEY,
+  // Review logs can contain document/chapter names. sessionStorage survives a
+  // page refresh but is scoped to the current browser tab and is discarded when
+  // that tab closes, avoiding indefinite cross-session retention.
+  storage: createJSONStorage(() => sessionStorage),
+  partialize: (state) => ({ logsByTask: state.logsByTask }),
+  version: 1,
 }));
 
 export default useLogStore;

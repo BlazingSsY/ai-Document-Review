@@ -394,8 +394,8 @@ function ModelConfigPage() {
         record.modelType !== 'chat'
           ? <Tag color="default">不适用</Tag>
           : val
-          ? <Tag color="purple">思考</Tag>
-          : <Tag color="default">普通</Tag>
+          ? <Tag color="purple">开启</Tag>
+          : <Tag color="default">默认</Tag>
       ),
     },
     {
@@ -658,7 +658,7 @@ function ModelConfigPage() {
                 label={
                   <span>
                     思考模式&nbsp;
-                    <Tooltip title="开启后，调用此模型时后端会自动：① 不发送 temperature（服务端会用默认值，如 Kimi K2.6/GLM-5.1 = 1.0）；② 把 max_tokens 抬到 ≥ 16000，给推理过程留足空间；③ 优先取 content 字段、必要时回退到 reasoning_content。系统会根据模型标识自动建议，也可手动调整。">
+                    <Tooltip title="开启后，系统会按供应商、接口地址和模型能力显式启用思考，并为推理保留预算；结构化审查只解析最终 content，不把 reasoning_content 当作审查结果。关闭表示不强制启用，保留供应商默认行为；未知接口不发送猜测参数。">
                       <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
                     </Tooltip>
                   </span>

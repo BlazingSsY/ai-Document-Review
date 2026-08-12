@@ -36,6 +36,13 @@ public class AiCallOptions {
     private final Integer maxTokensOverride;
 
     /**
+     * Omit temperature after a response proves that the upstream model is actually
+     * reasoning. This does not enable or disable provider-side reasoning.
+     */
+    @Builder.Default
+    private final boolean omitTemperature = false;
+
+    /**
      * 覆盖单次请求超时（秒）。null 表示沿用模型配置；
      * 场景级覆盖只允许缩短模型配置的超时，避免后台批处理长期占用工作线程。
      */
