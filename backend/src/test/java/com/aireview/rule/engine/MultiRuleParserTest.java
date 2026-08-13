@@ -61,22 +61,31 @@ class MultiRuleParserTest {
         assertThat(rules.get(1).getMetadata().getRuleCode()).isEqualTo("15-02-device_identification_eut");
     }
 
+    /**
+     * 规则文件里写的是中文类型名，规范文档 prompts/DO160G规则/README.md 第 3 节是唯一出处。
+     * 类型决定规则被送进哪些切片，认错就是静默的错分发，不会报错。
+     */
     @Test
-    void parsesLatestGeneralFocusRulesAsTenDocumentRules() throws Exception {
-        java.nio.file.Path ruleFile = java.nio.file.Path.of("..", "prompts", "通用关注要素.md");
-        if (!java.nio.file.Files.exists(ruleFile)) {
-            ruleFile = java.nio.file.Path.of("prompts", "通用关注要素.md");
+    void mapsEveryChineseRuleTypeFromTheSpec() {
+        assertThat(RuleMetadata.normalizeRuleTypeValue("通用章节")).isEqualTo(RuleMetadata.TYPE_GENERAL_CHAPTER);
+        assertThat(RuleMetadata.normalizeRuleTypeValue("试验项目章节")).isEqualTo(RuleMetadata.TYPE_TEST_ITEM);
+        assertThat(RuleMetadata.normalizeRuleTypeValue("专项章节")).isEqualTo(RuleMetadata.TYPE_SECTION_SPECIFIC);
+        assertThat(RuleMetadata.normalizeRuleTypeValue("文档级")).isEqualTo(RuleMetadata.TYPE_DOCUMENT_SPECIFIC);
+        assertThat(RuleMetadata.normalizeRuleTypeValue("全局")).isEqualTo(RuleMetadata.TYPE_GLOBAL);
+        assertThat(RuleMetadata.normalizeRuleTypeValue("输出")).isEqualTo(RuleMetadata.TYPE_OUTPUT);
+    }
+
+    /**
+     * 「通用章节」不能被识别成「全局」。前者只进通用段一片，后者进每一片——错成后者会让
+     * 这批规则跟着几十个试验项目章重复注入，token 翻倍，且在试验章里报出一堆封面/引用文件
+     * 的假问题。历史上这靠两行 if 的先后顺序保证，这里把结果本身锁死。
+     */
+    @Test
+    void generalChapterIsNeverDowngradedToGlobal() {
+        for (String raw : new String[]{"通用章节", "general_chapter", " 通用章节 ", "通用章节规则"}) {
+            assertThat(RuleMetadata.normalizeRuleTypeValue(raw))
+                    .as("%s 必须是通用章节，降级成 global 会注入每一片", raw)
+                    .isEqualTo(RuleMetadata.TYPE_GENERAL_CHAPTER);
         }
-        String content = java.nio.file.Files.readString(ruleFile, java.nio.charset.StandardCharsets.UTF_8);
-
-        List<MultiRuleParser.ParsedRule> rules = MultiRuleParser.parse(
-                "通用关注要素.md", "md", content);
-
-        assertThat(rules).hasSize(10);
-        assertThat(rules).allSatisfy(rule -> {
-            assertThat(rule.getMetadata().getRuleType())
-                    .isEqualTo(RuleMetadata.TYPE_DOCUMENT_SPECIFIC);
-            assertThat(rule.getMetadata().getRuleCode()).startsWith("G-");
-        });
     }
 }

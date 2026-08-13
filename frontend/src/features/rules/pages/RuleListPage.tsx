@@ -21,7 +21,7 @@ const { Title, Paragraph, Text } = Typography;
 const { TextArea } = Input;
 
 const RULE_TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  global: { label: '通用', color: 'default' },
+  global: { label: '全局', color: 'default' },
   general_chapter: { label: '通用章节', color: 'green' },
   section_specific: { label: '专项', color: 'geekblue' },
   document_specific: { label: '文档级', color: 'purple' },
@@ -30,7 +30,7 @@ const RULE_TYPE_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 function renderRuleTypeTag(ruleType?: string) {
-  if (!ruleType) return <Tag>通用</Tag>;
+  if (!ruleType) return <Tag>全局</Tag>;
   const meta = RULE_TYPE_LABELS[ruleType.toLowerCase()];
   return <Tag color={meta?.color || 'default'}>{meta?.label || ruleType}</Tag>;
 }
@@ -1111,12 +1111,12 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
           <Form.Item name="ruleType" label="规则类型" rules={[{ required: true, message: '请选择规则类型' }]}>
             <Select
               options={[
-                { label: '通用规则（应用到所有章节）', value: 'global' },
+                { label: '全局规则（应用到所有章节）', value: 'global' },
                 { label: '通用章节规则（仅作用于合并后的通用章节段：封面/目录及试验项目前各章）', value: 'general_chapter' },
                 { label: '专项规则（按章节匹配触发）', value: 'section_specific' },
                 { label: '文档级规则（全文综合审查）', value: 'document_specific' },
                 { label: '试验项目章节规则（自动作用于试验概述声明的试验项目章节）', value: 'test_item_chapter' },
-                { label: '输出规范规则（行为等同通用规则）', value: 'output' },
+                { label: '输出规范规则（行为等同全局规则）', value: 'output' },
               ]}
             />
           </Form.Item>

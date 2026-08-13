@@ -197,12 +197,20 @@ public class RuleMetadata {
         if (raw == null) return null;
         String s = raw.trim().toLowerCase(Locale.ROOT);
         if (s.isEmpty()) return null;
-        // 必须排在下面的「通用」之前：contains("通用") 会把「通用章节」也吃掉，
-        // 顺序反了就会把 general_chapter 规则静默降级成 global，注入到每一片。
         if (s.contains("通用章节") || s.equals("general_chapter") || s.equals("generalchapter")) {
             return TYPE_GENERAL_CHAPTER;
         }
-        if (s.contains("通用") || s.equals("global") || s.equals("general")) return TYPE_GLOBAL;
+        // 规范文档（prompts/DO160G规则/README.md 第 3 节）里这一类叫「全局」，此前代码只认
+        // 「通用」，照规范写的规则会落到最后的 return s，isGlobal() 为 false —— 分发时还能被
+        // fallback_global 兜住，但 applyRuleBudget 是按 isGlobal() 免裁的，兜不住，规则多的
+        // 章节会把它悄悄裁掉。
+        //
+        // 「通用」用 equals 而不是 contains：contains("通用") 会把「通用章节」一起吃掉，
+        // 那样这两行的先后顺序就成了命门。用 equals 之后两者不再重叠，顺序无关紧要。
+        if (s.contains("全局") || s.equals("通用")
+                || s.equals("global") || s.equals("general")) {
+            return TYPE_GLOBAL;
+        }
         if (s.contains("专项") || s.contains("section") || s.contains("specific")) return TYPE_SECTION_SPECIFIC;
         if (s.contains("文档") || s.equals("document") || s.equals("document_specific")) return TYPE_DOCUMENT_SPECIFIC;
         if (s.contains("试验项目") || s.equals("test_item_chapter") || s.equals("test_item") || s.equals("testitem")) return TYPE_TEST_ITEM;
