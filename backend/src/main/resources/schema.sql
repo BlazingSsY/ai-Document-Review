@@ -143,6 +143,13 @@ CREATE TABLE IF NOT EXISTS ai_model_config (
     -- "auto" selects a provider-safe mode and can downgrade when an API rejects
     -- response_format. Existing rows default to auto for backward compatibility.
     response_format_mode VARCHAR(32) NOT NULL DEFAULT 'auto',
+    -- 关闭思考时下发哪个参数。none 表示不发。系统不再按模型 id 猜测，
+    -- 由配置直接声明，行为可在本表里一眼看清。
+    reasoning_control VARCHAR(32)   NOT NULL DEFAULT 'none',
+    -- 服务端锁定 temperature 的推理模型勾选，请求里就不带 temperature。
+    omit_temperature BOOLEAN        NOT NULL DEFAULT FALSE,
+    -- 输出预算下限；为空时按本次注入的检查项数量动态计算。
+    output_token_budget INTEGER,
     created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP       NOT NULL DEFAULT NOW()
 );
@@ -154,6 +161,10 @@ ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER
 -- （R1/Reasoner/*-thinking/o 系列）按模型 id 自动识别，不再需要这一列。存在则丢弃。
 ALTER TABLE ai_model_config DROP COLUMN IF EXISTS thinking_mode;
 ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS response_format_mode VARCHAR(32) NOT NULL DEFAULT 'auto';
+-- 显式声明取代按模型 id 推断：思考控制参数、是否省略 temperature、输出预算下限。
+ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS reasoning_control VARCHAR(32) NOT NULL DEFAULT 'none';
+ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS omit_temperature BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ai_model_config ADD COLUMN IF NOT EXISTS output_token_budget INTEGER;
 ALTER TABLE ai_model_config ALTER COLUMN timeout SET DEFAULT 180;
 UPDATE ai_model_config SET timeout = 180 WHERE timeout = 60;
 

@@ -3,6 +3,8 @@ import { PaginatedResult } from '../../rules/api/rules';
 
 export type ModelType = 'chat' | 'embedding' | 'reranker';
 export type ResponseFormatMode = 'auto' | 'json_schema' | 'json_object' | 'prompt_only';
+/** 关闭思考时下发哪个参数。系统不按模型 id 推断，由配置显式声明。 */
+export type ReasoningControl = 'none' | 'enable_thinking' | 'thinking' | 'reasoning_effort';
 
 export interface AIModel {
   id: number;
@@ -18,6 +20,9 @@ export interface AIModel {
   timeout: number;
   enabled: boolean;
   responseFormatMode: ResponseFormatMode;
+  reasoningControl: ReasoningControl;
+  omitTemperature: boolean;
+  outputTokenBudget?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -35,6 +40,9 @@ export interface CreateModelParams {
   timeout: number;
   enabled: boolean;
   responseFormatMode: ResponseFormatMode;
+  reasoningControl: ReasoningControl;
+  omitTemperature: boolean;
+  outputTokenBudget?: number;
 }
 
 export interface ModelListParams {

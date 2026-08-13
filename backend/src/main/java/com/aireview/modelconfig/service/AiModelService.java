@@ -3,7 +3,6 @@ package com.aireview.modelconfig.service;
 import com.aireview.modelconfig.dto.AiModelConfigDTO;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.modelconfig.entity.AiModelConfig;
-import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.modelconfig.repository.AiModelConfigMapper;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
@@ -43,8 +42,6 @@ public class AiModelService {
     private static final int MAX_PGVECTOR_DIMENSIONS = 16000;
 
     private final Map<String, String> autoResponseFormatCache = new ConcurrentHashMap<>();
-    /** Provider/model combinations that rejected their inferred reasoning-control extension. */
-    private final Set<String> disabledReasoningControlCache = ConcurrentHashMap.newKeySet();
 
     /** Metadata for the latest call on the current worker thread, used by review diagnostics. */
     private final ThreadLocal<AiResponseMetadata> lastResponseMetadata = new ThreadLocal<>();
@@ -102,6 +99,11 @@ public class AiModelService {
         if (dto.getResponseFormatMode() != null) {
             config.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
         }
+        if (dto.getReasoningControl() != null) {
+            config.setReasoningControl(ReasoningModeAdapter.normalize(dto.getReasoningControl()));
+        }
+        if (dto.getOmitTemperature() != null) config.setOmitTemperature(dto.getOmitTemperature());
+        if (dto.getOutputTokenBudget() != null) config.setOutputTokenBudget(dto.getOutputTokenBudget());
         validateEmbeddingDimension(config);
         config.setUpdatedAt(LocalDateTime.now());
         aiModelConfigMapper.updateById(config);
@@ -287,21 +289,25 @@ public class AiModelService {
         } else {
             probe.setResponseFormatMode(RESPONSE_FORMAT_AUTO);
         }
-        // Thinking models share max_tokens between reasoning_content and content.
-        // The probe needs a budget large enough for the model to finish its chain
-        // of thought AND produce the single-character reply, otherwise the
-        // response comes back with content="" and the connection test misreports
-        // success/failure. 16 tokens is fine for non-thinking models; thinking
-        // models need at least 16 000 per the Moonshot/Z.ai docs.
-        boolean probeThinking = isThinkingModel(probe);
-        probe.setMaxTokens(probeThinking ? 16000 : 16);
+        // 探针要按真实配置发请求，否则测出来的兼容性和实际审查时不是一回事。
+        probe.setReasoningControl(dto.getReasoningControl() != null
+                ? dto.getReasoningControl()
+                : (persistedFallback != null ? persistedFallback.getReasoningControl() : null));
+        probe.setOmitTemperature(dto.getOmitTemperature() != null
+                ? dto.getOmitTemperature()
+                : (persistedFallback != null ? persistedFallback.getOmitTemperature() : null));
+
+        // 关不掉思考的模型，思维链和最终回答共用 max_tokens；探针预算太小会让 content 为空、
+        // 连接测试误报。这类模型在配置里勾了 omit_temperature，按它决定探针预算。
+        boolean probeOmitsTemperature = omitsTemperature(probe);
+        probe.setMaxTokens(probeOmitsTemperature ? 16000 : 16);
         // For thinking models the server enforces its own temperature; callAiModel
         // detects this and omits the parameter. For everything else we still want
         // a low temperature so the probe is deterministic.
         probe.setTemperature(resolveProbeTemperature(dto, persistedFallback));
         // Thinking models can take a while to finish their reasoning even for a
         // tiny prompt, so allow more time for the probe than the legacy 30 s.
-        probe.setTimeout(probeThinking ? 120 : 30);
+        probe.setTimeout(probeOmitsTemperature ? 120 : 30);
         probe.setIsEnabled(true);
 
         if (probe.getEndpoint() == null || probe.getEndpoint().isBlank()) {
@@ -351,8 +357,8 @@ public class AiModelService {
         AiCallOptions.AiCallOptionsBuilder options = AiCallOptions.builder()
                 .structuredSchema(schema)
                 .structuredSchemaName("connection_test")
-                .maxTokensOverride(isThinkingModel(probe) ? null : 64);
-        if (!isThinkingModel(probe)) {
+                .maxTokensOverride(omitsTemperature(probe) ? null : 64);
+        if (!omitsTemperature(probe)) {
             options.temperature(0.0).topP(1.0);
         }
         String reply = callAiModel(probe,
@@ -595,97 +601,77 @@ public class AiModelService {
             throw new RuntimeException("API Key 无效或已被脱敏，请重新配置模型的 API Key");
         }
 
-        boolean thinking = isThinkingModel(config);
+        boolean omitTemperature = omitsTemperature(config);
         String provider = config.getProvider() != null ? config.getProvider().toLowerCase(Locale.ROOT) : "openai";
         int timeoutSec = config.getTimeout() != null ? config.getTimeout() : 180;
         if (options.getTimeoutSecondsOverride() != null && options.getTimeoutSecondsOverride() > 0) {
             timeoutSec = Math.min(timeoutSec, options.getTimeoutSecondsOverride());
         }
-        int maxTokens = resolveMaxTokens(config, options, thinking);
+        int maxTokens = resolveMaxTokens(config, options);
         List<String> responseFormatCandidates = resolveResponseFormatCandidates(config, options);
         boolean automaticMode = RESPONSE_FORMAT_AUTO.equals(
                 normalizeResponseFormatMode(config.getResponseFormatMode()));
 
-        String reasoningControlCacheKey = responseFormatCacheKey(config);
-        formatLoop:
         for (int formatIndex = 0; formatIndex < responseFormatCandidates.size(); formatIndex++) {
             String responseFormatMode = responseFormatCandidates.get(formatIndex);
             String effectiveSystemPrompt = buildStructuredOutputPrompt(systemPrompt, options, responseFormatMode);
-            boolean omitReasoningControl = disabledReasoningControlCache.contains(reasoningControlCacheKey);
-            for (int controlAttempt = 0; controlAttempt < 2; controlAttempt++) {
-                JSONObject requestBody = buildOpenAiRequestBody(config, effectiveSystemPrompt, userContent,
-                        options, thinking, maxTokens, responseFormatMode);
-                ReasoningModeAdapter.AppliedControl reasoningControl = omitReasoningControl
-                        ? ReasoningModeAdapter.AppliedControl.none()
-                        : ReasoningModeAdapter.apply(config, requestBody);
+            JSONObject requestBody = buildOpenAiRequestBody(config, effectiveSystemPrompt, userContent,
+                    options, omitTemperature, maxTokens, responseFormatMode);
+            // 思考控制参数由配置声明，配错就让供应商的 400 直接抛出去：不缓存、不静默回退。
+            ReasoningModeAdapter.AppliedControl reasoningControl =
+                    ReasoningModeAdapter.apply(config, requestBody);
 
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(fullUrl))
-                        .header("Content-Type", "application/json")
-                        .header("Authorization", "Bearer " + config.getApiKey())
-                        .timeout(Duration.ofSeconds(timeoutSec))
-                        .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
-                        .build();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(fullUrl))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + config.getApiKey())
+                    .timeout(Duration.ofSeconds(timeoutSec))
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody.toJSONString()))
+                    .build();
 
-                log.debug("AI request: provider={}, model={}, thinking={}, reasoningControl={}={}, "
-                                + "responseFormat={}, maxTokens={}, seed={}, contentLen={}",
-                        provider, requestBody.getString("model"), thinking,
-                        reasoningControl.parameter(), reasoningControl.value(), responseFormatMode,
-                        maxTokens, options.getSeed(), userContent.length());
+            log.debug("AI request: provider={}, model={}, omitTemperature={}, reasoningControl={}={}, "
+                            + "responseFormat={}, maxTokens={}, seed={}, contentLen={}",
+                    provider, requestBody.getString("model"), omitTemperature,
+                    reasoningControl.parameter(), reasoningControl.value(), responseFormatMode,
+                    maxTokens, options.getSeed(), userContent.length());
 
-                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                if (response.statusCode() != 200) {
-                    if (reasoningControl.applied()
-                            && ReasoningModeAdapter.isCompatibilityError(
-                            response.statusCode(), response.body(), reasoningControl)) {
-                        if (controlAttempt > 0) {
-                            throw new AiApiException(response.statusCode(), response.body(),
-                                    "AI API HTTP " + response.statusCode() + ": " + response.body(),
-                                    parseRetryAfterSeconds(response));
-                        }
-                        disabledReasoningControlCache.add(reasoningControlCacheKey);
-                        omitReasoningControl = true;
-                        log.warn("Model {} rejected reasoning control {}={}; retrying once without it "
-                                        + "and caching the compatibility result",
-                                config.getModelName(), reasoningControl.parameter(), reasoningControl.value());
-                        continue;
-                    }
-                    boolean canDowngrade = automaticMode
-                            && formatIndex + 1 < responseFormatCandidates.size()
-                            && isResponseFormatCompatibilityError(response.statusCode(), response.body());
-                    if (canDowngrade) {
-                        String fallbackMode = responseFormatCandidates.get(formatIndex + 1);
-                        autoResponseFormatCache.put(responseFormatCacheKey(config), fallbackMode);
-                        log.warn("Model {} rejected response_format mode {}; retrying once with {}",
-                                config.getModelName(), responseFormatMode, fallbackMode);
-                        continue formatLoop;
-                    }
-                    log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
-                    throw new AiApiException(response.statusCode(), response.body(),
-                            "AI API HTTP " + response.statusCode() + ": " + response.body(),
-                            parseRetryAfterSeconds(response));
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                boolean canDowngrade = automaticMode
+                        && formatIndex + 1 < responseFormatCandidates.size()
+                        && isResponseFormatCompatibilityError(response.statusCode(), response.body());
+                if (canDowngrade) {
+                    String fallbackMode = responseFormatCandidates.get(formatIndex + 1);
+                    autoResponseFormatCache.put(responseFormatCacheKey(config), fallbackMode);
+                    log.warn("Model {} rejected response_format mode {}; retrying once with {}",
+                            config.getModelName(), responseFormatMode, fallbackMode);
+                    continue;
                 }
-
-                ParsedChatResponse parsed = parseOpenAiResponse(response.body());
-                AiResponseMetadata metadata = new AiResponseMetadata(
-                        parsed.finishReason(), parsed.content().length(), parsed.reasoningLength(),
-                        parsed.promptTokens(), parsed.completionTokens(), parsed.totalTokens(),
-                        maxTokens,
-                        reasoningControl.parameter(), reasoningControl.value());
-                lastResponseMetadata.set(metadata);
-                if ("length".equalsIgnoreCase(parsed.finishReason())) {
-                    log.warn("AI model response was truncated: model={}, finishReason=length, "
-                                    + "contentLength={}, reasoningLength={}, maxTokens={}, responseFormat={}",
-                            config.getModelName(), parsed.content().length(), parsed.reasoningLength(),
-                            maxTokens, responseFormatMode);
-                } else {
-                    log.info("AI model response received, length: {}, reasoningLength={}, "
-                                    + "finishReason={}, responseFormat={}",
-                            parsed.content().length(), parsed.reasoningLength(),
-                            parsed.finishReason(), responseFormatMode);
-                }
-                return parsed.content();
+                log.error("AI model API returned status {}: {}", response.statusCode(), response.body());
+                throw new AiApiException(response.statusCode(), response.body(),
+                        "AI API HTTP " + response.statusCode() + ": " + response.body(),
+                        parseRetryAfterSeconds(response));
             }
+
+            ParsedChatResponse parsed = parseOpenAiResponse(response.body());
+            AiResponseMetadata metadata = new AiResponseMetadata(
+                    parsed.finishReason(), parsed.content().length(), parsed.reasoningLength(),
+                    parsed.promptTokens(), parsed.completionTokens(), parsed.totalTokens(),
+                    maxTokens,
+                    reasoningControl.parameter(), reasoningControl.value());
+            lastResponseMetadata.set(metadata);
+            if ("length".equalsIgnoreCase(parsed.finishReason())) {
+                log.warn("AI model response was truncated: model={}, finishReason=length, "
+                                + "contentLength={}, reasoningLength={}, maxTokens={}, responseFormat={}",
+                        config.getModelName(), parsed.content().length(), parsed.reasoningLength(),
+                        maxTokens, responseFormatMode);
+            } else {
+                log.info("AI model response received, length: {}, reasoningLength={}, "
+                                + "finishReason={}, responseFormat={}",
+                        parsed.content().length(), parsed.reasoningLength(),
+                        parsed.finishReason(), responseFormatMode);
+            }
+            return parsed.content();
         }
         throw new IllegalStateException("No compatible structured-output mode is available for " + config.getModelName());
     }
@@ -791,27 +777,32 @@ public class AiModelService {
                 + options.getStructuredSchema().toJSONString();
     }
 
-    private int resolveMaxTokens(AiModelConfig config, AiCallOptions options, boolean thinking) {
+    /**
+     * 解析本次请求的 max_tokens。配置里的 {@code output_token_budget} 是**下限**：
+     * 关不掉思考的模型靠它保证思维链写完之后还有地方写最终 JSON。
+     */
+    private int resolveMaxTokens(AiModelConfig config, AiCallOptions options) {
         int maxTokens = options.getMaxTokensOverride() != null
                 ? options.getMaxTokensOverride()
                 : (config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
-        if (thinking && maxTokens < 16000) {
-            log.info("Bumping max_tokens from {} → 16000 for thinking-mode model {}",
-                    maxTokens, config.getModelKey());
-            maxTokens = 16000;
+        Integer configuredFloor = config.getOutputTokenBudget();
+        if (configuredFloor != null && configuredFloor > maxTokens) {
+            log.info("Raising max_tokens {} → {} for {} (configured output_token_budget)",
+                    maxTokens, configuredFloor, config.getModelKey());
+            maxTokens = configuredFloor;
         }
         return maxTokens;
     }
 
     /** OpenAI / Moonshot / GLM / Qwen / DeepSeek 等兼容协议的请求体。 */
     private JSONObject buildOpenAiRequestBody(AiModelConfig config, String systemPrompt, String userContent,
-                                               AiCallOptions options, boolean thinking, int maxTokens,
-                                               String responseFormatMode) {
+                                              AiCallOptions options, boolean omitTemperature, int maxTokens,
+                                              String responseFormatMode) {
         JSONObject body = new JSONObject();
         body.put("model", resolveModelId(config));
-        // Thinking-mode models lock temperature server-side (Moonshot 拒绝 ≠ 1 / GLM 也是),
-        // 因此只在非思维模型上传 temperature；options 优先于 config 的历史默认值。
-        if (!thinking && !options.isOmitTemperature()) {
+        // 服务端锁定 temperature 的模型（配置里勾了 omit_temperature）不下发该参数，
+        // 否则 Moonshot / GLM 一类会直接 400。options 优先于 config 的历史默认值。
+        if (!omitTemperature && !options.isOmitTemperature()) {
             Double t = options.getTemperature() != null ? options.getTemperature()
                     : (config.getTemperature() != null ? config.getTemperature() : 0.1);
             body.put("temperature", t);
@@ -895,17 +886,13 @@ public class AiModelService {
     }
 
     /**
-     * 该模型是否会无条件产出思维链（即关不掉）。
+     * 是否不下发 temperature。直接读配置，不做任何按模型 id 的推断。
      *
-     * <p>系统对所有模型统一请求关闭思考（见 {@link ReasoningModeAdapter}），因此这里不再
-     * 读取任何用户配置——原先的「思考模式」开关已移除。只有 R1 / Reasoner / *-thinking /
-     * o 系列这类没有关闭档的模型才返回 true：它们仍需省略 temperature（服务端会锁定自己的
-     * 值）并抬高 max_tokens，否则思维链会把最终 JSON 挤没。
-     *
-     * <p>判定收敛在 {@link ThinkingModeDetector} 一处，避免多份正则互相走岔。
+     * <p>服务端锁定自身 temperature 的推理模型（R1 / Reasoner / o 系列）需要勾上，
+     * 否则发过去要么被忽略要么直接 400。
      */
-    static boolean isThinkingModel(AiModelConfig config) {
-        return ThinkingModeDetector.reasonsUnconditionally(config);
+    public static boolean omitsTemperature(AiModelConfig config) {
+        return config != null && Boolean.TRUE.equals(config.getOmitTemperature());
     }
 
     private Double resolveProbeTemperature(AiModelConfigDTO dto, AiModelConfig persistedFallback) {
@@ -932,10 +919,12 @@ public class AiModelService {
         dto.setTemperature(config.getTemperature() != null ? config.getTemperature() : 0.7);
         dto.setTimeout(config.getTimeout() != null ? config.getTimeout() : 180);
         dto.setEnabled(config.getIsEnabled());
-        boolean isThinking = isThinkingModel(config);
         dto.setResponseFormatMode(normalizeResponseFormatMode(config.getResponseFormatMode()));
-        // 思维模型不能参与跨模型对比：温度服务器锁、seed 通常不支持、采样不收敛。
-        dto.setCrossModelEligible(!isThinking);
+        dto.setReasoningControl(ReasoningModeAdapter.normalize(config.getReasoningControl()));
+        dto.setOmitTemperature(omitsTemperature(config));
+        dto.setOutputTokenBudget(config.getOutputTokenBudget());
+        // 温度被服务端锁定的模型不能参与跨模型对比：参数对齐不完整、采样不收敛。
+        dto.setCrossModelEligible(!omitsTemperature(config));
         dto.setCreatedAt(config.getCreatedAt());
         dto.setUpdatedAt(config.getUpdatedAt());
         return dto;
@@ -956,6 +945,9 @@ public class AiModelService {
         config.setTimeout(dto.getTimeout() != null ? dto.getTimeout() : 180);
         config.setIsEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
         config.setResponseFormatMode(normalizeResponseFormatMode(dto.getResponseFormatMode()));
+        config.setReasoningControl(ReasoningModeAdapter.normalize(dto.getReasoningControl()));
+        config.setOmitTemperature(dto.getOmitTemperature() != null ? dto.getOmitTemperature() : false);
+        config.setOutputTokenBudget(dto.getOutputTokenBudget());
         return config;
     }
 

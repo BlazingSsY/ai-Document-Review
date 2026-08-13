@@ -1,35 +1,41 @@
 package com.aireview.modelconfig.service;
 
 import com.aireview.modelconfig.entity.AiModelConfig;
-import com.aireview.review.llm.ThinkingModeDetector;
 import com.alibaba.fastjson2.JSONObject;
 
 import java.util.Locale;
+import java.util.Set;
 
 /**
- * 把「统一关闭思考」这一策略翻译成各家 OpenAI 兼容接口的具体请求字段。
+ * 把模型配置里声明的「思考控制参数」翻译成请求体字段。
  *
- * <p>本系统对所有模型一律请求关闭思考，不再有用户可配的开关。原因见
- * {@link com.aireview.review.llm.ThinkingModeDetector}：审查要的是严格按 schema 吐
- * 结构化 JSON，思维链会和最终 JSON 抢同一份输出预算，经常把 JSON 挤没。
+ * <p>审查要的是严格按 schema 吐结构化 JSON，思维链会和最终 JSON 抢同一份输出预算，
+ * 经常把 JSON 挤没。所以系统对所有模型一律请求关闭思考——但**用哪个参数关**因供应商而异，
+ * 这一点由 {@code ai_model_config.reasoning_control} 显式声明，不再按 provider / endpoint /
+ * 模型 id 猜测。
  *
- * <p><b>为什么必须显式发「关闭」，而不是什么都不发</b>：混合推理模型（DeepSeek V3/V4、
- * Qwen3、GLM-4.5+、Kimi K2.x）默认是开着思考的。不发参数等于沿用它的默认值，照样烧预算。
- * 这正是这个适配器存在的意义。
+ * <p>取值与产出：
+ * <ul>
+ *   <li>{@link #NONE} —— 不下发任何参数。适用于两类模型：本来就不思考的，
+ *       以及关不掉的（R1 / Reasoner / o 系列）。后者应同时配上
+ *       {@code omit_temperature} 与足够大的 {@code output_token_budget}。</li>
+ *   <li>{@link #ENABLE_THINKING} —— {@code "enable_thinking": false}。硅基流动、百炼等。</li>
+ *   <li>{@link #THINKING} —— {@code "thinking": {"type":"disabled"}}。DeepSeek 官方。</li>
+ *   <li>{@link #REASONING_EFFORT} —— {@code "reasoning_effort": "none"}。Gemini OpenAI 兼容端点。</li>
+ * </ul>
  *
- * <p>只对能叫得出名字的网关发参数，未知的聚合网关一律不动——发一个它不认识的字段会直接
- * 400。若仍被拒，调用方有一次性兼容回退（{@link #isCompatibilityError}）会去掉参数重试
- * 并缓存结果。
- *
- * <p>固定推理模型（R1 / Reasoner / *-thinking / o 系列）没有关闭档，对它们发 disable 是
- * 白发甚至报错，因此直接跳过；这类模型由 {@code ThinkingModeDetector} 识别后走
- * 「省略 temperature + 抬高 max_tokens」的兼容路径。
+ * <p>配错了会被供应商以 400 拒绝，且**不做兼容回退**。这是有意的：配置即真相，
+ * 错误应当立刻暴露并由人改配置，而不是被一个进程内缓存静默吞掉——那正是重构前
+ * 「四份自学习状态、没人说得清系统对某个模型到底学到了什么」的来源。
  */
 final class ReasoningModeAdapter {
 
-    static final String CONTROL_THINKING = "thinking";
-    static final String CONTROL_ENABLE_THINKING = "enable_thinking";
-    static final String CONTROL_REASONING_EFFORT = "reasoning_effort";
+    static final String NONE = "none";
+    static final String THINKING = "thinking";
+    static final String ENABLE_THINKING = "enable_thinking";
+    static final String REASONING_EFFORT = "reasoning_effort";
+
+    static final Set<String> SUPPORTED = Set.of(NONE, THINKING, ENABLE_THINKING, REASONING_EFFORT);
 
     record AppliedControl(String parameter, String value) {
         static AppliedControl none() {
@@ -48,97 +54,37 @@ final class ReasoningModeAdapter {
         if (config == null || body == null) {
             return AppliedControl.none();
         }
-        String provider = normalize(config.getProvider());
-        String endpoint = normalize(config.getEndpoint());
-        String model = normalize((config.getModelKey() == null ? "" : config.getModelKey())
-                + " " + (config.getModelName() == null ? "" : config.getModelName()));
-
-        // 关不掉的模型不发 disable：DeepSeek reasoner / R1 / *-thinking / o 系列都没有
-        // 关闭档，发过去要么被忽略要么直接 400。
-        if (ThinkingModeDetector.reasonsUnconditionally(model)) {
-            return AppliedControl.none();
+        switch (normalize(config.getReasoningControl())) {
+            case ENABLE_THINKING -> {
+                body.put(ENABLE_THINKING, false);
+                return new AppliedControl(ENABLE_THINKING, "false");
+            }
+            case THINKING -> {
+                JSONObject thinking = new JSONObject();
+                thinking.put("type", "disabled");
+                body.put(THINKING, thinking);
+                return new AppliedControl(THINKING, "disabled");
+            }
+            case REASONING_EFFORT -> {
+                body.put(REASONING_EFFORT, NONE);
+                return new AppliedControl(REASONING_EFFORT, NONE);
+            }
+            default -> {
+                return AppliedControl.none();
+            }
         }
-
-        // DeepSeek 官方 V4 接口支持显式的思考开关。
-        if (endpoint.contains("api.deepseek.com") || "deepseek".equals(provider)) {
-            JSONObject thinking = new JSONObject();
-            thinking.put("type", "disabled");
-            body.put(CONTROL_THINKING, thinking);
-            return new AppliedControl(CONTROL_THINKING, "disabled");
-        }
-
-        // 硅基流动对 Qwen/DeepSeek/GLM/Kimi 等混合模型暴露 enable_thinking。
-        if (isSiliconFlow(provider, endpoint) && supportsEnableThinking(model)) {
-            body.put(CONTROL_ENABLE_THINKING, false);
-            return new AppliedControl(CONTROL_ENABLE_THINKING, "false");
-        }
-
-        // 阿里百炼/DashScope 对同系列混合模型用同一个顶层扩展字段。
-        if (isDashScope(provider, endpoint) && supportsEnableThinking(model)) {
-            body.put(CONTROL_ENABLE_THINKING, false);
-            return new AppliedControl(CONTROL_ENABLE_THINKING, "false");
-        }
-
-        // Gemini 的 OpenAI 兼容端点用 reasoning_effort=none 表示零思考预算。
-        if (isGeminiOpenAiEndpoint(provider, endpoint) && isConfigurableGemini(model)) {
-            body.put(CONTROL_REASONING_EFFORT, "none");
-            return new AppliedControl(CONTROL_REASONING_EFFORT, "none");
-        }
-
-        return AppliedControl.none();
     }
 
-    static boolean isCompatibilityError(int statusCode, String responseBody, AppliedControl control) {
-        if (statusCode != 400 || responseBody == null || control == null || !control.applied()) {
-            return false;
+    /** 归一化并校验配置值；空值按 {@link #NONE} 处理，非法值直接拒绝而不是静默回落。 */
+    static String normalize(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return NONE;
         }
-        String lower = responseBody.toLowerCase(Locale.ROOT);
-        boolean mentionsParameter = lower.contains(control.parameter().toLowerCase(Locale.ROOT))
-                || (CONTROL_THINKING.equals(control.parameter()) && lower.contains("thinking mode"));
-        boolean rejectsParameter = lower.contains("not support")
-                || lower.contains("unsupported")
-                || lower.contains("unknown")
-                || lower.contains("unrecognized")
-                || lower.contains("invalid")
-                || lower.contains("extra_forbidden")
-                || lower.contains("not allowed")
-                || lower.contains("restricted");
-        return mentionsParameter && rejectsParameter;
-    }
-
-    private static boolean isSiliconFlow(String provider, String endpoint) {
-        return provider.contains("siliconflow") || provider.contains("硅基")
-                || endpoint.contains("siliconflow.cn") || endpoint.contains("siliconflow.com");
-    }
-
-    private static boolean isDashScope(String provider, String endpoint) {
-        return provider.contains("dashscope") || provider.contains("百炼") || provider.contains("阿里")
-                || endpoint.contains("dashscope.aliyuncs.com");
-    }
-
-    private static boolean isGeminiOpenAiEndpoint(String provider, String endpoint) {
-        return provider.contains("gemini") || provider.contains("google")
-                || endpoint.contains("generativelanguage.googleapis.com");
-    }
-
-
-    private static boolean supportsEnableThinking(String model) {
-        if (model.contains("minimax") || ThinkingModeDetector.reasonsUnconditionally(model)) {
-            return false;
+        String value = raw.trim().toLowerCase(Locale.ROOT);
+        if (!SUPPORTED.contains(value)) {
+            throw new IllegalArgumentException("不支持的思考控制参数：" + raw
+                    + "（可选：" + String.join(" / ", SUPPORTED) + "）");
         }
-        return model.contains("qwen3") || model.contains("deepseek-v3") || model.contains("deepseek-v4")
-                || model.contains("glm-4.5") || model.contains("glm-4.6")
-                || model.contains("glm-4.7") || model.contains("glm-5")
-                || model.contains("kimi-k2");
-    }
-
-
-    private static boolean isConfigurableGemini(String model) {
-        return model.contains("gemini-2.5") || model.contains("gemini-3");
-    }
-
-
-    private static String normalize(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        return value;
     }
 }

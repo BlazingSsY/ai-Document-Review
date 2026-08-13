@@ -30,6 +30,7 @@ import {
   CreateModelParams,
   ModelType,
   ResponseFormatMode,
+  ReasoningControl,
 } from '../api/models';
 import { MODEL_PROVIDERS, MODEL_TYPES, PAGE_SIZE } from '../../../shared/utils/constants';
 
@@ -155,6 +156,9 @@ function ModelConfigPage() {
       timeout: 180,
       enabled: true,
       responseFormatMode: 'auto',
+      reasoningControl: 'none',
+      omitTemperature: false,
+      outputTokenBudget: undefined,
     });
     setModalOpen(true);
   };
@@ -177,6 +181,9 @@ function ModelConfigPage() {
       timeout: model.timeout || 180,
       enabled: model.enabled,
       responseFormatMode: model.responseFormatMode || 'auto',
+      reasoningControl: model.reasoningControl || 'none',
+      omitTemperature: !!model.omitTemperature,
+      outputTokenBudget: model.outputTokenBudget,
     });
     setModalOpen(true);
   };
@@ -185,6 +192,7 @@ function ModelConfigPage() {
     const provider = values.providerSelect === '__custom__'
       ? (values.providerCustom as string)
       : (values.providerSelect as string);
+    const isChat = ((values.modelType as ModelType) || activeModelType) === 'chat';
     const params: CreateModelParams = {
       name: values.name as string,
       provider,
@@ -200,6 +208,9 @@ function ModelConfigPage() {
       responseFormatMode: ((values.modelType as ModelType) || activeModelType) === 'chat'
         ? ((values.responseFormatMode as ResponseFormatMode) || 'auto')
         : 'auto',
+      reasoningControl: isChat ? ((values.reasoningControl as ReasoningControl) || 'none') : 'none',
+      omitTemperature: isChat && !!values.omitTemperature,
+      outputTokenBudget: isChat ? (values.outputTokenBudget as number | undefined) : undefined,
     };
     setSaving(true);
     try {
@@ -244,7 +255,7 @@ function ModelConfigPage() {
   const handleTestInForm = async () => {
     try {
       const values = await form.validateFields([
-        'name', 'modelType', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature', 'timeout', 'responseFormatMode',
+        'name', 'modelType', 'providerSelect', 'providerCustom', 'modelKey', 'apiEndpoint', 'apiKey', 'temperature', 'timeout', 'responseFormatMode', 'reasoningControl',
       ]);
       const provider = values.providerSelect === '__custom__'
         ? (values.providerCustom as string)
@@ -263,6 +274,8 @@ function ModelConfigPage() {
         responseFormatMode: ((values.modelType as ModelType) || activeModelType) === 'chat'
           ? ((form.getFieldValue('responseFormatMode') as ResponseFormatMode) || 'auto')
           : 'auto',
+        reasoningControl: (form.getFieldValue('reasoningControl') as ReasoningControl) || 'none',
+        omitTemperature: !!form.getFieldValue('omitTemperature'),
       });
       const data = res.data?.data;
       Modal.success({
@@ -447,7 +460,7 @@ function ModelConfigPage() {
           form={form}
           onFinish={handleSave}
           layout="vertical"
-          initialValues={{ modelType: 'chat', temperature: 0.3, timeout: 180, enabled: true, responseFormatMode: 'auto' }}
+          initialValues={{ modelType: 'chat', temperature: 0.3, timeout: 180, enabled: true, responseFormatMode: 'auto', reasoningControl: 'none', omitTemperature: false }}
         >
           <Form.Item name="modelType" hidden>
             <Input />
@@ -534,6 +547,62 @@ function ModelConfigPage() {
                 ]}
               />
             </Form.Item>
+          )}
+          {isChatModel && (
+            <Form.Item
+              name="reasoningControl"
+              label={
+                <span>
+                  关闭思考的参数&nbsp;
+                  <Tooltip title="审查要的是严格按 schema 输出 JSON，思维链会和最终 JSON 抢同一份输出预算。系统对所有模型统一请求关闭思考，但各家用的参数名不同，需要照供应商文档在这里选。选错会被供应商以 400 拒绝，不会静默忽略。">
+                    <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                  </Tooltip>
+                </span>
+              }
+              rules={[{ required: true, message: '请选择关闭思考使用的参数' }]}
+              extra="关不掉思考的模型（R1 / Reasoner / o 系列）选「不发送」，并配好下面两项。"
+            >
+              <Select
+                options={[
+                  { label: '不发送（普通模型，或关不掉的推理模型）', value: 'none' },
+                  { label: 'enable_thinking=false（硅基流动、阿里百炼）', value: 'enable_thinking' },
+                  { label: 'thinking={type:disabled}（DeepSeek 官方）', value: 'thinking' },
+                  { label: 'reasoning_effort=none（Gemini OpenAI 兼容端点）', value: 'reasoning_effort' },
+                ]}
+              />
+            </Form.Item>
+          )}
+          {isChatModel && (
+            <Space size="large" style={{ width: '100%' }} align="start">
+              <Form.Item
+                name="outputTokenBudget"
+                label={
+                  <span>
+                    输出预算下限&nbsp;
+                    <Tooltip title="留空时按本次注入的检查项数量动态计算（8192~24576）。关不掉思考的模型建议填 16000 以上，给思维链写完之后留出写最终 JSON 的地方。">
+                      <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                    </Tooltip>
+                  </span>
+                }
+                extra="留空＝自动"
+              >
+                <InputNumber min={1024} max={128000} step={1024} placeholder="自动" style={{ width: 160 }} />
+              </Form.Item>
+              <Form.Item
+                name="omitTemperature"
+                label={
+                  <span>
+                    不发送 temperature&nbsp;
+                    <Tooltip title="服务端锁定自身取值的推理模型（如 Kimi K2.6、GLM-5.1、o 系列）需要打开，否则发过去会被忽略甚至直接 400。打开后该模型不参与跨模型对比。">
+                      <QuestionCircleOutlined style={{ color: '#8c8c8c' }} />
+                    </Tooltip>
+                  </span>
+                }
+                valuePropName="checked"
+              >
+                <Switch checkedChildren="不发" unCheckedChildren="发送" />
+              </Form.Item>
+            </Space>
           )}
           <Form.Item
             name="apiKey"

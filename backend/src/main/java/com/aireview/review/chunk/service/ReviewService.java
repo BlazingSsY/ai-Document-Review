@@ -25,7 +25,6 @@ import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.core.DocumentRuleReviewSupport;
 import com.aireview.review.core.SourceEditStore;
 import com.aireview.document.DocumentRevisionWriter;
-import com.aireview.review.llm.ThinkingModeDetector;
 import com.aireview.document.ChapterReferenceResolver;
 import com.aireview.document.ChunkUtils;
 import com.aireview.document.DocumentEvidenceLocator;
@@ -113,9 +112,6 @@ public class ReviewService {
     /** Tracks cancelled task IDs so the async loop can exit early. */
     private final Set<String> cancelledTasks = ConcurrentHashMap.newKeySet();
 
-    /** Runtime observations; these adapt budgets without changing provider thinking switches. */
-    private final Set<String> observedReasoningModels = ConcurrentHashMap.newKeySet();
-    private final Map<String, Integer> learnedOutputTokenFloors = new ConcurrentHashMap<>();
 
     @Value("${file.documents-dir}")
     private String documentsDir;
@@ -989,7 +985,7 @@ public class ReviewService {
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在汇总审查结果...", 95);
             Map<String, Object> aggregatedResult = aggregateResults(chunkResults);
             // 在结果里冻结模型的可对比性，避免历史任务在跨模型对比 UI 里被误算进来
-            boolean crossModelEligible = !isRuntimeThinking(modelConfig);
+            boolean crossModelEligible = !AiModelService.omitsTemperature(modelConfig);
             aggregatedResult.put("crossModelEligible", crossModelEligible);
             // 逐章节方案每章节单次调用，统一标记为 single 采样
             aggregatedResult.put("samplingStrategy", "single");
@@ -1286,21 +1282,16 @@ public class ReviewService {
             int minChecks = RuleParser.expectedCheckCount(batch);
             String docResponse = null;
             int docOutputTokenBudget = initialOutputTokenBudget(modelConfig, minChecks);
-            boolean docRuntimeThinking = isRuntimeThinking(modelConfig);
             for (int parseAttempt = 1;
                  parseAttempt <= DOCUMENT_JSON_PARSE_MAX_ATTEMPTS && docParsed == null;
                  parseAttempt++) {
                 long seed = stableSeed(taskId, /*chunkIdx*/ -1, batchIdx) + (parseAttempt - 1L);
                 AiCallOptions docOptions = buildConvergenceOptions(
-                        modelConfig, seed, minChecks, docOutputTokenBudget, docRuntimeThinking);
+                        modelConfig, seed, minChecks, docOutputTokenBudget);
                 docResponse = callWithRetry(modelConfig, docSystemPrompt,
                         evidence.content(), docOptions);
                 docParsed = tryParseAiJson(docResponse);
                 AiModelService.AiResponseMetadata metadata = aiModelService.getLastResponseMetadata();
-                docRuntimeThinking = docRuntimeThinking
-                        || responseReasoningLength(metadata) > 0
-                        || hasReasoningMarker(docResponse);
-                rememberRuntimeThinking(modelConfig, docRuntimeThinking);
                 int expandedBudget = nextOutputTokenBudgetAfterLength(
                         modelConfig, docOutputTokenBudget, minChecks, metadata);
                 if (expandedBudget > docOutputTokenBudget
@@ -1311,7 +1302,6 @@ public class ReviewService {
                             responseReasoningLength(metadata), responseContentLength(metadata),
                             expandedBudget);
                     docOutputTokenBudget = expandedBudget;
-                    rememberOutputTokenFloor(modelConfig, expandedBudget);
                     docParsed = null;
                     continue;
                 }
@@ -1795,18 +1785,13 @@ public class ReviewService {
             // “模型未返回→待复核”。这里在解析失败时换种子重试（temperature=0 须换种子才能改变输出），
             // 多数能拿到合法 JSON，显著减少无定位的待复核噪声。
             int outputTokenBudget = initialOutputTokenBudget(modelConfig, minChecks);
-            boolean runtimeThinking = isRuntimeThinking(modelConfig);
             for (int attempt = 1; attempt <= JSON_PARSE_MAX_ATTEMPTS && parsed == null; attempt++) {
                 long seed = stableSeed(taskId, chunkIdx, s) + (attempt - 1);
                 AiCallOptions options = buildConvergenceOptions(
-                        modelConfig, seed, minChecks, outputTokenBudget, runtimeThinking);
+                        modelConfig, seed, minChecks, outputTokenBudget);
                 aiResponse = callWithRetry(modelConfig, systemPrompt, chunkContent, options);
                 parsed = tryParseAiJson(aiResponse);
                 AiModelService.AiResponseMetadata metadata = aiModelService.getLastResponseMetadata();
-                runtimeThinking = runtimeThinking
-                        || responseReasoningLength(metadata) > 0
-                        || hasReasoningMarker(aiResponse);
-                rememberRuntimeThinking(modelConfig, runtimeThinking);
                 int expandedBudget = nextOutputTokenBudgetAfterLength(
                         modelConfig, outputTokenBudget, minChecks, metadata);
                 if (expandedBudget > outputTokenBudget && attempt < JSON_PARSE_MAX_ATTEMPTS) {
@@ -1816,7 +1801,6 @@ public class ReviewService {
                             responseReasoningLength(metadata), responseContentLength(metadata),
                             expandedBudget);
                     outputTokenBudget = expandedBudget;
-                    rememberOutputTokenFloor(modelConfig, expandedBudget);
                     parsed = null;
                     continue;
                 }
@@ -2149,54 +2133,34 @@ public class ReviewService {
 
     private AiCallOptions buildConvergenceOptions(AiModelConfig modelConfig, long seed, int minChecks,
                                                    int outputTokenBudget) {
-        return buildConvergenceOptions(modelConfig, seed, minChecks, outputTokenBudget,
-                isRuntimeThinking(modelConfig));
-    }
-
-    private AiCallOptions buildConvergenceOptions(AiModelConfig modelConfig, long seed, int minChecks,
-                                                   int outputTokenBudget, boolean runtimeThinking) {
+        boolean omitTemperature = AiModelService.omitsTemperature(modelConfig);
         com.alibaba.fastjson2.JSONObject schema = minChecks > 0
                 ? ReviewResultSchema.schemaWithMinChecks(minChecks)
                 : ReviewResultSchema.schema();
         AiCallOptions.AiCallOptionsBuilder b = AiCallOptions.builder()
                 .seed(seed)
                 .maxTokensOverride(outputTokenBudget)
-                .omitTemperature(runtimeThinking)
+                .omitTemperature(omitTemperature)
                 .structuredSchema(com.alibaba.fastjson2.JSON.parseObject(
                         com.alibaba.fastjson2.JSON.toJSONString(schema)))
                 .structuredSchemaName(ReviewResultSchema.SCHEMA_NAME);
-        if (!runtimeThinking) {
+        if (!omitTemperature) {
             b.temperature(CONVERGENCE_TEMPERATURE).topP(CONVERGENCE_TOP_P);
         }
         return b.build();
     }
 
+    /**
+     * 本次请求的输出预算：按注入的检查项数量算一个内容相关的值，再让模型配置里声明的
+     * {@code output_token_budget} 作为下限抬一手。
+     *
+     * <p>不再有跨请求的自学习下限——之前那份 {@code learnedOutputTokenFloors} 是进程内状态，
+     * 重启即失、也没人看得见它学到了什么。要给某个模型更大预算，就在配置里写出来。
+     */
     private int initialOutputTokenBudget(AiModelConfig modelConfig, int checkCount) {
         int budget = dynamicOutputTokenBudget(checkCount);
-        if (isRuntimeThinking(modelConfig)) budget = Math.max(16000, budget);
-        return Math.max(budget, learnedOutputTokenFloors.getOrDefault(modelRuntimeKey(modelConfig), 0));
-    }
-
-    private boolean isRuntimeThinking(AiModelConfig modelConfig) {
-        return ThinkingModeDetector.reasonsUnconditionally(modelConfig)
-                || observedReasoningModels.contains(modelRuntimeKey(modelConfig));
-    }
-
-    private void rememberRuntimeThinking(AiModelConfig modelConfig, boolean observed) {
-        if (observed) observedReasoningModels.add(modelRuntimeKey(modelConfig));
-    }
-
-    private void rememberOutputTokenFloor(AiModelConfig modelConfig, int floor) {
-        learnedOutputTokenFloors.merge(modelRuntimeKey(modelConfig), floor, Math::max);
-    }
-
-    private String modelRuntimeKey(AiModelConfig modelConfig) {
-        if (modelConfig == null) return "unknown";
-        return String.join("|",
-                Objects.toString(modelConfig.getProvider(), "").toLowerCase(Locale.ROOT),
-                Objects.toString(modelConfig.getEndpoint(), "").toLowerCase(Locale.ROOT),
-                Objects.toString(modelConfig.getModelKey(), Objects.toString(modelConfig.getModelName(), ""))
-                        .toLowerCase(Locale.ROOT));
+        Integer configuredFloor = modelConfig == null ? null : modelConfig.getOutputTokenBudget();
+        return configuredFloor == null ? budget : Math.max(budget, configuredFloor);
     }
 
     static int nextOutputTokenBudgetAfterLength(AiModelConfig modelConfig, int currentBudget,
@@ -2223,13 +2187,6 @@ public class ReviewService {
         return Math.min(CONVERGENCE_LENGTH_RETRY_ABSOLUTE_MAX_OUTPUT_TOKENS, ceiling);
     }
 
-    private static boolean hasReasoningMarker(String response) {
-        if (response == null || response.isBlank()) return false;
-        String lower = response.toLowerCase(Locale.ROOT);
-        return lower.contains("<think>") || lower.contains("</think>")
-                || lower.contains("<thinking>") || lower.contains("</thinking>")
-                || lower.contains("<analysis>") || lower.contains("</analysis>");
-    }
 
     static int dynamicOutputTokenBudget(int checkCount) {
         long desired = CONVERGENCE_BASE_OUTPUT_TOKENS
