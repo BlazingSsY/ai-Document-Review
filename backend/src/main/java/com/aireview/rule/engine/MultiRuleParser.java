@@ -113,6 +113,15 @@ public class MultiRuleParser {
     private static final Pattern STEP_TEMPLATE_H2 = Pattern.compile("^##\\s+(.+?)\\s*$");
     private static final Pattern STEP_TEMPLATE_META =
             Pattern.compile("^\\s*-\\s*([^：:]+)[：:]\\s*(.+?)\\s*$");
+    /**
+     * 原子检查项小节。必须是三级标题：块本身用 {@code ## } 分隔，写成二级会被当成新规则。
+     */
+    private static final Pattern CHECK_SECTION_H3 = Pattern.compile("^###\\s*原子检查项\\s*$");
+    /** 一条检查项由「- 检查项编号：」起头，其后缩进行提供该条的字段。 */
+    private static final Pattern CHECK_ITEM_START =
+            Pattern.compile("^\\s*-\\s*检查项编号[：:]\\s*(.+?)\\s*$");
+    private static final Pattern CHECK_ITEM_FIELD =
+            Pattern.compile("^\\s+([^：:]+)[：:]\\s*(.+?)\\s*$");
 
     /**
      * 识别"新版规则模板"：每条规则用二级标题分隔，块内含 {@code - 规则类型：} 元数据行，
@@ -154,10 +163,32 @@ public class MultiRuleParser {
             String name = heading.replaceFirst("^\\d+\\s*[.、)）]\\s*", "").trim();
             if (name.isEmpty()) name = heading;
 
+            // 「### 原子检查项」小节单独抽出：既解析成 checks，也从正文里剔除，
+            // 避免同样的内容在提示词里出现两次（正文一次、检查项清单一次）。
+            int checksStart = -1;
+            for (int i = start + 1; i < end; i++) {
+                if (CHECK_SECTION_H3.matcher(lines[i].trim()).matches()) {
+                    checksStart = i;
+                    break;
+                }
+            }
+            int checksEnd = end;
+            if (checksStart >= 0) {
+                for (int i = checksStart + 1; i < end; i++) {
+                    if (lines[i].startsWith("###")) {
+                        checksEnd = i;
+                        break;
+                    }
+                }
+            }
+            List<ParsedCheck> checks = checksStart < 0
+                    ? List.of() : parseAtomicChecks(lines, checksStart + 1, checksEnd);
+
             StringBuilder bodyBuf = new StringBuilder();
             String ruleCode = null, ruleType = null, docType = null, description = null;
             List<String> keywords = List.of();
             for (int i = start + 1; i < end; i++) {
+                if (checksStart >= 0 && i >= checksStart && i < checksEnd) continue;
                 String line = lines[i];
                 if (line.trim().equals("---")) continue;
                 bodyBuf.append(line).append("\n");
@@ -188,10 +219,59 @@ public class MultiRuleParser {
             if (docType != null && !docType.isBlank()) meta.setDocumentType(docType);
             if (!keywords.isEmpty()) meta.setKeywords(keywords);
 
-            // checks 为空：整条规则原文上传，不做原子化拆分。
-            out.add(new ParsedRule(name, "md", body, meta, description, List.of()));
+            // 写了「### 原子检查项」的规则按条判定，每条各出一行 check_results；
+            // 没写的沿用旧行为：整条规则原文上传，由模型给单一结论。
+            out.add(new ParsedRule(name, "md", body, meta, description, checks));
         }
         return out;
+    }
+
+    /**
+     * 解析「### 原子检查项」小节。每条形如：
+     * <pre>
+     * - 检查项编号：QTP-XREF-01-C001
+     *   检查项：受试设备基准信息是否齐备
+     *   通过标准：设备名称、件号、构型、安装区域、数量与编号均写明
+     * </pre>
+     *
+     * <p>只认「检查项」「通过标准」两个字段。检查类型统一按 {@code presence} 落库——它在全文
+     * 逐章管线里不参与任何判定；证据要求由提示词统一声明，不再逐条重复。编号留空时由调用方
+     * 按「规则编号-C序号」补齐，但建议写死：编号稳定，跨次审查的结果才能对比。
+     */
+    private static List<ParsedCheck> parseAtomicChecks(String[] lines, int from, int to) {
+        List<ParsedCheck> checks = new ArrayList<>();
+        String code = null, question = null, passCriteria = null;
+        for (int i = from; i < to; i++) {
+            String line = lines[i];
+            Matcher startM = CHECK_ITEM_START.matcher(line);
+            if (startM.matches()) {
+                addAtomicCheck(checks, code, question, passCriteria);
+                code = startM.group(1);
+                question = null;
+                passCriteria = null;
+                continue;
+            }
+            if (code == null) continue;
+            Matcher fieldM = CHECK_ITEM_FIELD.matcher(line);
+            if (fieldM.matches()) {
+                switch (fieldM.group(1).trim()) {
+                    case "检查项" -> question = fieldM.group(2);
+                    case "通过标准" -> passCriteria = fieldM.group(2);
+                    default -> { }
+                }
+            }
+        }
+        addAtomicCheck(checks, code, question, passCriteria);
+        return checks;
+    }
+
+    /** 编号与检查项都在才算一条；通过标准可省略。 */
+    private static void addAtomicCheck(List<ParsedCheck> checks, String code,
+                                       String question, String passCriteria) {
+        if (code == null || code.isBlank() || question == null || question.isBlank()) return;
+        checks.add(new ParsedCheck(code.trim(), "presence", question.trim(),
+                passCriteria == null ? "" : passCriteria.trim(),
+                null, null, checks.size() + 1));
     }
 
     private static List<ParsedRule> parseJson(String originalFilename, String content) {

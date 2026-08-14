@@ -260,7 +260,11 @@ public class RuleParser {
     public static String bodyWithoutChecks(String body) {
         if (body == null || body.isBlank()) return body;
         int idx = body.indexOf(CHECKS_SECTION_MARKER);
-        return idx < 0 ? body : body.substring(0, idx).trim();
+        if (idx < 0) return body;
+        // 标题可能是 ## 或 ###：从「## 原子检查项」往前把同一行的 # 一并吃掉，
+        // 否则 substring 会在正文尾部留下一个孤立的 #。
+        while (idx > 0 && body.charAt(idx - 1) == '#') idx--;
+        return body.substring(0, idx).trim();
     }
 
     public static String buildStructuredSystemPrompt(List<RuleEntry> rules) {
@@ -288,10 +292,17 @@ public class RuleParser {
         // ③ Few-shot 锚点
         sp.append("【判定锚点 / Few-shot】\n");
         sp.append("category 锚点：必须从 [格式, 完整性, 标准符合性, 逻辑一致性, 术语一致性, 其他] 中选；无法归类填 其他。\n");
-        sp.append("rule_code 锚点：必须使用本提示词【审查规则清单】中给出的 [R-XXX] 编号；本次未注入的编号一律不得使用。\n");
+        sp.append("rule_code 锚点：必须逐字复制【审查规则清单】中方括号内的编号。编号格式随规则库而变"
+                + "（可能是 QTP-GEN-01、G-03、15-02-xxx 等），不要套用下方示例里的编号样式。\n");
+        sp.append("check_code 锚点：该规则列出了原子检查项的，用其 [编号]；未列出原子检查项的，"
+                + "用『该规则编号-C001』拼接（例如规则编号为 QTP-GEN-01 时写 QTP-GEN-01-C001）。\n");
         sp.append("location 锚点：按 \"一级标题 > 二级标题 > 三级标题\" 写，逐字与原文一致，禁止仅写 \"原文\" / \"表格中\" / \"上文\"。\n");
-        sp.append("evidence 锚点：只能逐字复制当前章节中的最小充分原文片段或表格行，不得改写、概括，也不得添加 \"原文写道\" / \"文中提到\" 等前后缀。\n");
+        sp.append("evidence 锚点：**每一条 check_results 都必须给出证据**——只能逐字复制当前章节中的最小充分原文片段或表格行，"
+                + "不得改写、概括，也不得添加 \"原文写道\" / \"文中提到\" 等前后缀。"
+                + "唯一例外是「该写而未写」：此时 evidence 填空字符串，并在 reason 里写明缺失项与已检索范围。\n");
         sp.append("reason 锚点：Fail 或有直接证据的 Review 必须写成『原文“<evidence逐字内容>”存在/表明……』；中文引号内文字必须与 evidence 字段完全一致。内容缺失且无可引用原文时，evidence 填空字符串，reason 明确说明缺少的字段及检查范围。\n\n");
+        sp.append("下面三个示例只演示【字段结构与表述方式】。其中的 R-001 / R-003-C001 等编号是占位符，"
+                + "本次审查一律不得出现——rule_code 与 check_code 必须来自上文【审查规则清单】。\n");
         sp.append("示例 1（正例，识别为问题）：\n");
         sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"原文“在常温下进行”未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"category\":\"完整性\",\"evidence\":\"在常温下进行\"}],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"是否明确工作温度区间\",\"status\":\"Fail\",\"reason\":\"原文“在常温下进行”未给出明确温度上下限\",\"evidence\":\"在常温下进行\",\"missing_items\":[\"工作温度区间\"],\"suggestion\":\"补充明确温度区间\",\"confidence\":\"high\"}]}\n");
         sp.append("示例 2（规则已适配到本章节，但原文明示前置条件不成立/不适用 → 判 Review 交人工复核，不产生 issue）：\n");
@@ -326,12 +337,8 @@ public class RuleParser {
                     if (check.passCriteria != null && !check.passCriteria.isBlank()) {
                         sp.append("；通过标准：").append(check.passCriteria);
                     }
-                    if (check.category != null && !check.category.isBlank()) {
-                        sp.append("；分类：").append(check.category);
-                    }
-                    if (Boolean.TRUE.equals(check.evidenceRequired)) {
-                        sp.append("；必须给出证据");
-                    }
+                    // 分类与证据要求不再逐条重复：category 由 issues 的枚举锚点统一约束，
+                    // 证据要求写在 evidence 锚点里，对所有检查项一律生效。
                     sp.append("\n");
                 }
             }
@@ -339,11 +346,15 @@ public class RuleParser {
         sp.append("\n本次注入的 rule_code 清单：").append(String.join(", ", manifest)).append("\n");
         sp.append("issues[].rule_code 必须且只能从该清单中选择；不在清单内的编号不允许出现。\n");
         sp.append("若规则下列出了原子检查项，则必须为每个原子检查项输出一条 check_results[]；"
-                + "status 只能是 Pass、Fail、Review 三选一（不得使用 N/A 或 Partial）。"
-                + "证据充分且满足通过标准判 Pass；明确不满足判 Fail；"
-                + "证据不足、部分满足、或原文明示前置条件不成立/不适用，一律判 Review 交人工复核（不得判 Pass）。"
-                + "不能因为章节主题与规则无关而批量判 Review，这类规则应由规则分发阶段排除。"
-                + "基础文字质量检查始终适用。\n");
+                + "status 只能是 Pass、Fail、Review 三选一（不得使用 N/A 或 Partial）。\n");
+        sp.append("判定顺序（自上而下，命中即停）：\n");
+        sp.append("1. 有逐字证据且满足通过标准 → Pass；\n");
+        sp.append("2. 有逐字证据且明确不满足，或该写而未写 → Fail；\n");
+        sp.append("3. 原文明示前置条件不成立（如「陪试设备：无」）→ Review；\n");
+        sp.append("4. 已在本章检索过该规则涉及的对象、确实未出现 → Review，"
+                + "reason 必须写明检索范围（如「已检索本章正文、表 3-1 及图注，未出现承试单位相关表述」）。\n");
+        sp.append("第 4 档不是免判通道：不得仅凭「本章标题与规则名不像」就判 Review，必须先真正检索。"
+                + "凡判 Review 都要在 reason 里说清是第 3 档还是第 4 档。基础文字质量检查始终适用。\n");
 
         // 表格阅读规则（保留，原 prompt 中证实对 HTML 表格审查很关键）
         sp.append("\n【表格阅读注意事项】\n");
@@ -359,7 +370,7 @@ public class RuleParser {
         sp.append("本次共注入 ").append(expected).append(" 个待判定项（基础文字质量检查 + 上述每条规则各至少一项）。\n");
         sp.append("check_results 数组必须【至少包含 ").append(expected).append(" 条】，且逐一覆盖上面列出的每一条规则：\n");
         sp.append("- 即使某条规则判 Pass、或与本章主题关系不大，也必须为其输出一条 check_results；\n");
-        sp.append("- rule_code 用该规则编号；有原子检查项的用其 check_code，无原子检查项的用『规则编号-C001』作为 check_code；\n");
+        sp.append("- rule_code 与 check_code 一律逐字取自上文清单（见 check_code 锚点），不得使用示例里的占位编号；\n");
         sp.append("- 严禁遗漏、合并或少于 ").append(expected).append(" 条；\n");
         sp.append("- Fail 或有直接证据的 Review：evidence 必须是可在输入原文中逐字搜索到的最小片段，reason 必须用中文引号“”引用同一片段。\n");
         return sp.toString();

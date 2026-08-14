@@ -60,6 +60,17 @@ public class AiCallOptions {
     private final boolean forceJsonObjectFallback = false;
 
     /**
+     * 调用方给的 systemPrompt 里是否**已经**写了这份 schema。
+     *
+     * <p>审查用的 system prompt 由 {@code RuleParser.buildStructuredSystemPrompt} 生成，
+     * 它自带一段「输出 Schema」；若这里再追加一遍，非 json_schema 模式下同一份 schema 会
+     * 在提示词里出现两次，白吃几千字符的输入预算，还可能让模型对以哪份为准产生歧义。
+     * 置 true 时 {@code buildStructuredOutputPrompt} 只补格式约束、不再重复 schema 正文。
+     */
+    @Builder.Default
+    private final boolean promptCarriesSchema = false;
+
+    /**
      * 是否对 system prompt 启用 provider 级缓存。
      * <ul>
      *   <li>Anthropic：在 system 内容块加 {@code cache_control={type:ephemeral}}，5 分钟 TTL；</li>

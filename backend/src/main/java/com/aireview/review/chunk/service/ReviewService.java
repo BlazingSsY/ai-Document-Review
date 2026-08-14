@@ -2143,7 +2143,9 @@ public class ReviewService {
                 .omitTemperature(omitTemperature)
                 .structuredSchema(com.alibaba.fastjson2.JSON.parseObject(
                         com.alibaba.fastjson2.JSON.toJSONString(schema)))
-                .structuredSchemaName(ReviewResultSchema.SCHEMA_NAME);
+                .structuredSchemaName(ReviewResultSchema.SCHEMA_NAME)
+                // 审查 prompt 由 RuleParser.buildStructuredSystemPrompt 生成，自带「输出 Schema」段
+                .promptCarriesSchema(true);
         if (!omitTemperature) {
             b.temperature(CONVERGENCE_TEMPERATURE).topP(CONVERGENCE_TOP_P);
         }

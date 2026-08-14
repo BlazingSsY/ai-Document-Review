@@ -771,6 +771,10 @@ public class AiModelService {
         if (RESPONSE_FORMAT_JSON_SCHEMA.equals(responseFormatMode)) {
             return base + strictJsonContract;
         }
+        if (options.isPromptCarriesSchema()) {
+            // 提示词自己已经写了一份 schema，再追加就是同一份出现两次。
+            return base + strictJsonContract;
+        }
         return base
                 + strictJsonContract
                 + "\n输出必须符合以下 JSON Schema：\n"
