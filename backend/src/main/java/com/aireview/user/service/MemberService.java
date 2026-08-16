@@ -286,8 +286,8 @@ public class MemberService {
         List<Long> requestedLibraries = request == null || request.getLibraryIds() == null
                 ? List.of() : request.getLibraryIds();
         if (!requestedLibraries.isEmpty()
-                && !requestedFeatures.contains(FeaturePermissionService.ENV_TEST_OUTLINE_REVIEW)) {
-            throw new IllegalArgumentException("分配规则库前必须同时分配环境试验大纲审查功能");
+                && !featurePermissionService.includesSharedRuleLibraryFeature(requestedFeatures)) {
+            throw new IllegalArgumentException("分配规则库前必须同时分配使用该规则库的审查功能");
         }
         String operatorRole = operator.isSupervisor() ? ROLE_SUPERVISOR : operator.role();
         Set<Long> grantableLibraries = new HashSet<>(

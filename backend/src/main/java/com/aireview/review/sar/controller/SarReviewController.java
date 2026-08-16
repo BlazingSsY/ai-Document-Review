@@ -47,6 +47,8 @@ public class SarReviewController {
             ReviewTaskDTO task = sarReviewService.submitReview(
                     file, scenarioId, selectedModel, userId, qualityCheckEnabled, role, reviewCategory);
             return ApiResponse.success("SAR review task submitted", task);
+        } catch (SecurityException e) {
+            return ApiResponse.error(403, e.getMessage());
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         } catch (Exception e) {

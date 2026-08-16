@@ -7,11 +7,13 @@ import com.aireview.review.sar.entity.SarReviewTask;
 import com.aireview.review.sar.repository.SarDocumentVectorRepository;
 import com.aireview.review.sar.repository.SarReviewAuditLogMapper;
 import com.aireview.review.sar.repository.SarReviewTaskMapper;
+import com.aireview.review.feature.ReviewFeatureRegistry;
 import com.aireview.rule.repository.RuleCheckMapper;
 import com.aireview.rule.repository.RuleMapper;
 import com.aireview.rule.repository.SarRuleCheckMapper;
 import com.aireview.rule.service.SarRuleService;
 import com.aireview.scenario.service.SarScenarioService;
+import com.aireview.user.service.FeaturePermissionService;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,6 +47,8 @@ class SarReviewServiceTest {
     @Mock private SarDocumentVectorRepository vectorRepository;
     @Mock private AiModelService aiModelService;
     @Mock private WebSocketService webSocketService;
+    @Mock private ReviewFeatureRegistry reviewFeatureRegistry;
+    @Mock private FeaturePermissionService featurePermissionService;
 
     @InjectMocks private SarReviewService service;
     private SarReviewService asyncProxy;
@@ -63,6 +67,7 @@ class SarReviewServiceTest {
         original.setFilePath("outline.docx");
         original.setScenarioId(11L);
         original.setSelectedModel("qwen");
+        when(reviewFeatureRegistry.resolveStoredCategory(null)).thenReturn("ENV_TEST_OUTLINE");
         when(taskMapper.selectById("original")).thenReturn(original);
         when(taskMapper.insert(any(SarReviewTask.class))).thenAnswer(invocation -> {
             SarReviewTask inserted = invocation.getArgument(0);

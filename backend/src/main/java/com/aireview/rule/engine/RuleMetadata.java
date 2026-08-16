@@ -40,6 +40,8 @@ public class RuleMetadata {
     public static final String TYPE_SECTION_SPECIFIC = "section_specific";
     public static final String TYPE_DOCUMENT_SPECIFIC = "document_specific";
     public static final String TYPE_OUTPUT = "output";
+    /** Generic business section selected by the active {@code ReviewDocumentProcessor}. */
+    public static final String TYPE_DOMAIN_SECTION = "domain_section";
     /** 仅作用于"试验项目章节"——由试验概述(7.1)声明的试验项目动态匹配出的那批一级标题章节。 */
     public static final String TYPE_TEST_ITEM = "test_item_chapter";
     /**
@@ -77,7 +79,13 @@ public class RuleMetadata {
     }
 
     public boolean isTestItem() {
-        return TYPE_TEST_ITEM.equalsIgnoreCase(ruleType);
+        return isDomainSection();
+    }
+
+    /** New features use domain_section; test_item_chapter remains a compatible outline alias. */
+    public boolean isDomainSection() {
+        return TYPE_DOMAIN_SECTION.equalsIgnoreCase(ruleType)
+                || TYPE_TEST_ITEM.equalsIgnoreCase(ruleType);
     }
 
     public boolean isGeneralChapter() {
@@ -213,6 +221,9 @@ public class RuleMetadata {
         }
         if (s.contains("专项") || s.contains("section") || s.contains("specific")) return TYPE_SECTION_SPECIFIC;
         if (s.contains("文档") || s.equals("document") || s.equals("document_specific")) return TYPE_DOCUMENT_SPECIFIC;
+        if (s.equals("domain_section") || s.equals("domainsection") || s.contains("业务章节")) {
+            return TYPE_DOMAIN_SECTION;
+        }
         if (s.contains("试验项目") || s.equals("test_item_chapter") || s.equals("test_item") || s.equals("testitem")) return TYPE_TEST_ITEM;
         if (s.contains("输出") || s.equals("output")) return TYPE_OUTPUT;
         return s;

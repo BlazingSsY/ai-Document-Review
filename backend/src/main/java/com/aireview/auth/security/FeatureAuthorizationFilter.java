@@ -47,12 +47,11 @@ public class FeatureAuthorizationFilter extends OncePerRequestFilter {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication != null && authentication.isAuthenticated()
                 && authentication.getPrincipal() instanceof Long userId
-                && !featurePermissionService.hasFeature(
-                        userId, FeaturePermissionService.ENV_TEST_OUTLINE_REVIEW)) {
+                && !featurePermissionService.hasAnyFeature(userId)) {
             response.setStatus(HttpServletResponse.SC_FORBIDDEN);
             response.setContentType("application/json;charset=UTF-8");
             response.getWriter().write(JSON.toJSONString(
-                    ApiResponse.error(403, "当前账号未获授权使用环境试验大纲审查功能")));
+                    ApiResponse.error(403, "当前账号未获授权使用审查功能")));
             return;
         }
         filterChain.doFilter(request, response);

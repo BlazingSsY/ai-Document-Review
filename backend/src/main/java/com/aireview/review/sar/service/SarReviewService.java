@@ -25,16 +25,18 @@ import com.aireview.rule.repository.RuleMapper;
 import com.aireview.rule.repository.SarRuleCheckMapper;
 import com.aireview.rule.service.SarRuleService;
 import com.aireview.scenario.service.SarScenarioService;
-import com.aireview.review.core.ReviewCategory;
 import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.core.SourceEditStore;
+import com.aireview.review.feature.ReviewDocument;
+import com.aireview.review.feature.ReviewFeature;
+import com.aireview.review.feature.ReviewFeatureRegistry;
 import com.aireview.review.dto.SourceEditRequest;
 import com.aireview.review.llm.JsonExtractor;
-import com.aireview.document.ChunkUtils;
 import com.aireview.document.DocumentEvidenceLocator;
 import com.aireview.document.DocumentRevisionWriter;
 import com.aireview.document.DocumentSourceMapper;
 import com.aireview.document.WordParser;
+import com.aireview.user.service.FeaturePermissionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -96,6 +98,8 @@ public class SarReviewService {
     private final SarDocumentVectorRepository documentVectorRepository;
     private final AiModelService aiModelService;
     private final WebSocketService webSocketService;
+    private final ReviewFeatureRegistry reviewFeatureRegistry;
+    private final FeaturePermissionService featurePermissionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final Pattern FIGURE_TABLE_CAPTION = Pattern.compile(
@@ -278,11 +282,12 @@ public class SarReviewService {
                                       String selectedModel, Long userId,
                                       boolean qualityCheckEnabled, String role,
                                       String reviewCategory) throws IOException {
-        String category = ReviewCategory.normalize(reviewCategory);
+        ReviewFeature reviewFeature = reviewFeatureRegistry.requireEnabled(reviewCategory);
+        String category = reviewFeatureRegistry.resolveStoredCategory(reviewFeature.category());
+        featurePermissionService.requireFeature(
+                userId, reviewFeatureRegistry.permissionCode(reviewFeature));
         String originalFilename = file.getOriginalFilename();
-        if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
-            throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
-        }
+        reviewFeature.documentProcessor().validateUpload(originalFilename);
         sarScenarioService.requireReviewAccess(scenarioId, userId, role);
 
         Path uploadDir = Path.of(documentsDir);
@@ -407,7 +412,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
-        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
+        dto.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -484,7 +489,7 @@ public class SarReviewService {
         task.setScenarioId(original.getScenarioId());
         task.setSelectedModel(original.getSelectedModel());
         task.setQualityCheckEnabled(original.getQualityCheckEnabled());
-        task.setReviewCategory(ReviewCategory.resolveOrDefault(original.getReviewCategory()));
+        task.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(original.getReviewCategory()));
         task.setStatus(SarReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -713,7 +718,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
-        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
+        dto.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -756,7 +761,7 @@ public class SarReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("SAR");
-        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
+        dto.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -853,11 +858,9 @@ public class SarReviewService {
         List<Map<String, Object>> sources = new ArrayList<>();
         if (task.getFilePath() == null || task.getFilePath().isBlank()) return sources;
         try {
-            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
-            int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
-            List<WordParser.Chapter> chapters = firstRealIdx > 0
-                    ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
-                    : rawChapters;
+            ReviewFeature reviewFeature = reviewFeatureRegistry.requireRegistered(task.getReviewCategory());
+            ReviewDocument reviewDocument = reviewFeature.documentProcessor().parse(task.getFilePath());
+            List<WordParser.Chapter> chapters = reviewDocument.structuredReviewChapters();
             for (int i = 0; i < chapters.size(); i++) {
                 sources.add(toOriginalSource(chapters.get(i), i + 1));
             }
@@ -900,15 +903,10 @@ public class SarReviewService {
         webSocketService.sendTaskProgress(taskId, SarReviewTask.STATUS_PROCESSING,
                 "SAR: 正在解析上传文档...", 8);
 
-        List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
-        if (rawChapters.isEmpty() || rawChapters.stream().allMatch(ch -> ch.getContent().isBlank())) {
-            throw new RuntimeException("Document content is empty or cannot be parsed");
-        }
+        ReviewFeature reviewFeature = reviewFeatureRegistry.requireRegistered(task.getReviewCategory());
+        ReviewDocument reviewDocument = reviewFeature.documentProcessor().parse(task.getFilePath());
         throwIfCancelled(taskId);
-        int firstRealIdx = ChunkUtils.findFirstRealChapterIndex(rawChapters);
-        List<WordParser.Chapter> chapters = firstRealIdx > 0
-                ? new ArrayList<>(rawChapters.subList(firstRealIdx, rawChapters.size()))
-                : rawChapters;
+        List<WordParser.Chapter> chapters = reviewDocument.structuredReviewChapters();
 
         AiModelConfig embeddingModel = aiModelService.getFirstEnabledModelByType(AiModelService.MODEL_TYPE_EMBEDDING);
         if (embeddingModel == null) {

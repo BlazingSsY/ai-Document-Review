@@ -144,16 +144,16 @@ public class RuleDispatcher {
      * rules. The caller supplies the built-in text-quality rule for those chapters.
      */
     /**
-     * @param isTestItemChapter 当前章节是否被识别为"试验项目章节"（由试验概述 7.1 动态匹配）。
-     *                          rule_type=test_item 的规则仅在该值为 true 时作用于本章。
+     * @param isDomainSection 当前章节是否被业务功能识别为领域章节。环境试验大纲中的
+     *                        领域章节就是试验项目章节。
      */
     public static DispatchResult dispatchForChunk(String chapterTitle,
                                                   String chapterBody,
                                                   List<PreparedRule> prepared,
                                                   int basicOnlyMaxChapter,
-                                                  boolean isTestItemChapter) {
+                                                  boolean isDomainSection) {
         return dispatchForChunk(chapterTitle, chapterBody, prepared, basicOnlyMaxChapter,
-                isTestItemChapter, false, null);
+                isDomainSection, false, null);
     }
 
     /**
@@ -168,7 +168,7 @@ public class RuleDispatcher {
                                                   String chapterBody,
                                                   List<PreparedRule> prepared,
                                                   int basicOnlyMaxChapter,
-                                                  boolean isTestItemChapter,
+                                                  boolean isDomainSection,
                                                   boolean isGeneralSection,
                                                   List<String> chunkTitles) {
         List<PreparedRule> applied = new ArrayList<>();
@@ -208,9 +208,9 @@ public class RuleDispatcher {
                     continue;
                 }
                 reason = "general_chapter";
-            } else if (meta != null && meta.isTestItem()) {
-                // 试验项目章节规则：只作用于被识别为"试验项目章节"的章；非试验项目章一律跳过。
-                if (!isTestItemChapter) {
+            } else if (meta != null && meta.isDomainSection()) {
+                // 领域章节规则由当前审查功能解释；环境试验大纲兼容旧 test_item_chapter 类型。
+                if (!isDomainSection) {
                     continue;
                 }
                 // 配了 keywords 就再按标题过滤一次，把规则收敛到具体那个试验项目。
@@ -226,7 +226,8 @@ public class RuleDispatcher {
                         continue;
                     }
                 }
-                reason = "test_item_chapter";
+                reason = RuleMetadata.TYPE_DOMAIN_SECTION.equalsIgnoreCase(meta.getRuleType())
+                        ? "domain_section" : "test_item_chapter";
             } else if (meta != null && meta.isSectionSpecific()) {
                 // Specific rules require a heading match to be included. 合并片对子章节
                 // 标题逐个尝试，任一命中即注入。

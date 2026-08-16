@@ -20,10 +20,13 @@ import com.aireview.rule.service.RuleService;
 import com.aireview.scenario.service.ScenarioService;
 import com.aireview.rule.repository.RuleCheckMapper;
 import com.aireview.rule.repository.RuleMapper;
-import com.aireview.review.core.ReviewCategory;
 import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.core.DocumentRuleReviewSupport;
 import com.aireview.review.core.SourceEditStore;
+import com.aireview.review.feature.ChapterReviewPlan;
+import com.aireview.review.feature.ReviewDocument;
+import com.aireview.review.feature.ReviewFeature;
+import com.aireview.review.feature.ReviewFeatureRegistry;
 import com.aireview.document.DocumentRevisionWriter;
 import com.aireview.document.ChapterReferenceResolver;
 import com.aireview.document.ChunkUtils;
@@ -33,6 +36,7 @@ import com.aireview.rule.engine.RuleDispatcher;
 import com.aireview.rule.engine.RuleMetadata;
 import com.aireview.rule.engine.RuleParser;
 import com.aireview.document.WordParser;
+import com.aireview.user.service.FeaturePermissionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -55,8 +59,6 @@ import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -76,6 +78,8 @@ public class ReviewService {
     private final RuleMapper ruleMapper;
     private final ReviewAuditLogMapper reviewAuditLogMapper;
     private final ScenarioService scenarioService;
+    private final ReviewFeatureRegistry reviewFeatureRegistry;
+    private final FeaturePermissionService featurePermissionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -228,12 +232,13 @@ public class ReviewService {
                                       String selectedModel, Long userId,
                                       boolean qualityCheckEnabled,
                                       String reviewCategory) throws IOException {
-        String category = ReviewCategory.normalize(reviewCategory);
+        ReviewFeature reviewFeature = reviewFeatureRegistry.requireEnabled(reviewCategory);
+        String category = reviewFeatureRegistry.resolveStoredCategory(reviewFeature.category());
+        featurePermissionService.requireFeature(
+                userId, reviewFeatureRegistry.permissionCode(reviewFeature));
         scenarioService.validateScenarioForReview(scenarioId, userId);
         String originalFilename = file.getOriginalFilename();
-        if (originalFilename == null || (!originalFilename.endsWith(".doc") && !originalFilename.endsWith(".docx"))) {
-            throw new IllegalArgumentException("Only Word documents (.doc, .docx) are supported");
-        }
+        reviewFeature.documentProcessor().validateUpload(originalFilename);
 
         // Save the uploaded file
         Path uploadDir = Path.of(documentsDir);
@@ -511,7 +516,7 @@ public class ReviewService {
         // 重审要复现原任务的配置。qualityCheckEnabled 此前漏继承，导致重审一个关闭了
         // 全文质量检查的任务时，会因列默认值 TRUE 而重新跑满质量检查（SAR 侧一直是继承的）。
         task.setQualityCheckEnabled(original.getQualityCheckEnabled());
-        task.setReviewCategory(ReviewCategory.resolveOrDefault(original.getReviewCategory()));
+        task.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(original.getReviewCategory()));
         task.setStatus(ReviewTask.STATUS_PENDING);
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
@@ -568,14 +573,16 @@ public class ReviewService {
             // 切片过程必须与 executeReviewAsync 完全一致：失败切片是按编号定位的
             // （chunks.get(chunkNumber - 1)），两边切法只要有一点不同，重审就会审到
             // 另一个章节上去。
-            List<WordParser.Chapter> chapters = WordParser.parseChapters(task.getFilePath());
+            ReviewFeature reviewFeature = reviewFeatureRegistry.requireRegistered(task.getReviewCategory());
+            ReviewDocument reviewDocument = reviewFeature.documentProcessor().parse(task.getFilePath());
+            ChapterReviewPlan chapterPlan = reviewFeature.documentProcessor().planChapterReview(
+                    reviewDocument, maxChunkTokens, generalSectionEndChapter);
+            List<WordParser.Chapter> chapters = chapterPlan.chapters();
             List<Rule> rules = ruleService.getRulesByScenarioId(task.getScenarioId());
             List<RuleDispatcher.PreparedRule> preparedRules = RuleDispatcher.prepare(rules);
-            List<String> declaredTestItems = extractDeclaredTestItems(chapters);
             attachChecks(preparedRules);
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
-            List<ChunkUtils.ChunkResult> chunks = ChunkUtils.chunkWithGeneralSection(
-                    chapters, maxChunkTokens, resolveGeneralSectionEnd(chapters, declaredTestItems));
+            List<ChunkUtils.ChunkResult> chunks = chapterPlan.chunks();
             final boolean qualityCheck = !Boolean.FALSE.equals(task.getQualityCheckEnabled());
 
             List<Integer> validChunkNumbers = failedChunkNumbers.stream()
@@ -620,7 +627,7 @@ public class ReviewService {
                 final ChunkUtils.ChunkResult chunk = chunks.get(chunkIdx);
                 final RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
                         chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter,
-                        isTestItemChapter(chunk.getLabel(), declaredTestItems),
+                        reviewFeature.documentProcessor().isDomainSection(reviewDocument, chunk.getLabel()),
                         chunk.isGeneralSection(), chunk.titlesForDispatch());
 
                 CompletableFuture<Void> fut = CompletableFuture.runAsync(() -> {
@@ -720,17 +727,14 @@ public class ReviewService {
             updateTaskStatus(task, ReviewTask.STATUS_PROCESSING, null);
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "开始文件审查...", 5);
 
-            // 1. Parse Word document into chapters (by Heading 1)
-            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在解析文档结构（按一级标题拆分章节）...", 10);
-            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
-            if (rawChapters.isEmpty() || rawChapters.stream().allMatch(ch -> ch.getContent().isBlank())) {
-                throw new RuntimeException("文档内容为空或无法解析");
-            }
-
-            // 不再预先裁掉封面/签署页/目录：它们是通用章节段的一部分，签署是否齐全、
-            // 目录与正文是否对得上这类检查正需要它们在场。边界由 resolveGeneralSectionEnd
-            // 决定；识别不出时 chunkWithGeneralSection 内部会退回「跳过前置 + 逐章」的旧行为。
-            List<WordParser.Chapter> chapters = rawChapters;
+            // 1. Delegate document-shape decisions to the selected business feature.
+            webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING, "正在按审查功能解析文档结构...", 10);
+            ReviewFeature reviewFeature = reviewFeatureRegistry.requireRegistered(task.getReviewCategory());
+            ReviewDocument reviewDocument = reviewFeature.documentProcessor().parse(task.getFilePath());
+            ChapterReviewPlan chapterPlan = reviewFeature.documentProcessor().planChapterReview(
+                    reviewDocument, maxChunkTokens, generalSectionEndChapter);
+            List<WordParser.Chapter> rawChapters = reviewDocument.sourceChapters();
+            List<WordParser.Chapter> chapters = chapterPlan.chapters();
             log.info("Document parsed into {} chapter(s)", chapters.size());
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                     "文档解析完成，共 " + chapters.size() + " 个章节", 15);
@@ -753,18 +757,15 @@ public class ReviewService {
             // 3. Get AI model config
             AiModelConfig modelConfig = aiModelService.getEnabledModel(task.getSelectedModel());
 
-            // 4. 试验项目章节识别必须先于切片：通用段的边界就是「第一个试验项目章节」，
-            //    切片需要它才能决定合并到哪里。
-            List<String> declaredTestItems = extractDeclaredTestItems(chapters);
-            if (!declaredTestItems.isEmpty()) {
-                log.info("Detected {} declared test item(s) from overview: {}",
-                        declaredTestItems.size(), declaredTestItems);
+            if (!reviewDocument.declaredDomainSections().isEmpty()) {
+                log.info("Detected {} declared domain section(s): {}",
+                        reviewDocument.declaredDomainSections().size(),
+                        reviewDocument.declaredDomainSections());
             }
 
-            // 5. 切片：通用章节段合并为一片，试验项目章节逐章一片
-            int generalEnd = resolveGeneralSectionEnd(chapters, declaredTestItems);
-            List<ChunkUtils.ChunkResult> chunks =
-                    ChunkUtils.chunkWithGeneralSection(chapters, maxChunkTokens, generalEnd);
+            // 5. The feature owns chapter grouping; the pipeline only executes the plan.
+            int generalEnd = chapterPlan.generalSectionEnd();
+            List<ChunkUtils.ChunkResult> chunks = chapterPlan.chunks();
             log.info("Document split into {} chunk(s) for AI review", chunks.size());
             webSocketService.sendTaskProgress(taskId, ReviewTask.STATUS_PROCESSING,
                     "文档已切分为 " + chunks.size() + " 个片段"
@@ -780,7 +781,7 @@ public class ReviewService {
                 ChunkUtils.ChunkResult chunk = chunks.get(i);
                 RuleDispatcher.DispatchResult dispatch = RuleDispatcher.dispatchForChunk(
                         chunk.getLabel(), chunk.getContent(), preparedRules, basicOnlyMaxChapter,
-                        isTestItemChapter(chunk.getLabel(), declaredTestItems),
+                        reviewFeature.documentProcessor().isDomainSection(reviewDocument, chunk.getLabel()),
                         chunk.isGeneralSection(), chunk.titlesForDispatch());
                 dispatches.add(dispatch);
 
@@ -1531,181 +1532,6 @@ public class ReviewService {
             sb.append(i + 1).append(". ").append(t == null || t.isBlank() ? "(无标题)" : t).append('\n');
         }
         return sb.toString();
-    }
-
-    /**
-     * 定出「通用章节段」的结束位置（不含），即第一个试验项目章节在 {@code chapters} 中的下标。
-     *
-     * <p>优先自动识别：试验大纲的结构天然分成两半——前半是通用内容（封面、目录、试验目的、
-     * 范围、引用文件、术语、承试单位、人员职责……），后半是一个个具体试验项目。系统已经能
-     * 从试验概述里提取声明的试验项目清单，用它反查第一个试验项目章节即可，换一份章节数不同
-     * 的大纲也能自适应，不必硬编码「前 12 章」。
-     *
-     * <p>{@code review.chunk.general-section-end-chapter} 可覆盖：试验概述写法不规范、
-     * 提不出清单时用它兜底。
-     *
-     * @return 结束下标（不含）；返回 -1 表示定不出边界，调用方应回退逐章切片
-     */
-    private int resolveGeneralSectionEnd(List<WordParser.Chapter> chapters,
-                                         List<String> declaredTestItems) {
-        if (chapters == null || chapters.isEmpty()) return -1;
-
-        // ① 配置覆盖：找出章节号等于该值的章，其后一位即通用段结束。
-        if (generalSectionEndChapter > 0) {
-            for (int i = 0; i < chapters.size(); i++) {
-                String title = chapters.get(i).getTitle();
-                if (title == null) continue;
-                Matcher m = CHAPTER_NUMBER_IN_TITLE.matcher(title.trim());
-                if (m.find()) {
-                    try {
-                        if (Integer.parseInt(m.group(1)) == generalSectionEndChapter) {
-                            log.info("General section end pinned by config: chapter {} at index {}",
-                                    generalSectionEndChapter, i);
-                            return i + 1;
-                        }
-                    } catch (NumberFormatException ignored) {
-                        // 标题里的数字不是章节号，继续找下一章
-                    }
-                }
-            }
-            log.warn("general-section-end-chapter={} not found in document, falling back to auto detection",
-                    generalSectionEndChapter);
-        }
-
-        // ② 自动识别：第一个试验项目章节。
-        if (declaredTestItems == null || declaredTestItems.isEmpty()) {
-            log.info("No declared test items extracted; general-section merging disabled for this document");
-            return -1;
-        }
-        for (int i = 0; i < chapters.size(); i++) {
-            if (isTestItemChapter(chapters.get(i).getTitle(), declaredTestItems)) {
-                log.info("General section = chapters [0, {}), first test-item chapter: '{}'",
-                        i, chapters.get(i).getTitle());
-                return i;
-            }
-        }
-        log.info("Declared test items present but no chapter matched; general-section merging disabled");
-        return -1;
-    }
-
-    private static final Pattern CHAPTER_NUMBER_IN_TITLE =
-            Pattern.compile("^\\s*(?:第\\s*)?(\\d+)(?:\\s*章)?(?:\\s|[.．、:：-]|$)");
-
-    /**
-     * 从"试验概述"章节(一般是 7.1)动态提取本受试设备声明应完成的试验项目清单。
-     * 优先取标题含"试验概述/试验项目概述"的章节正文；否则回退到任一含"(鉴定)试验项目有"的章节。
-     *
-     * <p>两路提取，取并集（散文常按类别分多句、且未必列全，需配合一览表）：
-     * <ol>
-     *   <li>散文声明：可能有多句"……试验项目有：A、B、C…等"（自然环境类 / 电磁兼容类 / …），逐句逐项收集；</li>
-     *   <li>试验项目一览表：表格行里以"试验"结尾的纯中文单元格通常即试验项目名，补齐散文遗漏的项。</li>
-     * </ol>
-     * 解析失败/无任何项时返回空列表（此时 test_item 规则不作用于任何章节，安全降级）。
-     */
-    static List<String> extractDeclaredTestItems(List<WordParser.Chapter> chapters) {
-        if (chapters == null || chapters.isEmpty()) return List.of();
-        String text = null;
-        for (WordParser.Chapter ch : chapters) {
-            String t = ch.getTitle() == null ? "" : ch.getTitle();
-            if (t.contains("试验概述") || t.contains("试验项目概述")) { text = ch.getContent(); break; }
-        }
-        if (text == null) {
-            for (WordParser.Chapter ch : chapters) {
-                String c = ch.getContent();
-                if (c != null && (c.contains("试验项目有") || c.contains("鉴定试验项目有"))) { text = c; break; }
-            }
-        }
-        if (text == null || text.isBlank()) return List.of();
-
-        List<String> items = new ArrayList<>();
-
-        // ① 散文：逐句"试验项目有：…等/。/见表"，reluctant 匹配，find-all 收集每一句
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("试验项目有[：:]\\s*(.+?)(?:等|。|见表|具体)").matcher(text);
-        while (m.find()) {
-            for (String part : m.group(1).split("[、，,；;/]")) {
-                String p = part.trim();
-                if (p.length() < 2) continue;
-                if (p.contains("试验项目") || p.contains("本设备") || p.contains("应完成")) continue;
-                if (!items.contains(p)) items.add(p);
-            }
-        }
-
-        // ② 试验项目一览表：抓表格行中以"试验"结尾的纯中文单元格（散文常列不全）
-        for (String line : text.split("\\r?\\n")) {
-            if (line.indexOf('|') < 0) continue;
-            for (String cell : line.split("\\|")) {
-                String c = cell.trim();
-                if (c.length() < 3 || c.length() > 16 || !c.endsWith("试验")) continue;
-                if (c.matches(".*[0-9A-Za-z：:].*")) continue;   // 排除含编号/英文/冒号的单元格
-                if (c.contains("条") || c.contains("类") || c.contains("记录") || c.contains("报告")) continue;
-                String core = c.replaceAll("(试验项目|试验)$", "").trim();
-                if (core.length() >= 2 && !items.contains(core)) items.add(core);
-            }
-        }
-        return items;
-    }
-
-    /** 章节标题去掉前导编号与尾部"试验/试验项目"后的核心词，用于与声明项目做宽松匹配。 */
-    private static String normalizeTitleCore(String title) {
-        if (title == null) return "";
-        String s = title.trim()
-                .replaceFirst("^第?\\s*[0-9]+(\\.[0-9]+)*\\s*[章节]?[\\s\\.、:：-]*", "")
-                .replaceAll("(试验项目|试验)$", "")
-                .trim();
-        return s;
-    }
-
-    /**
-     * 判断某章节标题是否对应试验概述声明的某个试验项目（即"试验项目章节"）。
-     * 匹配层次：①标题/核心词互相包含；②声明项目核心词与标题核心词互相包含；
-     * ③中文字符集重叠度兜底——处理"射频敏感性↔射频敏感度""射频发射↔射频能量发射"等近义用词差异。
-     */
-    static boolean isTestItemChapter(String chapterTitle, List<String> declaredTestItems) {
-        if (chapterTitle == null || declaredTestItems == null || declaredTestItems.isEmpty()) return false;
-        String title = chapterTitle.trim();
-        // 空标题必须直接否掉：下面的 it.contains(core) 在 core 为空串时对任何项都成立
-        // （任何字符串都 contains("")），无标题的封面/目录章会被判成试验项目章节，
-        // 既让 test_item 规则注入到前置内容上，也会把通用段边界错误地定到 0。
-        if (title.isEmpty()) return false;
-        String core = normalizeTitleCore(title);
-        if (core.isEmpty()) core = title;
-        for (String item : declaredTestItems) {
-            String it = item == null ? "" : item.trim();
-            if (it.length() < 2) continue;
-            String itCore = normalizeTitleCore(it);
-            if (itCore.isEmpty()) itCore = it;
-            if (title.contains(it) || it.contains(core) || core.contains(it)) return true;
-            if (core.contains(itCore) || itCore.contains(core)) return true;
-            if (cjkOverlapMatch(itCore, core)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * 中文字符集重叠度匹配：共享字符≥2 且 ≥较短串去重字数的 80%，视为同一试验项目。
-     * 80% 阈值能容忍"射频敏感性↔射频敏感度""射频发射↔射频能量发射""雷电↔闪电"等近义用词，
-     * 又能排除"鸟撞冲击↔工作冲击和坠撞安全""防水性↔防爆性"这类仅个别字巧合的误配。
-     */
-    private static boolean cjkOverlapMatch(String a, String b) {
-        java.util.Set<Character> sa = cjkCharSet(a);
-        java.util.Set<Character> sb = cjkCharSet(b);
-        if (sa.size() < 2 || sb.size() < 2) return false;
-        int shared = 0;
-        for (Character c : sa) if (sb.contains(c)) shared++;
-        if (shared < 2) return false;
-        int minLen = Math.min(sa.size(), sb.size());
-        return shared >= Math.max(2, (int) Math.ceil(minLen * 0.8));
-    }
-
-    private static java.util.Set<Character> cjkCharSet(String s) {
-        java.util.Set<Character> set = new java.util.LinkedHashSet<>();
-        if (s == null) return set;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= 0x4e00 && c <= 0x9fa5) set.add(c);
-        }
-        return set;
     }
 
     /**
@@ -3309,12 +3135,11 @@ public class ReviewService {
         try {
             // 这里的切片必须与审查时一致：CHUNK-00N 溯源 id 是按切片序号生成的，切法
             // 不同就会让结果里的 sourceChunk 指到别的章节上。
-            List<WordParser.Chapter> rawChapters = WordParser.parseChapters(task.getFilePath());
-            List<String> declaredTestItems = extractDeclaredTestItems(rawChapters);
-            return buildOriginalSources(
-                    rawChapters,
-                    ChunkUtils.chunkWithGeneralSection(rawChapters, maxChunkTokens,
-                            resolveGeneralSectionEnd(rawChapters, declaredTestItems)));
+            ReviewFeature reviewFeature = reviewFeatureRegistry.requireRegistered(task.getReviewCategory());
+            ReviewDocument reviewDocument = reviewFeature.documentProcessor().parse(task.getFilePath());
+            ChapterReviewPlan chapterPlan = reviewFeature.documentProcessor().planChapterReview(
+                    reviewDocument, maxChunkTokens, generalSectionEndChapter);
+            return buildOriginalSources(chapterPlan.chapters(), chapterPlan.chunks());
         } catch (Exception e) {
             log.warn("Failed to build original source view for task {}: {}", task.getId(), e.getMessage());
         }
@@ -3359,7 +3184,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
-        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
+        dto.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -3379,7 +3204,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
-        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
+        dto.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(task.getReviewCategory()));
         return dto;
     }
 
@@ -3415,7 +3240,7 @@ public class ReviewService {
         dto.setProblemCount(task.getProblemCount());
         dto.setProgress(webSocketService.getProgress(task.getId()));
         dto.setReviewMode("CHUNK");
-        dto.setReviewCategory(ReviewCategory.resolveOrDefault(task.getReviewCategory()));
+        dto.setReviewCategory(reviewFeatureRegistry.resolveStoredCategory(task.getReviewCategory()));
         return dto;
     }
 }

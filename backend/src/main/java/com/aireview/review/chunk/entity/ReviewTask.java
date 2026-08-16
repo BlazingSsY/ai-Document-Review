@@ -45,7 +45,7 @@ public class ReviewTask {
 
     /**
      * 审查类别（业务域），与审查方式（CHUNK/SAR 管线）正交：类别说明审的是什么文件，
-     * 管线说明用什么方法审。取值见 {@code ReviewCategory}，当前只开放 ENV_TEST_OUTLINE。
+     * 管线说明用什么方法审。类别由 {@code ReviewFeatureRegistry} 中的独立功能模块注册。
      */
     private String reviewCategory;
 

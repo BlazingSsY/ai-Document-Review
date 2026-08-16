@@ -178,6 +178,8 @@ review/
   controller/
   core/
   dto/
+  feature/
+    envoutline/
   llm/
   migration/
   chunk/
@@ -198,6 +200,7 @@ review/
 - `review/sar`：结构化精准审查管线。
 - `review/controller`：跨管线统一查询接口，如统一任务列表。
 - `review/core`：审查结果结构、批处理规划、模型分层等公共内核。
+- `review/feature`：按业务审查类型注册的扩展接口与功能目录；`envoutline` 独立承载环境试验大纲的文档处理规则。
 - `review/dto`：审查任务和人工复核相关 DTO。
 - `review/llm`：LLM 请求、响应、schema 校验、JSON 提取等。
 - `review/migration`：历史 prompts 迁移相关逻辑。

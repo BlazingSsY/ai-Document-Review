@@ -100,8 +100,10 @@ ai-Document-Review/
 │       │   └── service/                      # AiModelService、ReasoningModeAdapter、AiCallOptions
 │       ├── review/                           # 审查域（三层）
 │       │   ├── controller/UnifiedReviewController  # 跨管线合并查询
-│       │   ├── core/                         # ReviewResultSchema（JSON Schema）、ReviewCategory
+│       │   ├── core/                         # ReviewResultSchema（JSON Schema）与共用审查内核
 │       │   │                                 # DocumentRuleReviewSupport（文档级审查共用）、SourceEditStore
+│       │   ├── feature/                      # 可插拔业务功能注册表与文档处理接口
+│       │   │   └── envoutline/               # 环境试验大纲独立功能模块
 │       │   ├── llm/                          # JsonExtractor、ThinkingModeDetector
 │       │   ├── chunk/                        # CHUNK 管线：controller / entity / repository / service
 │       │   │   └── service/ReviewService     # 核心审查逻辑
@@ -318,7 +320,7 @@ PostgreSQL 16 + pgvector（镜像 `pgvector/pgvector:0.8.2-pg16`）。`schema.sq
 
 > **注意**：场景管理与模型配置当前没有角色校验（无 `@PreAuthorize`、`SecurityConfig` 中也未匹配），任何已登录用户都能调用这些接口的写操作。前端仅通过菜单可见性区分，属于待收口的权限缺口。
 
-审查入口另受**功能码**控制：`FeaturePermissionService.ENV_TEST_OUTLINE_REVIEW`（对应 `ReviewCategory.ENV_TEST_OUTLINE`）。用户需被授予该功能码或具备 supervisor 角色，才能看到「环境试验大纲审查」菜单组。后端由 `FeatureAuthorizationFilter` 拦截。
+审查入口另受**功能码**控制。类别、功能码和专属文档处理器由 `ReviewFeature` 实现一起注册；当前环境试验大纲模块注册 `ENV_TEST_OUTLINE` / `ENV_TEST_OUTLINE_REVIEW`。用户需被授予相应功能码或具备 supervisor 角色，后端同时在路径过滤和任务提交边界校验权限。`GET /api/v1/review-features` 可读取已注册功能清单。
 
 > 前端 `/analytics`（数据看板）路由本身未包 `ManagerProtectedRoute`，仅菜单项按 `isManager` 隐藏——非管理员直接输入 URL 仍可进入页面，实际数据拦截依赖后端。
 

@@ -44,6 +44,8 @@ public class ReviewController {
             ReviewTaskDTO task = reviewService.submitReview(
                     file, scenarioId, selectedModel, userId, qualityCheckEnabled, reviewCategory);
             return ApiResponse.success("Review task submitted", task);
+        } catch (SecurityException e) {
+            return ApiResponse.error(403, e.getMessage());
         } catch (IllegalArgumentException e) {
             return ApiResponse.badRequest(e.getMessage());
         } catch (Exception e) {

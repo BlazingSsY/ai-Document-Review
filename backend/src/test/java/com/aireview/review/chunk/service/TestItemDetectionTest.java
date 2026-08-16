@@ -1,7 +1,8 @@
 package com.aireview.review.chunk.service;
 
-import com.aireview.document.ChunkUtils;
 import com.aireview.document.WordParser;
+import com.aireview.review.feature.ReviewDocument;
+import com.aireview.review.feature.envoutline.EnvironmentTestOutlineDocumentProcessor;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -14,8 +15,8 @@ import java.util.stream.Collectors;
  * 诊断性测试：验证"当前系统能否从待审查文档的 7.1 试验概述检测到全部试验项目"。
  *
  * <p>跑的是真实管线逻辑：{@link WordParser#parseChapters} 解析 .docx →
- * {@link ReviewService#extractDeclaredTestItems} 提取声明的试验项目清单 →
- * {@link ReviewService#isTestItemChapter} 判定哪些一级标题是"试验项目章节"。
+ * {@link EnvironmentTestOutlineDocumentProcessor} 提取声明的试验项目清单并判定
+ * 哪些一级标题是"试验项目章节"。
  *
  * <p>用法（容器内 maven 运行）：
  * <pre>
@@ -26,6 +27,9 @@ import java.util.stream.Collectors;
  * 便于直接看到每份文档的检测覆盖情况。
  */
 class TestItemDetectionTest {
+
+    private final EnvironmentTestOutlineDocumentProcessor processor =
+            new EnvironmentTestOutlineDocumentProcessor();
 
     @Test
     void detectTestItemsFromOverview() throws Exception {
@@ -38,17 +42,14 @@ class TestItemDetectionTest {
 
         for (Path doc : docs) {
             System.out.println("\n[TID] ========== 文档: " + doc.getFileName() + " ==========");
-            List<WordParser.Chapter> raw;
+            ReviewDocument document;
             try {
-                raw = WordParser.parseChapters(doc.toString());
+                document = processor.parse(doc.toString());
             } catch (Exception e) {
                 System.out.println("[TID] 解析失败: " + e.getMessage());
                 continue;
             }
-            // 与生产一致：跳过封面/目录等前置内容
-            int firstReal = ChunkUtils.findFirstRealChapterIndex(raw);
-            List<WordParser.Chapter> chapters = firstReal > 0
-                    ? new ArrayList<>(raw.subList(firstReal, raw.size())) : raw;
+            List<WordParser.Chapter> chapters = document.structuredReviewChapters();
             System.out.println("[TID] 一级标题章节数(去前置): " + chapters.size());
 
             if (Boolean.getBoolean("dump")) {
@@ -77,7 +78,7 @@ class TestItemDetectionTest {
                 }
             }
 
-            List<String> items = ReviewService.extractDeclaredTestItems(chapters);
+            List<String> items = document.declaredDomainSections();
             System.out.println("[TID] 从试验概述(7.1)提取到试验项目 " + items.size() + " 个:");
             System.out.println("       " + items);
 
@@ -90,7 +91,7 @@ class TestItemDetectionTest {
             // 哪些一级标题被识别为"试验项目章节"（= test_item_chapter 规则会作用到的章）
             List<String> testChapters = chapters.stream()
                     .map(WordParser.Chapter::getTitle)
-                    .filter(t -> ReviewService.isTestItemChapter(t, items))
+                    .filter(t -> EnvironmentTestOutlineDocumentProcessor.isTestItemChapter(t, items))
                     .collect(Collectors.toList());
             System.out.println("[TID] 识别为『试验项目章节』的一级标题 " + testChapters.size() + " 个:");
             testChapters.forEach(t -> System.out.println("       - " + t));
@@ -101,7 +102,7 @@ class TestItemDetectionTest {
             for (String it : items) {
                 String hit = chapters.stream()
                         .map(WordParser.Chapter::getTitle)
-                        .filter(t -> ReviewService.isTestItemChapter(t, List.of(it)))
+                        .filter(t -> EnvironmentTestOutlineDocumentProcessor.isTestItemChapter(t, List.of(it)))
                         .findFirst().orElse(null);
                 if (hit != null) covered++;
                 System.out.println("       [" + (hit != null ? "✓" : "✗ 未匹配到章节")

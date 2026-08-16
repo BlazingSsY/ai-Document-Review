@@ -82,6 +82,22 @@ class RuleDispatcherTest {
                         .isEqualTo("section_specific"));
     }
 
+    @Test
+    void genericDomainSectionRulesAreSelectedByTheActiveFeature() {
+        RuleDispatcher.PreparedRule rule = preparedRule(
+                "REPORT-CONCLUSION", RuleMetadata.TYPE_DOMAIN_SECTION, List.of());
+
+        RuleDispatcher.DispatchResult outside = RuleDispatcher.dispatchForChunk(
+                "2 试验条件", "条件正文", List.of(rule), 0, false, false, null);
+        RuleDispatcher.DispatchResult inside = RuleDispatcher.dispatchForChunk(
+                "8 试验结论", "结论正文", List.of(rule), 0, true, false, null);
+
+        assertThat(outside.getAppliedRules()).isEmpty();
+        assertThat(inside.getAppliedRules()).containsExactly(rule);
+        assertThat(inside.getMatchTraces()).singleElement()
+                .satisfies(trace -> assertThat(trace.get("reason")).isEqualTo("domain_section"));
+    }
+
     private RuleDispatcher.PreparedRule preparedRule(
             String code,
             String type,

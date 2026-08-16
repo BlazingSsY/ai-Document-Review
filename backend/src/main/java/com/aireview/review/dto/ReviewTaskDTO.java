@@ -31,7 +31,7 @@ public class ReviewTaskDTO {
      */
     private String reviewMode;
     /**
-     * 审查类别（业务域），取值见 {@code ReviewCategory}，如 "ENV_TEST_OUTLINE"。
+     * 审查类别（业务域），由后端审查功能模块注册，如 "ENV_TEST_OUTLINE"。
      * 与 {@link #reviewMode} 正交：类别说明审的是什么文件，管线说明用什么方法审。
      */
     private String reviewCategory;
