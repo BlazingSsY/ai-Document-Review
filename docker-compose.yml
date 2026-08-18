@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: ai_review
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres123
+      # 与后端保持同一时区，否则数据库日志与应用写入的时间戳对不上。
+      TZ: Asia/Shanghai
     ports:
       - "5432:5432"
     volumes:
@@ -32,6 +34,10 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # 容器基础镜像默认 Etc/UTC，而实体表用的是不带时区的 LocalDateTime：不显式指定时区，
+      # LocalDateTime.now() 会写入 UTC 裸时间，前端 new Date(...) 按浏览器本地时区解析，
+      # 页面上所有时间就会比实际早 8 小时。
+      TZ: Asia/Shanghai
       # Let the JVM size its heap from the container's mem_limit (container-aware on JDK 17).
       JAVA_OPTS: "-XX:MaxRAMPercentage=75.0"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ai_review

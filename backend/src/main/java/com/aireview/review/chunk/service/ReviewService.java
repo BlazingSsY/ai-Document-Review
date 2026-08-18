@@ -20,6 +20,7 @@ import com.aireview.rule.service.RuleService;
 import com.aireview.scenario.service.ScenarioService;
 import com.aireview.rule.repository.RuleCheckMapper;
 import com.aireview.rule.repository.RuleMapper;
+import com.aireview.review.core.ReviewCategoryQuery;
 import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.core.DocumentRuleReviewSupport;
 import com.aireview.review.core.SourceEditStore;
@@ -342,31 +343,25 @@ public class ReviewService {
     }
 
     /**
-     * Get review statistics for a user.
+     * Get review statistics for a user across every review category.
      */
     public Map<String, Object> getStats(Long userId) {
-        LambdaQueryWrapper<ReviewTask> baseQuery = new LambdaQueryWrapper<>();
-        baseQuery.eq(ReviewTask::getUserId, userId);
-        long total = reviewTaskMapper.selectCount(baseQuery);
+        return getStats(userId, null);
+    }
 
-        LambdaQueryWrapper<ReviewTask> completedQuery = new LambdaQueryWrapper<>();
-        completedQuery.eq(ReviewTask::getUserId, userId)
-                      .eq(ReviewTask::getStatus, ReviewTask.STATUS_COMPLETED);
-        long completed = reviewTaskMapper.selectCount(completedQuery);
+    /**
+     * Get review statistics for a user, optionally scoped to one review category.
+     *
+     * @param category 审查类别；null 表示不限，用于跨类别的汇总视图
+     */
+    public Map<String, Object> getStats(Long userId, String category) {
+        long total = countTasks(userId, category, null);
+        long completed = countTasks(userId, category, ReviewTask.STATUS_COMPLETED);
+        long processing = countTasks(userId, category, ReviewTask.STATUS_PROCESSING);
+        long failed = countTasks(userId, category, ReviewTask.STATUS_FAILED);
 
-        LambdaQueryWrapper<ReviewTask> processingQuery = new LambdaQueryWrapper<>();
-        processingQuery.eq(ReviewTask::getUserId, userId)
-                       .eq(ReviewTask::getStatus, ReviewTask.STATUS_PROCESSING);
-        long processing = reviewTaskMapper.selectCount(processingQuery);
-
-        LambdaQueryWrapper<ReviewTask> failedQuery = new LambdaQueryWrapper<>();
-        failedQuery.eq(ReviewTask::getUserId, userId)
-                   .eq(ReviewTask::getStatus, ReviewTask.STATUS_FAILED);
-        long failed = reviewTaskMapper.selectCount(failedQuery);
-
-        LambdaQueryWrapper<ReviewTask> todayQuery = new LambdaQueryWrapper<>();
-        todayQuery.eq(ReviewTask::getUserId, userId)
-                  .ge(ReviewTask::getCreatedAt, LocalDateTime.now().toLocalDate().atStartOfDay());
+        LambdaQueryWrapper<ReviewTask> todayQuery = categoryScopedQuery(userId, category);
+        todayQuery.ge(ReviewTask::getCreatedAt, LocalDateTime.now().toLocalDate().atStartOfDay());
         long todayCount = reviewTaskMapper.selectCount(todayQuery);
 
         Map<String, Object> stats = new HashMap<>();
@@ -376,6 +371,23 @@ public class ReviewService {
         stats.put("failed", failed);
         stats.put("todayCount", todayCount);
         return stats;
+    }
+
+    private long countTasks(Long userId, String category, String status) {
+        LambdaQueryWrapper<ReviewTask> query = categoryScopedQuery(userId, category);
+        if (status != null) {
+            query.eq(ReviewTask::getStatus, status);
+        }
+        return reviewTaskMapper.selectCount(query);
+    }
+
+    /** 用户 + 可选类别的基础查询。类别隔离让各审查功能的统计互不干扰。 */
+    private LambdaQueryWrapper<ReviewTask> categoryScopedQuery(Long userId, String category) {
+        LambdaQueryWrapper<ReviewTask> query = new LambdaQueryWrapper<>();
+        query.eq(ReviewTask::getUserId, userId);
+        ReviewCategoryQuery.filterByCategory(query, ReviewTask::getReviewCategory,
+                category, reviewFeatureRegistry.defaultCategory());
+        return query;
     }
 
     /**
@@ -3213,12 +3225,19 @@ public class ReviewService {
      * user, with the {@code reviewMode} field populated, sorted desc.
      */
     public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit) {
-        LambdaQueryWrapper<ReviewTask> query = new LambdaQueryWrapper<>();
+        return recentTasksForUser(userId, limit, null);
+    }
+
+    /**
+     * 同上，但可按审查类别收敛。类别过滤放在 SQL 而不是合并后再筛，避免新增审查功能后
+     * 各类别在固定条数的取数窗口里互相挤占。
+     */
+    public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit, String category) {
+        LambdaQueryWrapper<ReviewTask> query = categoryScopedQuery(userId, category);
         // Exclude the heavy ai_result JSON from the list query — the dashboard only needs
         // metadata + the cached problem_count, and reading hundreds of big blobs was the
         // cause of the multi-second list load.
         query.select(ReviewTask.class, info -> !"ai_result".equals(info.getColumn()));
-        query.eq(ReviewTask::getUserId, userId);
         query.orderByDesc(ReviewTask::getCreatedAt);
         Page<ReviewTask> pageParam = new Page<>(1, Math.max(1, limit));
         return reviewTaskMapper.selectPage(pageParam, query).getRecords()

@@ -1,22 +1,15 @@
 /**
- * 按管线（CHUNK / RAG）派发到对应的 API 客户端。
+ * 跨管线的工作台接口，以及管线的展示元数据。
  *
- * 设计：CHUNK 与 RAG 两条管线的接口在结构上是镜像的——同样的字段、同样的方法签名、
- * 只是 URL 前缀不同。让公用页面（ScenarioListPage / RuleListPage / 工作台等）通过
- * 这里拿到一个统一形状的 client，避免把 "if reviewMode === 'RAG' then ... else ..."
- * 散落到 N 个组件里。
+ * 后端保留 CHUNK / SAR 两条管线，但前端目前只开放 CHUNK：新建、列表、统计一律传
+ * mode=CHUNK，因此这里不再维护「按管线挑 API 客户端」的派发层——各页面直接 import
+ * 各自需要的 chunk 客户端。只有任务详情里回显的管线名称仍需要 SAR 的文案，故保留
+ * PIPELINE_LABEL / PIPELINE_COLOR 两张表。
  */
 
 import request, { ApiResponse } from '../../../shared/api/request';
 import type { PaginatedResult } from '../../rules/api/rules';
 import type { ReviewMode, ReviewTask } from './reviews';
-
-import * as chunkScenarios from '../../scenarios/api/scenarios';
-import * as sarScenarios from '../../scenarios/api/sarScenarios';
-import * as chunkRules from '../../rules/api/rules';
-import * as sarRules from '../../rules/api/sarRules';
-import * as chunkReviews from './reviews';
-import * as sarReviews from './sarReviews';
 
 export type { ReviewMode } from './reviews';
 
@@ -32,25 +25,6 @@ export const PIPELINE_COLOR: Record<ReviewMode, string> = {
   SAR: 'green',
 };
 
-export type ScenarioApi = typeof chunkScenarios;
-export type RuleApi = typeof chunkRules;
-export type ReviewApi = typeof chunkReviews;
-
-export function getScenarioApi(mode: ReviewMode): ScenarioApi {
-  if (mode === 'SAR') return sarScenarios as unknown as ScenarioApi;
-  return chunkScenarios;
-}
-
-export function getRuleApi(mode: ReviewMode): RuleApi {
-  if (mode === 'SAR') return sarRules as unknown as RuleApi;
-  return chunkRules;
-}
-
-export function getReviewApi(mode: ReviewMode): ReviewApi {
-  if (mode === 'SAR') return sarReviews as unknown as ReviewApi;
-  return chunkReviews;
-}
-
 // ---- Unified workbench endpoints ----
 
 export interface UnifiedListParams {
@@ -58,6 +32,8 @@ export interface UnifiedListParams {
   pageSize: number;
   mode?: ReviewMode | 'ALL';
   status?: string;
+  /** 审查类别（业务域）。省略表示不限类别，用于跨业务域的汇总视图。 */
+  category?: string;
 }
 
 export interface UnifiedStats {
@@ -82,17 +58,16 @@ export function getUnifiedReviewList(params: UnifiedListParams) {
   });
 }
 
-export function getUnifiedReviewStats() {
-  return request.get<ApiResponse<UnifiedStats>>('/reviews/stats/all');
+export function getUnifiedReviewStats(category?: string) {
+  return request.get<ApiResponse<UnifiedStats>>('/reviews/stats/all', {
+    params: category ? { category } : undefined,
+  });
 }
 
 /**
  * Look up a task by id without knowing its pipeline up-front. Hits the backend's
  * {@code /reviews/by-id/{taskId}} endpoint which checks both tables internally
- * and returns the row with {@code reviewMode} populated. The workspace page uses
- * this for its initial load — every subsequent call dispatches via
- * {@link getReviewApi}{@code (task.reviewMode)} so we never have to fall back
- * client-side.
+ * and returns the row with {@code reviewMode} populated.
  */
 export function getReviewDetailAnyPipeline(taskId: string) {
   // light=true 让后端剥离 originalSources / chunkResults 两个大字段，首屏只拿矩阵 +

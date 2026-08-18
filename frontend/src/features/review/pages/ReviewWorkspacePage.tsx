@@ -17,8 +17,8 @@ function ReviewWorkspacePage() {
   if (!workspace.task) {
     return (
       <Empty description="未找到审查任务" style={{ marginTop: 100 }}>
-        <Button type="primary" onClick={workspace.goDashboard}>
-          返回工作台
+        <Button type="primary" onClick={workspace.goTaskCenter}>
+          返回任务列表
         </Button>
       </Empty>
     );

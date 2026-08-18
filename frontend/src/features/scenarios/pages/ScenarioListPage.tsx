@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Checkbox, Space, Typography, Tag,
   message, Popconfirm, Descriptions,
@@ -6,37 +6,23 @@ import {
 import { PlusOutlined, EyeOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { Scenario } from '../api/scenarios';
-import type { RuleLibrary } from '../../rules/api/rules';
 import {
-  getScenarioApi, getRuleApi, PIPELINE_LABEL, PIPELINE_COLOR,
-  type ReviewMode,
-} from '../../review/api/pipelineApi';
+  getScenarioList, createScenario, updateScenario, deleteScenario, getScenarioDetail,
+} from '../api/scenarios';
+import type { RuleLibrary } from '../../rules/api/rules';
+import { getAllRuleLibraries } from '../../rules/api/rules';
+import { PIPELINE_LABEL, PIPELINE_COLOR } from '../../review/api/pipelineApi';
 import { PAGE_SIZE } from '../../../shared/utils/constants';
 import useAuthStore from '../../auth/store/authStore';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
-interface ScenarioListPageProps {
-  /** 当前页所属管线。决定调用哪一套场景 / 规则库 API。 */
-  reviewMode: ReviewMode;
-}
-
-function ScenarioListPage({ reviewMode }: ScenarioListPageProps) {
+function ScenarioListPage() {
   const user = useAuthStore((s) => s.user);
   // 已获功能授权的普通用户也需要能用已分配规则库组装自己的审查场景；
   // 后端按创建者和规则库授权再次校验，不能编辑他人场景或引用未授权规则库。
   const canManage = Boolean(user);
-
-  // 按管线挑出对应的 API 客户端。两条管线的接口签名完全一致，只是 URL 不同。
-  const scenarioApi = useMemo(() => getScenarioApi(reviewMode), [reviewMode]);
-  const ruleApi = useMemo(() => getRuleApi(reviewMode), [reviewMode]);
-  const {
-    getScenarioList, createScenario, updateScenario, deleteScenario, getScenarioDetail,
-  } = scenarioApi;
-  const { getAllRuleLibraries } = ruleApi;
-  const pipelineLabel = PIPELINE_LABEL[reviewMode];
-  const pipelineColor = PIPELINE_COLOR[reviewMode];
 
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [loading, setLoading] = useState(false);
@@ -70,19 +56,7 @@ function ScenarioListPage({ reviewMode }: ScenarioListPageProps) {
     } catch { /* handled */ }
   };
 
-  // 切换管线后重置分页并重新拉取，避免显示上一个管线遗留的数据。
-  useEffect(() => {
-    setScenarios([]);
-    setAllLibraries([]);
-    if (page !== 1) {
-      setPage(1);
-    } else {
-      fetchScenarios();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reviewMode]);
-
-  useEffect(() => { fetchScenarios(); }, [page, reviewMode]);
+  useEffect(() => { fetchScenarios(); }, [page]);
 
   const handleCreate = async (values: { name: string; description: string; libraryIds: number[] }) => {
     if (!values.libraryIds || values.libraryIds.length === 0) {
@@ -213,7 +187,7 @@ function ScenarioListPage({ reviewMode }: ScenarioListPageProps) {
       <div className="page-header">
         <Space size={12} align="center">
           <Title level={4} style={{ margin: 0 }}>审查场景管理</Title>
-          <Tag color={pipelineColor}>{pipelineLabel}</Tag>
+          <Tag color={PIPELINE_COLOR.CHUNK}>{PIPELINE_LABEL.CHUNK}</Tag>
         </Space>
         {canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>创建场景</Button>

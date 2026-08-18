@@ -6,7 +6,7 @@
 >
 > 按章节切片，每章一次 AI 调用，注入命中规则 + 本章正文 + 被引用章节作上下文。
 >
-> **SAR（结构化精准审查）管线的后端实现完整保留**（`SarReviewService`、`sar_*` 表、`/api/v1/sar/**` 端点、前端 `sarRules`/`sarScenarios`/`sarReviews` API 层），但**前端入口当前已关闭**：`App.tsx` 将 `sar/scenarios`、`sar/rules` 重定向到 `/chunk/*`，侧边栏只保留「全文逐章审查」，新建审查不再提供管线切换。历史任务仍按 `reviewMode` 字段派发读取，缺失则视为 CHUNK。SAR 的设计与调参见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。
+> **SAR（结构化精准审查）管线的后端实现完整保留**（`SarReviewService`、`sar_*` 表、`/api/v1/sar/**` 端点），但**前端已完全下线**：`sarRules`/`sarScenarios`/`sarReviews` 三个 API 客户端与 `pipelineApi` 的按管线派发层已删除，`App.tsx` 将 `sar/scenarios`、`sar/rules` 重定向到 `/chunk/*`，前端一律以 `mode=CHUNK` 取数。`ReviewMode` 类型与 `PIPELINE_LABEL` 仍保留 SAR 取值，仅用于回显历史任务的管线名称。SAR 的设计与调参见 [SAR_PIPELINE.md](SAR_PIPELINE.md)。
 
 ## 功能概览
 
@@ -129,12 +129,14 @@ ai-Document-Review/
 │       ├── app/App.tsx                       # 唯一路由表
 │       ├── features/
 │       │   ├── auth/                         # LoginPage、authStore
-│       │   ├── dashboard/                    # DashboardPage（工作台）、DataBoardPage（数据看板）
+│       │   ├── dashboard/                    # DashboardPage（工作台概览）、DataBoardPage（数据看板）
 │       │   ├── review/
-│       │   │   ├── api/                      # reviews / sarReviews / pipelineApi
-│       │   │   ├── pages/ReviewWorkspacePage # 30 行壳层
+│       │   │   ├── api/                      # reviews（chunk 客户端）+ pipelineApi（跨管线接口）
+│       │   │   ├── pages/                    # ReviewTaskCenterPage（任务中心）、ReviewWorkspacePage（30 行壳层）
+│       │   │   ├── registry/                 # reviewFeatures：审查业务域注册表（菜单/路由/文案的唯一来源）
+│       │   │   ├── hooks/                    # useReviewTasks（列表+统计）、useTaskProgress（WS 进度）
 │       │   │   ├── workspace/                # useReviewWorkspace（状态）+ components + helpers
-│       │   │   ├── components/FileUploader
+│       │   │   ├── components/               # FileUploader、CreateReviewModal、ReviewTaskTable
 │       │   │   └── store/logStore            # WebSocket 日志
 │       │   ├── rules/                        # RuleListPage（三级视图）、RuleUploader
 │       │   ├── scenarios/                    # ScenarioListPage
@@ -142,8 +144,8 @@ ai-Document-Review/
 │       │   └── users/                        # MemberManagementPage、ProfilePage
 │       └── shared/
 │           ├── api/request.ts                # Axios 实例 + Token 拦截器
-│           ├── components/                   # AppLayout、ProtectedRoute
-│           ├── utils/                        # constants、websocket（TaskWebSocket 单例）
+│           ├── components/                   # AppLayout、ProtectedRoute、ReviewFeatureRoute
+│           ├── utils/                        # constants、permissions（功能授权判定）、websocket（TaskWebSocket 单例）
 │           └── styles/
 │
 ├── docker-compose.yml                        # 容器编排
@@ -487,25 +489,35 @@ PostgreSQL 16 + pgvector（镜像 `pgvector/pgvector:0.8.2-pg16`）。`schema.sq
 |---|---|---|
 | `/login` | LoginPage | 无 |
 | `/`（index） | → `/dashboard` | — |
-| `dashboard` | DashboardPage | — |
-| `chunk/scenarios` | ScenarioListPage（`reviewMode="CHUNK"`） | FeatureProtectedRoute |
-| `chunk/rules` | RuleListPage（`reviewMode="CHUNK"`） | FeatureProtectedRoute |
-| `review/:taskId` | ReviewWorkspacePage | FeatureProtectedRoute |
+| `dashboard` | DashboardPage（跨业务域概览） | — |
+| `reviews/:slug` | ReviewTaskCenterPage（业务域由 slug 解析） | 页面内按该功能的授权码校验 |
+| `review/:taskId` | ReviewWorkspacePage | ReviewFeatureRoute |
+| `chunk/scenarios` | ScenarioListPage | ReviewFeatureRoute |
+| `chunk/rules` | RuleListPage | ReviewFeatureRoute |
 | `models` | ModelConfigPage | — |
 | `analytics` | DataBoardPage | 仅菜单隐藏，无路由守卫 |
 | `profile` | ProfilePage | — |
 | `members` | MemberManagementPage | ManagerProtectedRoute |
-| `sar/scenarios` · `sar/rules` | → `/chunk/*` | 重定向 |
-| `scenarios` · `rules` | → `/chunk/*` | 重定向 |
-| `review` · `users` · `*` | → `/dashboard` · `/members` · `/dashboard` | 重定向 |
+| `sar/scenarios` · `sar/rules` · `scenarios` · `rules` | → `/chunk/*` | 重定向 |
+| `chunk/review` · `review` | → 默认业务域的任务中心 | 重定向 |
+| `users` · `*` | → `/members` · `/dashboard` | 重定向 |
+
+`ReviewFeatureRoute` 只要求「至少获授权一个审查功能」——这些页面跨业务域共用，绑定单个
+功能码会把只授权了新功能的用户挡在共享的规则/场景页外面。具体到某个业务域的鉴权由任务
+中心页自己做，越权调用由后端过滤器兜底。
 
 ### 侧边栏菜单（`AppLayout`）
 
+两级结构（分组 → 叶子），**整份菜单由 `REVIEW_FEATURES` 注册表推导**：每个已授权的审查
+功能自成一个一级分组，组内叶子是它使用的管线。新增审查功能时 `AppLayout` 无需改动。
+
 - 工作台 → `/dashboard`
 - 环境试验大纲审查（需 `ENV_TEST_OUTLINE_REVIEW` 功能码或 supervisor）
-  - 全文逐章审查
-    - 审查场景 → `/chunk/scenarios`
-    - 审查规则 → `/chunk/rules`
+  - 全文逐章审查 → `/reviews/env-outline`
+- *（新增功能在此自动追加，如「试验报告审查 → /reviews/test-report」）*
+- 审查配置（至少一个已授权功能 `usesSharedRuleLibraries` 时出现）
+  - 审查场景 → `/chunk/scenarios`
+  - 审查规则 → `/chunk/rules`
 - 模型管理 → `/models`
 - 数据看板 → `/analytics`（仅管理员可见）
 - 成员与权限 → `/members`（仅管理员可见）
@@ -519,22 +531,28 @@ PostgreSQL 16 + pgvector（镜像 `pgvector/pgvector:0.8.2-pg16`）。`schema.sq
 | 组件 | 职责 |
 |---|---|
 | LoginPage | 登录/注册，含单位选择 |
-| DashboardPage | 工作台：任务列表、新建审查弹窗、WebSocket 进度 |
+| DashboardPage | 工作台概览：数字卡 + 最近 5 条任务（只读）+ 快捷入口，无写操作 |
+| ReviewTaskCenterPage | 单个业务域的任务中心（业务域由 `/reviews/:slug` 解析）：新建审查、状态筛选、分页列表、取消/重审/删除 |
 | DataBoardPage | 数据看板，手写 SVG 图表（Donut / BarList / LineTrend / ResourceStat） |
-| RuleListPage | 规则库 / 文件夹 / 规则三级管理，接收 `reviewMode` prop |
-| ScenarioListPage | 场景 CRUD，接收 `reviewMode` prop |
+| RuleListPage | 规则库 / 文件夹 / 规则三级管理 |
+| ScenarioListPage | 场景 CRUD |
 | ReviewWorkspacePage | 审查工作区壳层（30 行），逻辑委托给 `workspace/` |
 | ModelConfigPage | 模型 CRUD、连通性测试、thinking mode 建议 |
 | MemberManagementPage | 组织树、成员、功能授权、批量导入 |
 | ProfilePage | 个人信息与改密 |
 
-`features/review/workspace/` 是唯一拆成 hook + 展示层的模块：`useReviewWorkspace.ts` 承载状态逻辑，`components.tsx` 与 `helpers.tsx` 负责渲染。
+`features/review/workspace/` 把审查工作区拆成 hook + 展示层：`useReviewWorkspace.ts` 承载状态逻辑，`components.tsx` 与 `helpers.tsx` 负责渲染。
+
+任务列表侧同样是 hook + 组件：`hooks/useReviewTasks`（列表 + 统计 + 刷新）与 `hooks/useTaskProgress`（WebSocket 进度，三路数据源合流并单调递增）为工作台概览与各业务域的任务中心共用；
+`components/ReviewTaskTable` 用 `compact` 开关区分「概览只读」与「任务中心可写」两种密度，`components/CreateReviewModal` 承载新建审查的两步流程。
+
+`useReviewTasks` 接收一个 `feature`：传具体业务域时列表与统计都带上 `category` 参数由后端收敛，传 `null` 则是工作台的跨业务域汇总。这是「新增审查功能不污染既有功能任务列表」的落点。
 
 ### API 层
 
-`shared/api/request.ts` 提供 Axios 实例、`ApiResponse` 类型与 Token 拦截器。各 feature 自带 api 目录，CHUNK / SAR 双份（`rules.ts` / `sarRules.ts` 等），由 `features/review/api/pipelineApi.ts` 统一派发：`getScenarioApi/getRuleApi/getReviewApi(mode)` 按 CHUNK/SAR 返回同形状 client，另有 `getUnifiedReviewList/Stats` 与跨管线详情探测。
-
-> SAR 侧 API 文件完整存在，但由于路由已重定向、没有页面传入 `"SAR"`，`sarRules` / `sarScenarios` / `sarReviews` 目前仅通过 `pipelineApi` 的 mode 分支可达，实际处于未启用状态。
+`shared/api/request.ts` 提供 Axios 实例、`ApiResponse` 类型与 Token 拦截器。各 feature 自带 api 目录，
+当前只有 CHUNK 一份（`rules.ts` / `scenarios.ts` / `reviews.ts`），页面直接 import，不再经过按管线派发的中间层。
+`features/review/api/pipelineApi.ts` 只保留跨管线的部分：`getUnifiedReviewList/Stats`、按 id 的跨表详情探测，以及 `PIPELINE_LABEL/COLOR` 两张展示用映射表。
 
 ### 技术特性
 
@@ -581,20 +599,56 @@ PostgreSQL 16 + pgvector（镜像 `pgvector/pgvector:0.8.2-pg16`）。`schema.sq
 3. 如涉及推理/思考模式，在 `ReasoningModeAdapter` 中补充适配
 4. 前端 `ModelConfigPage` 的供应商下拉中添加选项
 
+### 新增审查功能（业务域）
+
+例如新增「试验报告审查」。**这是纯增量操作**：全程不需要修改环境试验大纲审查的任何代码，
+两侧的任务列表、统计与权限在后端按 `review_category` 隔离，互不可见。
+
+**后端**（一个新包 + 一个 Spring bean）
+
+1. 新建 `review/feature/testreport/` 包，实现 `ReviewDocumentProcessor`：文件校验、解析、
+   章节分组、领域章节识别都在这里，CHUNK / SAR 两条管线只消费这个契约，不需要加分支
+2. 实现 `ReviewFeature` 并标 `@Component`：`category()` / `permissionCode()` /
+   `displayName()` / `documentProcessor()`。`ReviewFeatureRegistry` 在启动时自动发现它，
+   功能授权清单（`/api/v1/user/features`）、类别校验、鉴权也随之生效
+3. `defaultFeature()` 保持 false —— 默认功能全局只能有一个，多于一个会在启动时快速失败
+
+**前端**（注册表加一条）
+
+4. 在 `features/review/registry/reviewFeatures.tsx` 的 `REVIEW_FEATURES` 里加一条，
+   `category` / `permissionCode` 必须与后端逐字一致。菜单分组、`/reviews/{slug}` 路由、
+   工作台快捷入口、新建审查弹窗的文案与提交参数全部由这张表推导，**不需要改动
+   `AppLayout` / `App.tsx` / `DashboardPage` / `ReviewTaskCenterPage` 中的任何代码**
+5. 规则与场景：`usesSharedRuleLibraries: true` 表示复用现有的规则库与场景（沿用
+   「审查配置」菜单）；若该业务域需要独立的规则体系，置 false 并另建配置页
+
+**授权**
+
+6. 在「成员与权限」里把新功能码授予用户即可。未授权的用户看不到该菜单，
+   已有的环境试验大纲审查用户不受任何影响
+
+> 注册表里 `enabled: false` 的条目（试验报告、可靠性）是占位：不进菜单、不注册路由，
+> 后端实现就绪后改成 true 即可上线。
+
 ### 重新启用 SAR 前端入口
 
-后端与 API 层完整可用，只需前端改动：
+后端与 `/api/v1/sar/**` 端点完整可用，但前端的 SAR API 客户端与派发层已删除，需要重建：
 
-1. `app/App.tsx`：把 `sar/scenarios`、`sar/rules` 的 `Navigate` 重定向替换为 `ScenarioListPage` / `RuleListPage` 并传入 `reviewMode="SAR"`（两个页面已支持该 prop，`chunk/*` 路由就是这么传的）
-2. `shared/components/AppLayout`：菜单是三级结构（业务域 → 管线 → 叶子），`chunk-section` 同级现留有一个空位，在此补回「结构化精准审查」分组；同时要扩展下方按 `/chunk/*` 前缀计算 `selectedKey` 的逻辑，否则 SAR 页面高亮不到菜单项
-3. `DashboardPage`：改动量最大。`'CHUNK'` 在此页多处硬编码——提交任务时的 `mode: 'CHUNK'`、`getScenarioApi('CHUNK')`、`getReviewApi('CHUNK')`、成功提示里的 `PIPELINE_LABEL.CHUNK`，以及统计只取 `s.byMode.CHUNK`。需要在新建审查弹窗加入管线选择并把选中值贯穿这些调用点。任务列表侧无需改动：`apiForTask` 已按 `task.reviewMode` 分流
+1. **API 客户端**：新增 `scenarios/api/sarScenarios.ts`、`rules/api/sarRules.ts`、`review/api/sarReviews.ts`。三者与 chunk 版逐函数镜像，只是 URL 前缀换成 `/sar/...`（可从 git 历史中恢复：这三个文件在提交 `53e60536` 时尚存在）
+2. **派发层**：在 `pipelineApi.ts` 中恢复 `getScenarioApi` / `getRuleApi` / `getReviewApi`，按 `ReviewMode` 返回对应客户端
+3. **页面**：`ScenarioListPage` / `RuleListPage` 重新接收 `reviewMode` prop，并加回「切换管线时清空状态」的 effect；`useReviewWorkspace` 把直连的 `reviewApi` 换回 `getReviewApi(reviewMode)`
+4. **取数**：`useReviewTasks` 已按 `feature.reviewMode` 传管线，把对应审查功能的
+   `reviewMode` 改成 `'SAR'` 即可；若要让同一业务域同时开放两条管线，需要把注册表的
+   `reviewMode` 从单值改成数组，并在任务中心加管线切换
+5. **路由与菜单**：`App.tsx` 把 `sar/*` 的重定向换成真实页面；菜单叶子由
+   `PIPELINE_LABEL[feature.reviewMode]` 自动生成，一个业务域多条管线时需扩展成多个叶子
 
 ### 新增审查管线
 
 1. **数据库**：在 `schema.sql` 中创建 `xyz_*` 表（参考 `sar_*` 表结构）
 2. **后端**：新建 `review/xyz/` 包，实现 `entity` / `repository` / `service/XyzReviewService` / `controller/XyzReviewController`（`/api/v1/xyz/reviews`）
 3. **规则与场景**：在 `rule` / `scenario` 域中添加 `Xyz*` 镜像实体、Mapper、Service、Controller
-4. **前端**：新增 `xyzReviews.ts` / `xyzRules.ts` / `xyzScenarios.ts`，在 `pipelineApi.ts` 中添加 mode 分支
+4. **前端**：新增 `xyzReviews.ts` / `xyzRules.ts` / `xyzScenarios.ts`，并在 `pipelineApi.ts` 中重建按 mode 派发的客户端选择（当前只有 CHUNK，派发层已移除）
 5. **路由与菜单**：在 `App.tsx` 添加 `/xyz/*` 路由，在 `AppLayout` 添加侧边栏入口
 6. **跨管线查询**：在 `UnifiedReviewController` 中纳入新管线的任务与统计
 

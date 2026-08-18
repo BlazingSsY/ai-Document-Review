@@ -273,108 +273,144 @@ public class RuleParser {
                 .comparing((RuleEntry e) -> orderKey(e.code))
                 .thenComparing(e -> e.name == null ? "" : e.name));
 
+        int expected = expectedCheckCount(sorted);
+        List<String> manifest = new ArrayList<>();
+        List<String> checkManifest = new ArrayList<>();
         StringBuilder sp = new StringBuilder();
 
-        // ① ROLE + 任务
-        sp.append("【角色与任务】\n");
-        sp.append("你是一名专业的文档审查员。请仅基于本提示词内列出的规则审查用户消息中的章节内容，使用中文回复。\n");
-        sp.append("禁止补充未在规则中出现的检查项；禁止臆断、推测、自由发挥。\n\n");
+        // ① 公共审查约束：所有章节规则共用，避免在每条规则内重复注入。
+        sp.append("## 一、公共审查约束\n\n");
+        sp.append("你是一名熟悉 RTCA DO-160G、环境鉴定试验大纲及航空产品验证文件的专业审查员。\n");
+        sp.append("仅依据本提示词中的规则审查用户消息中的章节内容，所有分析和输出使用中文。不得补充规则之外的检查项，不得臆断、推测或自由发挥。\n\n");
+        sp.append("### 1.1 状态\n\n");
+        sp.append("- `Pass`：证据充分，满足规则全部适用条件。\n");
+        sp.append("- `Fail`：存在明确不符合，或规则明确要求的内容缺失。\n");
+        sp.append("- `Review`：前置条件不成立、证据不可核验、证据冲突，或规则明确要求人工复核。\n");
+        sp.append("- 不得输出 `Partial`、`N/A`、“部分通过”“不适用”等其他状态。\n");
+        sp.append("- 不适用情形按 1.7 处理：类别/制式明示落在条款适用范围之外的判 `Pass`；只有适用性本身无法判定时才用 `Review`。\n\n");
+        sp.append("### 1.2 统一检索与判定\n\n");
+        sp.append("1. 先检索后判定：检索当前章节正文、表格、图题/图注及当前输入中明确有效的引用。\n");
+        sp.append("2. 只比较同一对象、字段和条件；不得凭经验补充原文不存在的事实、参数、型号或标准依据。\n");
+        sp.append("3. `XXX`、`TBD`、`待定`、`待补充`视为未填写；`/`、`-`、`—`、`无`、`N/A`不自动构成通过证据。\n");
+        sp.append("4. 缺失或不符合时，`reason`写明实际检索范围、缺失项或不符合事实；纯缺失时 `evidence` 必须为空字符串。\n");
+        sp.append("5. `evidence`只能逐字引用输入中的最小充分原文或完整表格行，不得改写或加入解释。\n");
+        sp.append("6. `Pass`的 `evidence`必须支持全部适用条件；Fail或有直接证据的Review，其reason中的引用必须与evidence一致。\n");
+        sp.append("7. 同一检查项内任一强制条件Fail，最终为Fail；无Fail但存在Review，最终为Review；全部适用条件满足才为Pass。\n");
+        sp.append("8. 同一事实只在最直接、最具体的规则下创建issue；其他规则保留自身结论，但不得重复相同issue。\n");
+        sp.append("9. `suggestion`必须写明需要补充或修改的对象、字段和要求，保持原文原意且可直接采用；禁止只写“建议完善”“请核实”等空泛措辞，也不得臆造原文和规则均未给出的数值、型号或文件名称。\n\n");
+        sp.append("### 1.3 表格与图示\n\n");
+        sp.append("- 按 `rowspan`、`colspan` 还原合并单元格；跨行“注/备注/说明”不作为主体字段缺失。\n");
+        sp.append("- 图题、图注只能证明图示存在；图像不可读取时不得猜测，按规则判Review或Fail。\n");
+        sp.append("- 表格数值必须结合表头、单位、适用行列和注释解释。\n\n");
 
-        // ② JSON Schema
-        sp.append("【输出 Schema（必须严格遵守）】\n");
-        sp.append("你的输出必须是一个合法 JSON 对象，且符合以下 JSON Schema：\n");
-        sp.append("```json\n");
-        sp.append(JSON.toJSONString(ReviewResultSchema.schema(),
-                JSONWriter.Feature.PrettyFormat, JSONWriter.Feature.WriteMapNullValue));
-        sp.append("\n```\n");
-        sp.append("禁止输出任何解释、前后缀、markdown 围栏；只能是符合上述 schema 的 JSON 对象本身。\n\n");
+        // 通用判定约束（从规则文件提取，统一注入一次，避免每条规则重复）
+        sp.append("### 1.4 证据充分即通过\n\n");
+        sp.append("evidence在数值、时长、次数、状态、顺序、精度上已满足要求时必须判Pass。不得以「表述易混淆」「未明确」「未显式说明」「表述不一致」为由推翻已摘录的证据；不得因原文用语与规则用词不同而判不符。原文写「至少3h」「保持3h」「稳定后再保持3h」，规则要求「至少3小时」，三者均判Pass；原文写「不低于5℃/min」，规则要求「最小5℃/min」，判Pass。若evidence中已含满足要求的数值或状态，reason不得出现「未明确」「未给出」「缺少」等与该证据矛盾的表述——出现即为判定错误。\n\n");
 
-        // ③ Few-shot 锚点
-        sp.append("【判定锚点 / Few-shot】\n");
-        sp.append("category 锚点：必须从 [格式, 完整性, 标准符合性, 逻辑一致性, 术语一致性, 其他] 中选；无法归类填 其他。\n");
-        sp.append("rule_code 锚点：必须逐字复制【审查规则清单】中方括号内的编号。编号格式随规则库而变"
-                + "（可能是 QTP-GEN-01、G-03、15-02-xxx 等），不要套用下方示例里的编号样式。\n");
-        sp.append("check_code 锚点：该规则列出了原子检查项的，用其 [编号]；未列出原子检查项的，"
-                + "用『该规则编号-C001』拼接（例如规则编号为 QTP-GEN-01 时写 QTP-GEN-01-C001）。\n");
-        sp.append("location 锚点：按 \"一级标题 > 二级标题 > 三级标题\" 写，逐字与原文一致，禁止仅写 \"原文\" / \"表格中\" / \"上文\"。\n");
-        sp.append("evidence 锚点：**每一条 check_results 都必须给出证据**——只能逐字复制当前章节中的最小充分原文片段或表格行，"
-                + "不得改写、概括，也不得添加 \"原文写道\" / \"文中提到\" 等前后缀。"
-                + "唯一例外是「该写而未写」：此时 evidence 填空字符串，并在 reason 里写明缺失项与已检索范围。\n");
-        sp.append("reason 锚点：Fail 或有直接证据的 Review 必须写成『原文“<evidence逐字内容>”存在/表明……』；中文引号内文字必须与 evidence 字段完全一致。内容缺失且无可引用原文时，evidence 填空字符串，reason 明确说明缺少的字段及检查范围。\n\n");
-        sp.append("下面三个示例只演示【字段结构与表述方式】。其中的 R-001 / R-003-C001 等编号是占位符，"
-                + "本次审查一律不得出现——rule_code 与 check_code 必须来自上文【审查规则清单】。\n");
-        sp.append("示例 1（正例，识别为问题）：\n");
-        sp.append("{\"summary\":\"试验条件未明确温度区间\",\"issues\":[{\"location\":\"4 试验条件 > 4.2 环境条件\",\"description\":\"原文“在常温下进行”未给出工作温度区间\",\"suggestion\":\"补充 \\\"-40℃ ~ +70℃\\\" 等明确区间\",\"rule\":\"环境条件完整性\",\"rule_code\":\"R-001\",\"category\":\"完整性\",\"evidence\":\"在常温下进行\"}],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"是否明确工作温度区间\",\"status\":\"Fail\",\"reason\":\"原文“在常温下进行”未给出明确温度上下限\",\"evidence\":\"在常温下进行\",\"missing_items\":[\"工作温度区间\"],\"suggestion\":\"补充明确温度区间\",\"confidence\":\"high\"}]}\n");
-        sp.append("示例 2（规则已适配到本章节，但原文明示前置条件不成立/不适用 → 判 Review 交人工复核，不产生 issue）：\n");
-        sp.append("{\"summary\":\"本章节明确说明无陪试设备，陪试设备检查项前置条件不成立，转待复核\",\"issues\":[],\"passed_items\":[],\"check_results\":[{\"check_code\":\"R-001-C001\",\"rule_code\":\"R-001\",\"check_question\":\"陪试设备信息是否完整\",\"status\":\"Review\",\"reason\":\"原文“陪试设备：无”表明前置条件不成立，无法直接判通过，转人工复核\",\"evidence\":\"陪试设备：无\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"needs_review\"}]}\n");
-        sp.append("示例 3（混合，有的检查项通过、有的不通过）：\n");
-        sp.append("{\"summary\":\"试验步骤完整，但术语不一致\",\"issues\":[{\"location\":\"5 试验步骤 > 5.3\",\"description\":\"原文“5.3.1 使用样件，5.3.2 使用试件”对同一对象使用了不同术语\",\"suggestion\":\"统一为 \\\"试件\\\"\",\"rule\":\"术语一致性\",\"rule_code\":\"R-007\",\"category\":\"术语一致性\",\"evidence\":\"5.3.1 使用样件，5.3.2 使用试件\"}],\"passed_items\":[\"[R-003] 试验步骤完整\"],\"check_results\":[{\"check_code\":\"R-003-C001\",\"rule_code\":\"R-003\",\"check_question\":\"试验步骤是否完整\",\"status\":\"Pass\",\"reason\":\"原文“依次完成准备、执行和记录”表明步骤要素完整\",\"evidence\":\"依次完成准备、执行和记录\",\"missing_items\":[],\"suggestion\":\"\",\"confidence\":\"high\"},{\"check_code\":\"R-007-C001\",\"rule_code\":\"R-007\",\"check_question\":\"术语是否一致\",\"status\":\"Fail\",\"reason\":\"原文“5.3.1 使用样件，5.3.2 使用试件”对同一对象使用了不同术语\",\"evidence\":\"5.3.1 使用样件，5.3.2 使用试件\",\"missing_items\":[],\"suggestion\":\"统一术语\",\"confidence\":\"high\"}]}\n\n");
+        sp.append("### 1.5 跨章引用视为本章证据\n\n");
+        sp.append("原文以编号、代号或章节号引用本大纲其他章节的定义与要求（如「工作状态1」「详见6.4节」「见8.4」「按12.2章节表12要求」），必须先解析被引用处的内容再判定。被引用处已给出所需内容的，视为本章已满足，判Pass，不得以「本章未重复描述」判缺失。仅当被引用目标不存在、指向错误或其内容为空时才判Fail，且问题定位到被引用处，同一缺陷不在各引用章重复报告。\n\n");
 
-        // ④ 规则清单
-        sp.append("【审查规则清单（按 rule_code 升序）】\n");
-        List<String> manifest = new ArrayList<>();
+        sp.append("### 1.6 建议项不扣分\n\n");
+        sp.append("审查步骤中标注「【建议项】」的条款，以及以「宜」「建议」「可」「最好」表述的要求，一律不得作为Fail或Review依据。该条款未落实时仍判Pass，仅在suggestion中写出可直接执行的优化建议，不写入issues，不列入missing_items。只有标注「【强制项】」或以「应」「须」「必须」「不得」表述并给出明确判定阈值的条款，才可判Fail。\n\n");
+
+        sp.append("### 1.7 不适用即通过\n\n");
+        sp.append("条款的适用范围由设备类别、供电制式（交流/直流）、安装区域、试验方法或标准明文限定时，先判适用性再判符合性。原文已明示的类别/制式落在该条款适用范围之外的，判Pass，reason写明「本条适用于X，本设备为Y，不适用」，既不判Fail也不判Review。仅当类别/制式本身缺失、或与正文自相矛盾而无法判定适用性时，才判Review。\n\n");
+
+        sp.append("### 1.8 与标准原文一致即通过\n\n");
+        sp.append("大纲表述与DO-160G相应条款一致时一律判Pass，不得要求大纲比标准更细。标准本身只作原则性规定的（如「必须由有资质的人员来进行评价」并未定义何种资质、量值只给范围而不给单一值），大纲照搬即属合规，不得以「未明确资质」「未给出具体值」「未说明差异原因」判Fail或Review。仅当大纲的取值、名称或程序与标准确有出入时才判Fail，且必须同时引用标准原文与大纲原文两处证据，写明「标准为X、大纲为Y」。\n\n");
+
+        sp.append("### 1.9 引用本文档表格前必须先读表\n\n");
+        sp.append("原文以「见表N」「详见表N」「见附录X」指向本文档自身的表格或附录时，必须先定位并读取该表内容再判定。不得因正文只写了一句引用，就断言其内容缺失、不完整或与标准不一致。确实检索不到被引用的表/附录时判Review，写明检索范围与被引用编号，不判Fail。\n\n");
+
+        // ② 输入边界：规则已经由调度器筛选，本段只约束当前调用的输入切片。
+        sp.append("## 二、审查对象与输入边界\n\n");
+        sp.append("用户消息应包含 `章节: <一级标题>` 及待审查正文。只审查当前输入章节及本提示词列出的规则。\n\n");
+        sp.append("1. 若输入中出现 `=== 以下为本章节引用的其他章节内容 ===`，其后内容仅用于核验当前章节的有效引用和理解上下文，不对被引用章节自身另行报告问题。\n");
+        sp.append("2. 被引用内容只有在当前章节存在明确、有效的引用关系时，才可作为当前规则的补充依据。\n");
+        sp.append("3. 若输入标题或正文明显不属于当前规则适用章节，受影响规则判Review，并在reason中说明输入范围不匹配。\n");
+        sp.append("4. 即使某项不存在或无法核验，也必须输出对应check_results，不得静默跳过。\n\n");
+
+        // ③ 规则清单：只放编号、名称和原子检查项编号，作为结果编号锚点。
+        sp.append("## 三、本章规则清单\n\n");
+        sp.append("以下是本次实际注入的规则。每条规则只生成一个独立规则结果；规则内的多个审查步骤归并为该规则对应原子检查项的一条结论。\n\n");
+        sp.append("| 规则编号 | 规则名称 | 原子检查项 |\n|---|---|---|\n");
         for (int i = 0; i < sorted.size(); i++) {
             RuleEntry e = sorted.get(i);
             String code = (e.code != null && !e.code.isBlank()) ? e.code : ("R-AUTO-" + String.format("%03d", i + 1));
             manifest.add(code);
-            sp.append("\n[").append(code).append("] ");
-            if (e.name != null && !e.name.isBlank()) sp.append(e.name);
-            sp.append("\n");
-            // 有原子检查项时，正文只取检查项段之前的部分：JSON 规则包的 body 是
-            // MultiRuleParser 渲染出来的，本身就把每条检查项完整写了一遍，下面还会再
-            // 以更紧凑的形式输出一次。不裁掉的话每个检查项在提示词里出现两次，白白吃掉
-            // 一倍的规则 token 预算，规则条数一多就会有规则被预算挤掉而静默不生效。
-            String body = (e.checks != null && !e.checks.isEmpty())
-                    ? bodyWithoutChecks(e.body) : e.body;
-            if (body != null && !body.isBlank()) {
-                sp.append(body.trim()).append("\n");
-            }
-            if (e.checks != null && !e.checks.isEmpty()) {
-                sp.append("原子检查项（必须逐项输出 check_results）：\n");
-                for (CheckEntry check : e.checks) {
-                    sp.append("- [").append(check.checkCode).append("] ");
-                    sp.append(check.question == null ? "" : check.question);
-                    if (check.passCriteria != null && !check.passCriteria.isBlank()) {
-                        sp.append("；通过标准：").append(check.passCriteria);
-                    }
-                    // 分类与证据要求不再逐条重复：category 由 issues 的枚举锚点统一约束，
-                    // 证据要求写在 evidence 锚点里，对所有检查项一律生效。
-                    sp.append("\n");
+            List<CheckEntry> checks = e.checks == null ? List.of() : e.checks;
+            if (checks.isEmpty()) {
+                checkManifest.add(code + "-C001");
+                sp.append("| ").append(code).append(" | ").append(safe(e.name)).append(" | ").append(code).append("-C001 |\n");
+            } else {
+                String codes = checks.stream().map(c -> c.checkCode).filter(c -> c != null && !c.isBlank()).reduce((a, b) -> a + "、" + b).orElse(code + "-C001");
+                for (CheckEntry check : checks) {
+                    if (check.checkCode != null && !check.checkCode.isBlank()) checkManifest.add(check.checkCode);
                 }
+                sp.append("| ").append(code).append(" | ").append(safe(e.name)).append(" | ").append(codes).append(" |\n");
             }
         }
-        sp.append("\n本次注入的 rule_code 清单：").append(String.join(", ", manifest)).append("\n");
-        sp.append("issues[].rule_code 必须且只能从该清单中选择；不在清单内的编号不允许出现。\n");
-        sp.append("若规则下列出了原子检查项，则必须为每个原子检查项输出一条 check_results[]；"
-                + "status 只能是 Pass、Fail、Review 三选一（不得使用 N/A 或 Partial）。\n");
-        sp.append("判定顺序（自上而下，命中即停）：\n");
-        sp.append("1. 有逐字证据且满足通过标准 → Pass；\n");
-        sp.append("2. 有逐字证据且明确不满足，或该写而未写 → Fail；\n");
-        sp.append("3. 原文明示前置条件不成立（如「陪试设备：无」）→ Review；\n");
-        sp.append("4. 已在本章检索过该规则涉及的对象、确实未出现 → Review，"
-                + "reason 必须写明检索范围（如「已检索本章正文、表 3-1 及图注，未出现承试单位相关表述」）。\n");
-        sp.append("第 4 档不是免判通道：不得仅凭「本章标题与规则名不像」就判 Review，必须先真正检索。"
-                + "凡判 Review 都要在 reason 里说清是第 3 档还是第 4 档。基础文字质量检查始终适用。\n");
+        sp.append("\n");
 
-        // 表格阅读规则（保留，原 prompt 中证实对 HTML 表格审查很关键）
-        sp.append("\n【表格阅读注意事项】\n");
-        sp.append("- 单元格内容为 \"/\"、\"-\"、\"—\"、\"无\"、\"N/A\" 时表示不适用，不应判定为缺失；\n");
-        sp.append("- rowspan/colspan 合并单元格的值同时适用于其覆盖的行/列，判定时按合并语义视为已填写；\n");
-        sp.append("- 一行只有一个 <td> 且以 \"注/备注/说明\" 开头的为补充说明行，不作为数据缺失依据；\n");
-        sp.append("- 章节正文中若出现 \"=== 以下为本章节引用的其他章节内容 ===\" 分隔块，仅用于补充上下文，不要对其内容套用规则。\n");
+        // ④ 规则明细：规则正文只出现一次，原子检查项附在对应规则末尾。
+        sp.append("## 四、本章规则明细\n\n");
+        for (int i = 0; i < sorted.size(); i++) {
+            RuleEntry e = sorted.get(i);
+            String code = (e.code != null && !e.code.isBlank()) ? e.code : ("R-AUTO-" + String.format("%03d", i + 1));
+            sp.append("### [").append(code).append("] ").append(safe(e.name)).append("\n\n");
+            String body = (e.checks != null && !e.checks.isEmpty()) ? bodyWithoutChecks(e.body) : e.body;
+            if (body != null && !body.isBlank()) sp.append(body.trim()).append("\n\n");
+            sp.append("**原子检查项**\n");
+            if (e.checks == null || e.checks.isEmpty()) {
+                sp.append("- [").append(code).append("-C001] 是否满足“").append(safe(e.name)).append("”规则要求？\n");
+            } else {
+                for (CheckEntry check : e.checks) {
+                    if (check.checkCode == null || check.checkCode.isBlank()) continue;
+                    sp.append("- [").append(check.checkCode).append("] ").append(safe(check.question)).append("\n");
+                    if (check.passCriteria != null && !check.passCriteria.isBlank()) {
+                        sp.append("  通过标准：").append(check.passCriteria.trim()).append("\n");
+                    }
+                }
+            }
+            if (i + 1 < sorted.size()) sp.append("\n---\n\n");
+        }
+        sp.append("\n");
+        sp.append("本次注入的rule_code清单：").append(String.join(", ", manifest)).append("\n");
+        sp.append("本次必须输出的check_code清单：").append(String.join(", ", checkManifest)).append("\n\n");
 
-        // 末尾强制全覆盖锚定：放在 prompt 最后利用 recency，配合 schema 的 minItems，
-        // 逼模型为每条注入规则都产出 check_results，避免弱模型（如 DeepSeek-V4-Flash）漏判。
-        int expected = expectedCheckCount(sorted);
-        sp.append("\n【强制全覆盖（务必遵守）】\n");
-        sp.append("本次共注入 ").append(expected).append(" 个待判定项（基础文字质量检查 + 上述每条规则各至少一项）。\n");
-        sp.append("check_results 数组必须【至少包含 ").append(expected).append(" 条】，且逐一覆盖上面列出的每一条规则：\n");
-        sp.append("- 即使某条规则判 Pass、或与本章主题关系不大，也必须为其输出一条 check_results；\n");
-        sp.append("- rule_code 与 check_code 一律逐字取自上文清单（见 check_code 锚点），不得使用示例里的占位编号；\n");
-        sp.append("- 严禁遗漏、合并或少于 ").append(expected).append(" 条；\n");
-        sp.append("- Fail 或有直接证据的 Review：evidence 必须是可在输入原文中逐字搜索到的最小片段，reason 必须用中文引号“”引用同一片段。\n");
+        // ⑤ 输出Schema：由代码生成，避免提示词模板和后端解析Schema漂移。
+        sp.append("## 五、输出Schema（必须严格遵守）\n\n");
+        sp.append("只能输出一个合法JSON对象，禁止输出解释文字、前后缀或Markdown代码围栏。\n");
+        sp.append("输出必须符合以下JSON Schema：\n\n```json\n");
+        sp.append(JSON.toJSONString(ReviewResultSchema.schema(), JSONWriter.Feature.PrettyFormat, JSONWriter.Feature.WriteMapNullValue));
+        sp.append("\n```\n\n");
+        sp.append("### 5.1 输出约束\n\n");
+        sp.append("- `location`按“一级标题 > 二级标题 > 三级标题”填写，标题文本必须逐字使用输入原文；没有更深标题时使用用户消息中 `章节:` 后的一级标题。\n");
+        sp.append("- `rule_code`和`check_code`必须逐字取自本提示词第三、四节清单，不得使用示例或自造编号。\n");
+        sp.append("- `check_question`必须逐字使用第四节对应原子检查项中的问题。\n");
+        sp.append("- `issues`只收录需要整改的Fail；`passed_items`只收录Pass；Review只出现在`check_results`。\n");
+        sp.append("- `missing_items`无缺失时必须为`[]`；纯缺失时`evidence`必须为空字符串，reason必须说明实际检索范围。\n");
+        sp.append("- `confidence=needs_review`用于需要人工确认的Review，不得用低置信度替代Review。\n\n");
+
+        // ⑥ 编号自检：放在末尾，增强弱模型的完整覆盖率。
+        sp.append("## 六、编号自检\n\n");
+        sp.append("check_results必须严格覆盖本次所有原子检查项，每个编号只出现一次；不得遗漏、合并或新增。\n\n");
+        for (int i = 0; i < checkManifest.size(); i++) {
+            sp.append(i + 1).append(". `").append(checkManifest.get(i)).append("`\n");
+        }
+        sp.append("\n输出前确认：\n");
+        sp.append("- check_results恰好").append(expected).append("条；\n");
+        sp.append("- 每条check_code与rule_code正确对应；\n");
+        sp.append("- 每个Fail原则上至少对应一条issue，每个Pass对应一条passed_item，Review不进入这两个数组；\n");
+        sp.append("- 所有evidence可在输入中逐字搜索，纯缺失时已说明检索范围；\n");
+        sp.append("- 最终响应只有JSON对象本身。\n");
         return sp.toString();
     }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+
 
     /**
      * 期望的 check_results 条数 = 每条规则至少 1 条；定义了原子检查项的按其数量计。
@@ -403,16 +439,16 @@ public class RuleParser {
         // 复用单切片 prompt 主体作为前缀（命中 prompt 缓存的关键）
         String basePrompt = buildStructuredSystemPrompt(rules);
         // 把单切片 schema 段替换为 batch schema 段，保留 ROLE / Few-shot / 规则清单一字不差
-        String singleSchemaBlock = "【输出 Schema（必须严格遵守）】";
+        String singleSchemaBlock = "## 五、输出Schema（必须严格遵守）";
         int schemaStart = basePrompt.indexOf(singleSchemaBlock);
-        int fewShotStart = basePrompt.indexOf("【判定锚点 / Few-shot】");
+        int fewShotStart = basePrompt.indexOf("## 六、编号自检");
         if (schemaStart < 0 || fewShotStart < 0 || fewShotStart <= schemaStart) {
             // 解析失败：直接退化为前缀 + batch 附录
             return basePrompt + "\n\n" + batchInputContract(chunkIds);
         }
         StringBuilder sb = new StringBuilder();
         sb.append(basePrompt, 0, schemaStart);
-        sb.append("【输出 Schema（必须严格遵守 / 批量版本）】\n");
+        sb.append("## 五、输出Schema（必须严格遵守 / 批量版本）\n");
         sb.append("你的输出必须是一个合法 JSON 对象，且符合以下 JSON Schema：\n");
         sb.append("```json\n");
         sb.append(JSON.toJSONString(ReviewResultSchema.batchSchema(),
@@ -561,3 +597,4 @@ public class RuleParser {
         return errors;
     }
 }
+

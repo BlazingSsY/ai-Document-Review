@@ -1,0 +1,248 @@
+/* 新建审查弹窗。
+   视觉基线对齐工作台主界面：12px 圆角、无边框卡片、克制的浅阴影、单一蓝色强调色
+   （#1677ff），其余用中性灰。弹窗沿用 Ant Design 原生的 header / body / footer
+   结构，不再自绘标题栏和按钮条，这样和「模型配置」等其他弹窗保持一致。 */
+.review-create-modal .ant-modal-content {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+}
+
+.review-create-modal .ant-modal-header {
+  margin: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.review-create-modal .ant-modal-body {
+  padding: 20px;
+}
+
+.review-create-modal .ant-modal-footer {
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.review-create-modal .ant-modal-close {
+  top: 14px;
+  inset-inline-end: 14px;
+}
+
+/* ---- 标题区 ---- */
+
+.review-create-modal__title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* 给右上角关闭按钮留位，避免标签压到它上面 */
+  padding-right: 28px;
+}
+
+.review-create-modal__title-icon {
+  display: grid;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: #1677ff;
+  font-size: 18px;
+  background: #e6f0ff;
+  border-radius: 8px;
+}
+
+.review-create-modal__title-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 标题与两个说明标签同处一行，让副标题独占整行宽度、不被挤成两行 */
+.review-create-modal__title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-create-modal__title-line .ant-tag {
+  margin: 0;
+  font-weight: 400;
+}
+
+.review-create-modal__title-text {
+  color: #262626;
+  font-weight: 600;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.review-create-modal__title-sub {
+  margin-top: 2px;
+  overflow: hidden;
+  color: #8c8c8c;
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---- 步骤条与内容区 ---- */
+
+.review-create-modal__steps {
+  max-width: 320px;
+  margin: 0 auto 20px;
+}
+
+.review-create-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-create-upload .ant-upload-wrapper .ant-upload-drag {
+  min-height: 168px;
+  background: #fafafa;
+  border: 1px dashed #d9d9d9;
+  border-radius: 8px;
+  transition: border-color 0.3s ease, background-color 0.3s ease;
+}
+
+.review-create-upload .ant-upload-wrapper .ant-upload-drag:hover,
+.review-create-upload .ant-upload-wrapper .ant-upload-drag:focus-within {
+  background: #f0f5ff;
+  border-color: #1677ff;
+}
+
+.review-create-upload .ant-upload-drag-icon .anticon {
+  color: #1677ff !important;
+  font-size: 36px !important;
+}
+
+.review-create-upload .ant-upload-text {
+  color: #262626 !important;
+  font-size: 14px !important;
+}
+
+.review-create-upload .ant-upload-hint {
+  color: #8c8c8c !important;
+  font-size: 12px !important;
+}
+
+/* ---- 已选文件 ---- */
+
+.review-create-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+}
+
+.review-create-file__icon {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: #1677ff;
+  font-size: 15px;
+  background: #e6f0ff;
+  border-radius: 8px;
+}
+
+.review-create-file__meta {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.review-create-file__meta .ant-typography {
+  max-width: 100%;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.review-create-file__meta .ant-typography-secondary {
+  font-size: 12px;
+}
+
+.review-create-file .ant-tag {
+  margin: 0;
+}
+
+/* ---- 配置表单 ---- */
+
+.review-create-form .ant-form-item {
+  margin-bottom: 16px;
+}
+
+.review-create-form .ant-form-item-label > label {
+  color: #262626;
+  font-weight: 600;
+}
+
+.review-create-quality {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+}
+
+.review-create-quality__icon {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: #1677ff;
+  font-size: 16px;
+  background: #e6f0ff;
+  border-radius: 8px;
+}
+
+.review-create-quality__copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.review-create-quality__copy .ant-typography {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.review-create-quality__copy .ant-typography-secondary {
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  /* 窄屏优先保住标题本身，两个说明性标签让位 */
+  .review-create-modal__title-line .ant-tag,
+  .review-create-modal__title-sub {
+    display: none;
+  }
+
+  .review-create-modal .ant-modal-body {
+    padding: 16px;
+  }
+
+  .review-create-upload .ant-upload-wrapper .ant-upload-drag {
+    min-height: 148px;
+  }
+
+  .review-create-modal .ant-modal-footer .ant-btn {
+    flex: 1;
+  }
+
+  .review-create-modal .ant-modal-footer {
+    display: flex;
+  }
+}

@@ -4,6 +4,7 @@ import com.aireview.common.dto.ApiResponse;
 import com.aireview.common.dto.PageResponse;
 import com.aireview.review.dto.ReviewTaskDTO;
 import com.aireview.review.chunk.service.ReviewService;
+import com.aireview.review.feature.ReviewFeatureRegistry;
 import com.aireview.review.sar.service.SarReviewService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,7 @@ public class UnifiedReviewController {
 
     private final ReviewService reviewService;
     private final SarReviewService sarReviewService;
+    private final ReviewFeatureRegistry reviewFeatureRegistry;
 
     /**
      * 合并两条管线的最近任务，按 createdAt desc 排序，再做内存分页。
@@ -54,16 +56,20 @@ public class UnifiedReviewController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String mode,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String category,
             Authentication authentication) {
         try {
             Long userId = (Long) authentication.getPrincipal();
             String normalizedMode = mode == null ? "ALL" : mode.trim().toUpperCase();
+            String normalizedCategory = normalizeCategory(category);
             List<ReviewTaskDTO> merged = new ArrayList<>();
             if ("ALL".equals(normalizedMode) || "CHUNK".equals(normalizedMode)) {
-                merged.addAll(reviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
+                merged.addAll(reviewService.recentTasksForUser(
+                        userId, PER_PIPELINE_FETCH, normalizedCategory));
             }
             if ("ALL".equals(normalizedMode) || "SAR".equals(normalizedMode)) {
-                merged.addAll(sarReviewService.recentTasksForUser(userId, PER_PIPELINE_FETCH));
+                merged.addAll(sarReviewService.recentTasksForUser(
+                        userId, PER_PIPELINE_FETCH, normalizedCategory));
             }
             if (status != null && !status.isBlank()) {
                 String s = status.toUpperCase();
@@ -146,11 +152,14 @@ public class UnifiedReviewController {
     }
 
     @GetMapping("/stats/all")
-    public ApiResponse<Map<String, Object>> statsAll(Authentication authentication) {
+    public ApiResponse<Map<String, Object>> statsAll(
+            @RequestParam(required = false) String category,
+            Authentication authentication) {
         try {
             Long userId = (Long) authentication.getPrincipal();
-            Map<String, Object> chunk = reviewService.getStats(userId);
-            Map<String, Object> sar = sarReviewService.getStats(userId);
+            String normalizedCategory = normalizeCategory(category);
+            Map<String, Object> chunk = reviewService.getStats(userId, normalizedCategory);
+            Map<String, Object> sar = sarReviewService.getStats(userId, normalizedCategory);
             Map<String, Object> total = new HashMap<>();
             for (String key : List.of("total", "completed", "processing", "failed", "todayCount")) {
                 total.put(key, asLong(chunk.get(key)) + asLong(sar.get(key)));
@@ -163,6 +172,23 @@ public class UnifiedReviewController {
         } catch (Exception e) {
             log.error("Failed to get unified review stats", e);
             return ApiResponse.error("Failed to get stats: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 归一化前端传来的审查类别。未注册的类别一律按「不限类别」处理而不是报错：
+     * 这两个接口是只读的看板视图，宁可多显示也不该因为脏参数把工作台打空。
+     */
+    private String normalizeCategory(String rawCategory) {
+        if (rawCategory == null || rawCategory.isBlank()) {
+            return null;
+        }
+        try {
+            return reviewFeatureRegistry.requireRegistered(rawCategory).category()
+                    .trim().toUpperCase();
+        } catch (IllegalArgumentException unknownCategory) {
+            log.warn("Ignoring unknown review category filter: {}", rawCategory);
+            return null;
         }
     }
 

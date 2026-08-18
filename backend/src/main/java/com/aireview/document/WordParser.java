@@ -9,6 +9,7 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTAbstractNum;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTDecimalNumber;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTLvl;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTNumPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPrGeneral;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTc;
@@ -517,12 +518,17 @@ public class WordParser {
                     // Only do manual counter initialization if the style doesn't define its own numbering.
                     // Otherwise, the numbering formatter handles it through style inheritance.
                     String paraStyleId = paragraph.getStyle();
-                    if (!appendixStyleHasOwnNumbering && isAppendixMarkerStyle(paraStyleId, document)) {
+                    if (!appendixStyleHasOwnNumbering && isAppendixMarkerStyle(paraStyleId, document)
+                            && !isSectionBreakOnlyParagraph(paragraph)) {
                         currentAppendixLetterIndex++;
                         log.debug("Detected appendix marker, setting letter index to {}", currentAppendixLetterIndex);
-                        // Initialize level-0 counters for all detected appendix numIds
+                        // Seed the counter with the PREVIOUS letter: formatNumber increments
+                        // before rendering, so seeding it with this appendix's own index would
+                        // render the next letter up and shift every appendix (附录A → 附录B),
+                        // which in turn makes each appendix's table numbers look like they
+                        // belong to the wrong appendix.
                         for (Map.Entry<BigInteger, Integer> entry : appendixNumIdToLetterIndex.entrySet()) {
-                            numberingFormatter.setCounter(entry.getKey(), 0, currentAppendixLetterIndex);
+                            numberingFormatter.setCounter(entry.getKey(), 0, currentAppendixLetterIndex - 1);
                             // Reset level-1 counter so subsections start fresh for each appendix
                             numberingFormatter.setCounter(entry.getKey(), 1, 0);
                         }
@@ -902,6 +908,18 @@ public class WordParser {
         return String.join("\n", lines);
     }
 
+    /**
+     * Flatten a table into a full rectangular grid.
+     *
+     * <p>Cells covered by a merge carry the merged cell's text rather than an empty
+     * string. Blanking them produced rows that were shorter in meaning than the
+     * header implied: reviewers reading the flattened markdown saw an empty
+     * "试验标准章条" column under a vertically merged chapter reference and reported
+     * the clause number as missing, when it was present in the source table. Repeating
+     * the value keeps every row independently interpretable against the header, which
+     * is what the flattened rendering is for; the {@code rowspan}/{@code colspan}
+     * attributes in the HTML rendering remain the authority on the original geometry.
+     */
     private static List<List<String>> expandTableGrid(TableData table) {
         if (table == null || table.rowCount() <= 0 || table.columnCount() <= 0) {
             return List.of();
@@ -915,11 +933,10 @@ public class WordParser {
                 int startRow = Math.max(0, cell.rowIndex() - 1);
                 int startCol = Math.max(0, cell.columnIndex() - 1);
                 if (startRow >= grid.size() || startCol >= table.columnCount()) continue;
-                grid.get(startRow).set(startCol, Objects.toString(cell.text(), ""));
+                String text = Objects.toString(cell.text(), "");
                 for (int r = startRow; r < Math.min(grid.size(), startRow + cell.rowSpan()); r++) {
                     for (int c = startCol; c < Math.min(table.columnCount(), startCol + cell.colSpan()); c++) {
-                        if (r == startRow && c == startCol) continue;
-                        grid.get(r).set(c, "");
+                        grid.get(r).set(c, text);
                     }
                 }
             }
@@ -1223,6 +1240,25 @@ public class WordParser {
         String name = style.getName().toLowerCase();
         // Match styles like "附录标识", "附录标识5#", etc.
         return name.contains("附录标识");
+    }
+
+    /**
+     * A paragraph that carries section properties and no runs is a section terminator,
+     * not content. Word leaves these behind at page-setup boundaries and they inherit
+     * whatever style was active — including the appendix marker style.
+     *
+     * <p>Counting one as an appendix advances the appendix letter without a real
+     * appendix behind it, so every later appendix is labelled one letter too high
+     * ("附录B 试验故障报告" is reported as 附录C) and reviewers see the appendix's own
+     * table numbers as belonging to the wrong appendix. Genuine blank appendix markers
+     * — the ones whose title sits in the following paragraph — carry bookmarks and no
+     * {@code sectPr}, so they are unaffected.
+     */
+    private static boolean isSectionBreakOnlyParagraph(XWPFParagraph paragraph) {
+        if (paragraph == null || paragraph.getCTP() == null) return false;
+        CTPPr properties = paragraph.getCTP().getPPr();
+        if (properties == null || properties.getSectPr() == null) return false;
+        return paragraph.getRuns().isEmpty();
     }
 
     /**

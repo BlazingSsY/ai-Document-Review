@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Form, message } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { ReviewMode, ReviewTask, SourceEditParams } from '../api/reviews';
+import * as reviewApi from '../api/reviews';
 import {
-  getReviewApi,
   getReviewDetailAnyPipeline,
   getReviewSourcesAnyPipeline,
 } from '../api/pipelineApi';
@@ -62,8 +62,8 @@ export function useReviewWorkspace() {
     appendLog(taskId, { time: formatTime(new Date()), level, message: logMessage, progress });
   }, [taskId, appendLog]);
 
-  const reviewMode: ReviewMode = (task?.reviewMode ?? 'CHUNK') as ReviewMode;
-  const reviewApi = getReviewApi(reviewMode);
+  // 详情页只展示管线名称；写操作一律走 chunk 客户端——前端不再创建 SAR 任务。
+  const reviewMode: ReviewMode = task?.reviewMode ?? 'CHUNK';
 
   const fetchSources = useCallback(async (id: string) => {
     setSourcesLoading(true);
@@ -124,8 +124,9 @@ export function useReviewWorkspace() {
     }
   }, [taskId, addLog, fetchSources]);
 
-  const goDashboard = useCallback(() => {
-    navigate('/dashboard');
+  // 详情页是从审查任务中心点进来的，返回也回到那里而不是工作台概览。
+  const goTaskCenter = useCallback(() => {
+    navigate('/chunk/review');
   }, [navigate]);
 
   const handleReReview = async () => {
@@ -520,7 +521,7 @@ export function useReviewWorkspace() {
     exportingRevised,
     failedChunkCount,
     failedChunks,
-    goDashboard,
+    goTaskCenter,
     handleClearSourceEdits,
     handleExportAudit,
     handleExportExcel,

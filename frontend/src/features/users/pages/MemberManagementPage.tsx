@@ -20,9 +20,11 @@ import {
 import { getAllRuleLibraries, type RuleLibrary } from '../../rules/api/rules';
 import useAuthStore from '../../auth/store/authStore';
 import { PAGE_SIZE } from '../../../shared/utils/constants';
+import {
+  usesSharedRuleLibraries, reviewFeatureLabels,
+} from '../../review/registry/reviewFeatures';
 
 const { Title, Text, Paragraph } = Typography;
-const ENV_REVIEW_FEATURE = 'ENV_TEST_OUTLINE_REVIEW';
 
 const ROLE_LABELS: Record<string, { label: string; color: string }> = {
   supervisor: { label: '平台管理员', color: 'red' },
@@ -89,7 +91,8 @@ function MemberManagementPage() {
   const [permissionForm] = Form.useForm();
   const accountType = (Form.useWatch('accountType', memberForm) || 'member') as AccountType;
   const selectedFeatures = (Form.useWatch('featureCodes', permissionForm) || []) as string[];
-  const canAssignLibraries = selectedFeatures.includes(ENV_REVIEW_FEATURE);
+  // 只有复用共享规则库的功能才需要在这里勾选规则库；其余功能自带配置。
+  const canAssignLibraries = usesSharedRuleLibraries(selectedFeatures);
 
   const fetchUnits = useCallback(async () => {
     try {
@@ -182,7 +185,8 @@ function MemberManagementPage() {
     setPermissionLoading(true);
     permissionForm.resetFields();
     try {
-      const canDelegateReview = isSupervisor || features.some((item) => item.code === ENV_REVIEW_FEATURE);
+      const canDelegateReview = isSupervisor
+        || usesSharedRuleLibraries(features.map((item) => item.code));
       const [permissionRes, libraries] = await Promise.all([
         getMemberPermissions(member.id),
         canDelegateReview
@@ -290,8 +294,9 @@ function MemberManagementPage() {
       ) : (
         <Space direction="vertical" size={3}>
           <Space size={4} wrap>
-            {(member.featureCodes || []).includes(ENV_REVIEW_FEATURE)
-              ? <Tag color="blue">环境试验大纲审查</Tag>
+            {reviewFeatureLabels(member.featureCodes).length > 0
+              ? reviewFeatureLabels(member.featureCodes)
+                  .map((label) => <Tag color="blue" key={label}>{label}</Tag>)
               : <Tag>未分配功能</Tag>}
           </Space>
           <Text type="secondary" style={{ fontSize: 12 }}>

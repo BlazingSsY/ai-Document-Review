@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Space, Typography, Tag,
   message, Popconfirm, Breadcrumb, Empty, Descriptions, Select, Tooltip, Spin, Switch,
@@ -11,8 +11,13 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { Rule, RuleLibrary, RuleFolder, RuleUploadConflict } from '../api/rules';
 import {
-  getRuleApi, PIPELINE_LABEL, PIPELINE_COLOR, type ReviewMode,
-} from '../../review/api/pipelineApi';
+  getRuleList, getRuleDetail, uploadRule, importChecklist,
+  updateRuleMetadata, updateRuleContent, deleteRule,
+  getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
+  getFolderList, createFolder, updateFolder, deleteFolder,
+  getUploadConflicts,
+} from '../api/rules';
+import { PIPELINE_LABEL, PIPELINE_COLOR } from '../../review/api/pipelineApi';
 import RuleUploader from '../components/RuleUploader';
 import { PAGE_SIZE } from '../../../shared/utils/constants';
 import useAuthStore from '../../auth/store/authStore';
@@ -121,24 +126,9 @@ const RULE_COL_WIDTHS = {
   action: 160,
 } as const;
 
-interface RuleListPageProps {
-  /** 当前页所属管线。决定调用 chunk / RAG / SAR 的规则 / 规则库 API。 */
-  reviewMode: ReviewMode;
-}
-
-function RuleListPage({ reviewMode }: RuleListPageProps) {
+function RuleListPage() {
   const user = useAuthStore((s) => s.user);
   const canManage = user?.role === 'supervisor' || user?.role === 'admin';
-
-  const ruleApi = useMemo(() => getRuleApi(reviewMode), [reviewMode]);
-  const {
-    getRuleList, getRuleDetail, uploadRule, importChecklist, updateRuleMetadata, updateRuleContent, deleteRule,
-    getRuleLibraryList, createRuleLibrary, deleteRuleLibrary,
-    getFolderList, createFolder, updateFolder, deleteFolder,
-    getUploadConflicts,
-  } = ruleApi;
-  const pipelineLabel = PIPELINE_LABEL[reviewMode];
-  const pipelineColor = PIPELINE_COLOR[reviewMode];
 
   // Library state
   const [libraries, setLibraries] = useState<RuleLibrary[]>([]);
@@ -249,24 +239,6 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
     if (inRulesView) fetchRules();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rulePage, currentFolder, inUncategorized]);
-
-  // 切换管线后清空状态、回到规则库列表，避免显示上一个管线遗留的数据。
-  useEffect(() => {
-    setCurrentLibrary(null);
-    setCurrentFolder(null);
-    setInUncategorized(false);
-    setLibraries([]);
-    setFolders([]);
-    setRules([]);
-    setSelectedLibIds([]);
-    setSelectedRuleIds([]);
-    if (libPage !== 1) {
-      setLibPage(1);
-    } else {
-      fetchLibraries();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reviewMode]);
 
   // Library operations
   const handleCreateLibrary = async (values: { name: string; description: string }) => {
@@ -849,7 +821,7 @@ function RuleListPage({ reviewMode }: RuleListPageProps) {
         <div className="page-header">
           <Space size={12} align="center">
             <Title level={4} style={{ margin: 0 }}>审查规则管理</Title>
-            <Tag color={pipelineColor}>{pipelineLabel}</Tag>
+            <Tag color={PIPELINE_COLOR.CHUNK}>{PIPELINE_LABEL.CHUNK}</Tag>
           </Space>
           <Space>
             {canManage && selectedLibIds.length > 0 && (

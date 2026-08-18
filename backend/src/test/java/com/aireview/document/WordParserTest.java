@@ -2,7 +2,11 @@ package com.aireview.document;
 
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFStyle;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STMerge;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -116,9 +120,94 @@ class WordParserTest {
                 "H2 subsection must not become a chapter boundary, got " + titles);
     }
 
+    @Test
+    void verticallyMergedCellsKeepTheirValueInEveryCoveredRow() throws Exception {
+        Path file = tempDir.resolve("merged.docx");
+        try (XWPFDocument document = new XWPFDocument()) {
+            heading(document, "Heading1", "7 试验概述");
+            // 表 7-2 的形态：第 1 列「试验标准章条」纵向合并覆盖两行，
+            // 两行各自的条款细分号写在第 2 列。
+            XWPFTable table = document.createTable(3, 3);
+            table.getRow(0).getCell(0).setText("试验标准章条");
+            table.getRow(0).getCell(1).setText("条款");
+            table.getRow(0).getCell(2).setText("试验项目名称");
+            table.getRow(1).getCell(0).setText("RTCA/DO-160G第16章");
+            table.getRow(1).getCell(1).setText("第16.6.1.1条");
+            table.getRow(1).getCell(2).setText("电压（直流平均值）");
+            table.getRow(2).getCell(1).setText("第16.6.1.3条");
+            table.getRow(2).getCell(2).setText("瞬时电源中断");
+            vMergeRestart(table, 1, 0);
+            vMergeContinue(table, 2, 0);
+            try (var output = Files.newOutputStream(file)) {
+                document.write(output);
+            }
+        }
+
+        String content = WordParser.parseChapters(file.toString()).get(0).getContent();
+
+        // 被合并覆盖的行必须带上合并值，否则审查模型读到空列会误判「标准章条缺失」。
+        assertTrue(content.contains("| RTCA/DO-160G第16章 | 第16.6.1.3条 | 瞬时电源中断 |"),
+                "merged chapter reference must repeat on the covered row, got:\n" + content);
+    }
+
+    @Test
+    void sectionBreakParagraphDoesNotConsumeAnAppendixLetter() throws Exception {
+        Path file = tempDir.resolve("appendix.docx");
+        try (XWPFDocument document = new XWPFDocument()) {
+            appendixStyle(document);
+            heading(document, "Heading1", "1 目的");
+            document.createParagraph().createRun().setText("正文");
+            appendixMarker(document, "检测记录表");
+            // Word 在分节处留下的空段落，继承了附录标识样式但不是附录。
+            sectionBreakOnlyParagraph(document);
+            appendixMarker(document, "试验故障报告");
+            try (var output = Files.newOutputStream(file)) {
+                document.write(output);
+            }
+        }
+
+        List<WordParser.Chapter> chapters = WordParser.parseChapters(file.toString());
+        List<String> titles = chapters.stream().map(WordParser.Chapter::getTitle).toList();
+
+        assertFalse(titles.stream().anyMatch(t -> t.contains("附录C")),
+                "空的分节符段落不得占用一个附录字母，实际章节: " + titles);
+    }
+
+    private static void appendixStyle(XWPFDocument document) {
+        CTStyle style = CTStyle.Factory.newInstance();
+        style.setStyleId("AppendixMark");
+        style.addNewName().setVal("附录标识5#");
+        document.createStyles().addStyle(new XWPFStyle(style));
+    }
+
+    private static void appendixMarker(XWPFDocument document, String title) {
+        XWPFParagraph paragraph = document.createParagraph();
+        paragraph.setStyle("AppendixMark");
+        paragraph.createRun().setText(title);
+    }
+
+    private static void sectionBreakOnlyParagraph(XWPFDocument document) {
+        XWPFParagraph paragraph = document.createParagraph();
+        paragraph.setStyle("AppendixMark");
+        paragraph.getCTP().addNewPPr().addNewSectPr();
+    }
+
     private static void heading(XWPFDocument document, String style, String text) {
         XWPFParagraph paragraph = document.createParagraph();
         paragraph.setStyle(style);
         paragraph.createRun().setText(text);
+    }
+
+    private static void vMergeRestart(XWPFTable table, int row, int col) {
+        vMerge(table, row, col, STMerge.RESTART);
+    }
+
+    private static void vMergeContinue(XWPFTable table, int row, int col) {
+        vMerge(table, row, col, STMerge.CONTINUE);
+    }
+
+    private static void vMerge(XWPFTable table, int row, int col, STMerge.Enum value) {
+        CTTcPr properties = table.getRow(row).getCell(col).getCTTc().addNewTcPr();
+        properties.addNewVMerge().setVal(value);
     }
 }

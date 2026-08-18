@@ -1,6 +1,9 @@
 import request, { ApiResponse } from '../../../shared/api/request';
-import { PaginatedResult } from '../../rules/api/rules';
 
+/**
+ * 审查管线。后端保留 CHUNK / SAR 两条；前端只创建 CHUNK 任务，SAR 仅在回显历史任务
+ * 的管线名称时出现。
+ */
 export type ReviewMode = 'CHUNK' | 'SAR';
 
 export interface ReviewTask {
@@ -27,12 +30,6 @@ export interface ReviewTask {
   reviewCategory?: string;
 }
 
-export interface ReviewListParams {
-  page: number;
-  pageSize: number;
-  status?: string;
-}
-
 export function submitReview(formData: FormData) {
   return request.post<ApiResponse<ReviewTask>>('/reviews/execute', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -42,17 +39,6 @@ export function submitReview(formData: FormData) {
     // bound on the upload itself.
     timeout: 120000,
   });
-}
-
-export function getReviewList(params: ReviewListParams) {
-  const { pageSize, ...rest } = params;
-  return request.get<ApiResponse<PaginatedResult<ReviewTask>>>('/reviews/tasks', {
-    params: { ...rest, size: pageSize },
-  });
-}
-
-export function getReviewDetail(taskId: string) {
-  return request.get<ApiResponse<ReviewTask>>(`/reviews/tasks/${taskId}`);
 }
 
 export function cancelReview(taskId: string) {
@@ -133,12 +119,3 @@ export function exportRevisedDocument(taskId: string) {
   });
 }
 
-export function getReviewStats() {
-  return request.get<ApiResponse<{
-    total: number;
-    completed: number;
-    processing: number;
-    failed: number;
-    todayCount: number;
-  }>>('/reviews/stats');
-}

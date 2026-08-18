@@ -64,10 +64,6 @@ export function getEnabledModels(modelType: ModelType = 'chat') {
   });
 }
 
-export function getModelDetail(id: number) {
-  return request.get<ApiResponse<AIModel>>(`/models/${id}`);
-}
-
 export function createModel(params: CreateModelParams) {
   return request.post<ApiResponse<AIModel>>('/models', params);
 }

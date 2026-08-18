@@ -25,6 +25,7 @@ import com.aireview.rule.repository.RuleMapper;
 import com.aireview.rule.repository.SarRuleCheckMapper;
 import com.aireview.rule.service.SarRuleService;
 import com.aireview.scenario.service.SarScenarioService;
+import com.aireview.review.core.ReviewCategoryQuery;
 import com.aireview.review.core.ReviewResultSchema;
 import com.aireview.review.core.SourceEditStore;
 import com.aireview.review.feature.ReviewDocument;
@@ -387,10 +388,14 @@ public class SarReviewService {
      * unified workbench list endpoint.
      */
     public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit) {
-        LambdaQueryWrapper<SarReviewTask> query = new LambdaQueryWrapper<>();
+        return recentTasksForUser(userId, limit, null);
+    }
+
+    /** 同上，但可按审查类别收敛；null 表示不限类别。 */
+    public List<ReviewTaskDTO> recentTasksForUser(Long userId, int limit, String category) {
+        LambdaQueryWrapper<SarReviewTask> query = categoryScopedQuery(userId, category);
         // Exclude the heavy ai_result JSON from the list query (see ReviewService.recentTasksForUser).
         query.select(SarReviewTask.class, info -> !"ai_result".equals(info.getColumn()));
-        query.eq(SarReviewTask::getUserId, userId);
         query.orderByDesc(SarReviewTask::getCreatedAt);
         Page<SarReviewTask> pageParam = new Page<>(1, Math.max(1, limit));
         return sarReviewTaskMapper.selectPage(pageParam, query).getRecords()
@@ -417,25 +422,20 @@ public class SarReviewService {
     }
 
     public Map<String, Object> getStats(Long userId) {
-        LambdaQueryWrapper<SarReviewTask> baseQuery = new LambdaQueryWrapper<>();
-        baseQuery.eq(SarReviewTask::getUserId, userId);
-        long total = sarReviewTaskMapper.selectCount(baseQuery);
-        long completed = sarReviewTaskMapper.selectCount(
-                new LambdaQueryWrapper<SarReviewTask>()
-                        .eq(SarReviewTask::getUserId, userId)
-                        .eq(SarReviewTask::getStatus, SarReviewTask.STATUS_COMPLETED));
-        long processing = sarReviewTaskMapper.selectCount(
-                new LambdaQueryWrapper<SarReviewTask>()
-                        .eq(SarReviewTask::getUserId, userId)
-                        .eq(SarReviewTask::getStatus, SarReviewTask.STATUS_PROCESSING));
-        long failed = sarReviewTaskMapper.selectCount(
-                new LambdaQueryWrapper<SarReviewTask>()
-                        .eq(SarReviewTask::getUserId, userId)
-                        .eq(SarReviewTask::getStatus, SarReviewTask.STATUS_FAILED));
-        long todayCount = sarReviewTaskMapper.selectCount(
-                new LambdaQueryWrapper<SarReviewTask>()
-                        .eq(SarReviewTask::getUserId, userId)
-                        .ge(SarReviewTask::getCreatedAt, LocalDateTime.now().toLocalDate().atStartOfDay()));
+        return getStats(userId, null);
+    }
+
+    /** 同上，但可按审查类别收敛；null 表示不限类别。 */
+    public Map<String, Object> getStats(Long userId, String category) {
+        long total = countTasks(userId, category, null);
+        long completed = countTasks(userId, category, SarReviewTask.STATUS_COMPLETED);
+        long processing = countTasks(userId, category, SarReviewTask.STATUS_PROCESSING);
+        long failed = countTasks(userId, category, SarReviewTask.STATUS_FAILED);
+
+        LambdaQueryWrapper<SarReviewTask> todayQuery = categoryScopedQuery(userId, category);
+        todayQuery.ge(SarReviewTask::getCreatedAt, LocalDateTime.now().toLocalDate().atStartOfDay());
+        long todayCount = sarReviewTaskMapper.selectCount(todayQuery);
+
         Map<String, Object> stats = new HashMap<>();
         stats.put("total", total);
         stats.put("completed", completed);
@@ -443,6 +443,23 @@ public class SarReviewService {
         stats.put("failed", failed);
         stats.put("todayCount", todayCount);
         return stats;
+    }
+
+    private long countTasks(Long userId, String category, String status) {
+        LambdaQueryWrapper<SarReviewTask> query = categoryScopedQuery(userId, category);
+        if (status != null) {
+            query.eq(SarReviewTask::getStatus, status);
+        }
+        return sarReviewTaskMapper.selectCount(query);
+    }
+
+    /** 用户 + 可选类别的基础查询，保证各审查功能的任务与统计互不可见。 */
+    private LambdaQueryWrapper<SarReviewTask> categoryScopedQuery(Long userId, String category) {
+        LambdaQueryWrapper<SarReviewTask> query = new LambdaQueryWrapper<>();
+        query.eq(SarReviewTask::getUserId, userId);
+        ReviewCategoryQuery.filterByCategory(query, SarReviewTask::getReviewCategory,
+                category, reviewFeatureRegistry.defaultCategory());
+        return query;
     }
 
     public void deleteTask(String taskId, Long userId) {

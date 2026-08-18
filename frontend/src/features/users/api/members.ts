@@ -66,10 +66,6 @@ export function createUnit(params: { parentId?: number; name: string; code?: str
   });
 }
 
-export function deleteUnit(unitId: number) {
-  return request.delete<ApiResponse<null>>(`${BASE}/units/${unitId}`);
-}
-
 export function getMembers(params: {
   page: number;
   pageSize: number;
@@ -118,10 +114,6 @@ export function updateMemberPermissions(memberId: number, params: {
   libraryIds: number[];
 }) {
   return request.put<ApiResponse<null>>(`${BASE}/${memberId}/permissions`, params);
-}
-
-export function updateMemberRole(memberId: number, role: string) {
-  return request.put<ApiResponse<null>>(`${BASE}/${memberId}/role`, { role });
 }
 
 export function resetMemberPassword(memberId: number) {

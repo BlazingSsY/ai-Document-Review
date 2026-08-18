@@ -15,6 +15,11 @@ spring:
       idle-timeout: 300000
       connection-timeout: 20000
 
+  # 序列化 Date/Instant 时统一用东八区，与容器 TZ 保持一致；LocalDateTime 本身不带时区，
+  # 由容器 TZ 决定其取值。
+  jackson:
+    time-zone: Asia/Shanghai
+
   servlet:
     multipart:
       enabled: true

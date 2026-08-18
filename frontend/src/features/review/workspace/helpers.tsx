@@ -22,6 +22,28 @@ export function formatTime(date: Date): string {
   return date.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+/**
+ * 毫秒 → 「1 小时 23 分 45 秒」。只保留到秒：审查任务以分钟计，毫秒位没有意义。
+ * 负值（时钟回拨或数据异常）按 0 处理，避免出现「-3 秒」。
+ */
+export function formatDuration(ms: number | null | undefined): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return '-';
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h} 小时 ${m} 分 ${s} 秒`;
+  if (m > 0) return `${m} 分 ${s} 秒`;
+  return `${s} 秒`;
+}
+
+/** 解析后端返回的时间戳；无法解析时返回 null，交由调用方决定占位显示。 */
+export function parseTimestamp(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 export const CHECK_STATUS_LABELS: Record<string, string> = {
   Pass: '通过',
   Partial: '部分通过',

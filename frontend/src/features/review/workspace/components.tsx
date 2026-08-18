@@ -48,8 +48,10 @@ import {
   CHECK_STATUS_LABELS,
   checkStatusColor,
   confidenceLabel,
+  formatDuration,
   locatorCandidates,
   numericField,
+  parseTimestamp,
   recordArray,
   sourceEditKey,
   sourceReasonLabel,
@@ -465,12 +467,12 @@ function ReviewPageHeader({
   return (
     <header className="review-page-header">
       <div className="review-heading-main">
-        <Tooltip title="返回工作台">
+        <Tooltip title="返回任务列表">
           <Button
-            aria-label="返回工作台"
+            aria-label="返回任务列表"
             className="review-back-button"
             icon={<ArrowLeftOutlined />}
-            onClick={workspace.goDashboard}
+            onClick={workspace.goTaskCenter}
           />
         </Tooltip>
         <div className="review-heading-copy">
@@ -1062,6 +1064,79 @@ function ReviewLogSection({ workspace }: { workspace: ReviewWorkspaceViewModel }
   );
 }
 
+/**
+ * 任务时长统计。
+ *
+ * 「任务时长」取 createdAt → updatedAt 的墙钟跨度；进行中的任务改用「当前时间 − createdAt」
+ * 并每秒走时。注意 updatedAt 会被完成后的人工复核、原文修改等写操作一并刷新，所以已完成
+ * 任务若事后被编辑过，这个跨度会偏大——精确统计需要后端补一个专门的完成时间字段。
+ *
+ * 「AI 调用累计」是各切片 elapsedMs 之和。切片并行执行，所以它通常远大于墙钟时长，
+ * 两者一起看才能反映并发收益。
+ */
+function TaskDurationSection({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
+  const { task } = workspace;
+  const [now, setNow] = useState(() => Date.now());
+
+  // 仅进行中才需要秒级走时；终态任务跨度固定，挂定时器纯属浪费。
+  useEffect(() => {
+    if (!workspace.isProcessing) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [workspace.isProcessing]);
+
+  const stats = useMemo(() => {
+    const started = parseTimestamp(task?.createdAt);
+    const updated = parseTimestamp(task?.updatedAt);
+    const endedAt = workspace.isProcessing ? now : updated?.getTime();
+    const wallMs = started && endedAt !== undefined ? endedAt - started.getTime() : null;
+
+    let aiMs = 0;
+    let counted = 0;
+    let slowestMs = 0;
+    for (const chunk of workspace.chunkResults) {
+      const elapsed = Number(chunk.elapsedMs);
+      if (!Number.isFinite(elapsed) || elapsed <= 0) continue;
+      aiMs += elapsed;
+      slowestMs = Math.max(slowestMs, elapsed);
+      counted += 1;
+    }
+    return { started, updated, wallMs, aiMs, counted, slowestMs };
+  }, [task?.createdAt, task?.updatedAt, workspace.isProcessing, workspace.chunkResults, now]);
+
+  if (!task) return null;
+
+  const rows: Array<[string, string]> = [
+    ['开始时间', stats.started ? formatTaskTime(task.createdAt) : '-'],
+    [
+      workspace.isProcessing ? '已运行' : '任务时长',
+      stats.wallMs === null ? '-' : formatDuration(stats.wallMs),
+    ],
+  ];
+  if (!workspace.isProcessing && stats.updated) {
+    rows.push(['结束时间', formatTaskTime(task.updatedAt)]);
+  }
+  if (stats.counted > 0) {
+    rows.push(['AI 调用累计', `${formatDuration(stats.aiMs)}（${stats.counted} 个切片）`]);
+    rows.push(['最慢切片', formatDuration(stats.slowestMs)]);
+  }
+
+  return (
+    <section className="runtime-section">
+      <div className="runtime-section-heading"><strong>任务时长</strong></div>
+      <div className="runtime-details">
+        <div className="runtime-group">
+          {rows.map(([label, value]) => (
+            <div key={label} className="runtime-detail-item">
+              <div><span>{label}</span><em>{value}</em></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function RuleRuntimeSection({ workspace }: { workspace: ReviewWorkspaceViewModel }) {
   const { task } = workspace;
   if (!task) return null;
@@ -1116,6 +1191,7 @@ function RuntimeDrawer({
   return (
     <Drawer title="审查运行信息" width={600} open={open} onClose={onClose} destroyOnHidden>
       <div className="runtime-drawer-content">
+        <TaskDurationSection workspace={workspace} />
         <ReviewLogSection workspace={workspace} />
         <RuleRuntimeSection workspace={workspace} />
       </div>

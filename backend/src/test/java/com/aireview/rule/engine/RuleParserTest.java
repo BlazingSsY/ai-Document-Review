@@ -24,55 +24,68 @@ class RuleParserTest {
         String prompt = RuleParser.buildStructuredSystemPrompt(List.of(rule));
 
         assertThat(prompt)
-                .contains("status 只能是 Pass、Fail、Review 三选一")
-                .contains("不得使用 N/A 或 Partial")
-                .contains("基础文字质量检查始终适用")
-                .contains("evidence 必须是可在输入原文中逐字搜索到的最小片段")
-                .contains("reason 必须用中文引号“”引用同一片段")
-                .contains("禁止输出任何解释、前后缀、markdown 围栏")
-                .contains("原文“在常温下进行”未给出明确温度上下限")
-                .contains("\"evidence\":\"在常温下进行\"")
-                .doesNotContain("\"evidence\":\"原文仅写")
-                .doesNotContain("本切片为目录页，所有规则不适用");
+                .contains("## 一、公共审查约束")
+                .contains("## 三、本章规则清单")
+                .contains("## 四、本章规则明细")
+                .contains("## 五、输出Schema（必须严格遵守）")
+                .contains("## 六、编号自检")
+                .contains("Pass")
+                .contains("Fail")
+                .contains("Review")
+                .contains("不得输出 `Partial`、`N/A`")
+                .contains("evidence")
+                // 从常量派生：内置质量规则编号改过一次（R-BASIC-QUALITY → R-Q），
+                // 写死字面量会在下一次改名时静默失配。
+                .contains(RuleDispatcher.BASIC_QUALITY_RULE_CODE + "-C001")
+                .contains("check_results恰好1条")
+                .contains("只能输出一个合法JSON对象")
+                .doesNotContain("【判定锚点 / Few-shot】")
+                .doesNotContain("示例 1（正例，识别为问题）");
     }
 
-    /**
-     * 「与本章无关的规则判什么」曾经三处指令互相堵死：禁止因无关判 Review、没证据判不了 Pass、
-     * 又必须为每条规则输出一行。模型只能硬选，多半选 Review，直接制造待复核噪声。
-     * 现在给出四档顺序，其中第 4 档是合法出口，但要求先真检索、并在 reason 写明范围。
-     */
+    /** Rules without direct evidence still need an explicit, auditable Review path. */
     @Test
     void structuredPromptGivesALegalPathForRulesWithNoMatchingContent() {
         String prompt = RuleParser.buildStructuredSystemPrompt(List.of(
                 new RuleParser.RuleEntry("QTP-GEN-01", "试验人员与承试单位", "规则正文")));
 
         assertThat(prompt)
-                .as("四档判定顺序必须完整给出，否则无关规则无档可落")
-                .contains("有逐字证据且满足通过标准 → Pass")
-                .contains("该写而未写 → Fail")
-                .contains("原文明示前置条件不成立")
-                .contains("确实未出现 → Review")
-                .contains("reason 必须写明检索范围");
-
-        assertThat(prompt)
-                .as("第 4 档不能退化成免判通道")
-                .contains("不得仅凭「本章标题与规则名不像」就判 Review");
+                .as("规则未直接命中时必须保留可审计的 Review 路径")
+                .contains("若输入标题或正文明显不属于当前规则适用章节，受影响规则判Review")
+                .contains("缺失或不符合时，`reason`写明实际检索范围")
+                .contains("即使某项不存在或无法核验，也必须输出对应check_results");
     }
 
-    /**
-     * Few-shot 里的 R-001 只是格式占位。若模型照抄，ensureRuleCoverage 的编号匹配会全部落空——
-     * 模型真答的那条被丢弃，同时补一条「模型未返回→待复核」，一次错配污染两条结果。
-     */
     @Test
-    void structuredPromptMarksExampleRuleCodesAsPlaceholders() {
+    void structuredPromptUsesOnlyInjectedRuleAndCheckCodes() {
         String prompt = RuleParser.buildStructuredSystemPrompt(List.of(
                 new RuleParser.RuleEntry("QTP-GEN-01", "试验人员与承试单位", "规则正文")));
 
         assertThat(prompt)
-                .contains("是占位符")
-                .contains("不要套用下方示例里的编号样式")
+                .contains("QTP-GEN-01")
                 .contains("QTP-GEN-01-C001")
-                .as("旧文案把占位编号写成了格式规范，会诱导模型照抄")
-                .doesNotContain("中给出的 [R-XXX] 编号");
+                .contains("本次注入的rule_code清单：QTP-GEN-01")
+                .contains("本次必须输出的check_code清单：QTP-GEN-01-C001")
+                .doesNotContain("R-001")
+                .doesNotContain("R-003-C001");
+    }
+
+    @Test
+    void structuredPromptKeepsMultipleChecksInOneRuleDetail() {
+        RuleParser.RuleEntry rule = new RuleParser.RuleEntry(
+                "QTP-GEN-03",
+                "通用要求",
+                "规则说明\n审查内容\n审查步骤",
+                List.of(
+                        new RuleParser.CheckEntry("QTP-GEN-03-C001", "环境条件是否完整", "温度、湿度、压力均有要求", "完整性", true),
+                        new RuleParser.CheckEntry("QTP-GEN-03-C002", "允差是否明确", "给出适用参数的允许误差", "标准符合性", true)));
+
+        String prompt = RuleParser.buildStructuredSystemPrompt(List.of(rule));
+
+        assertThat(prompt)
+                .contains("| QTP-GEN-03 | 通用要求 | QTP-GEN-03-C001、QTP-GEN-03-C002 |")
+                .contains("QTP-GEN-03-C001")
+                .contains("QTP-GEN-03-C002")
+                .contains("check_results恰好2条");
     }
 }

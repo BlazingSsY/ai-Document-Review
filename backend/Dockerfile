@@ -13,6 +13,10 @@ RUN mvn package -DskipTests -B
 FROM eclipse-temurin:17-jre-focal AS runtime
 WORKDIR /app
 
+# 基础镜像默认 Etc/UTC。实体表用不带时区的 LocalDateTime，若不指定时区，写库时间会比
+# 实际早 8 小时。docker-compose 会再显式覆盖一次，这里保证脱离 compose 单独运行也正确。
+ENV TZ=Asia/Shanghai
+
 COPY --from=build /app/target/*.jar app.jar
 RUN mkdir -p /app/uploads
 
