@@ -36,13 +36,26 @@ public class ChapterReferenceResolver {
 
     private ChapterReferenceResolver() { }
 
+    /**
+     * 数字引用有两组引导词，量词后缀的强制程度不同。
+     *
+     * <p><b>强引导词</b>（见/参见/详见…）后面跟数字，除了章节引用没有别的意思，所以量词
+     * 后缀可选：「见13」「参见4.5节」都算。
+     *
+     * <p><b>弱引导词</b>（按/按照/依据/根据…）在工程文档里同样高频引用章节——本项目实测
+     * 一份试验大纲里「按照12章节表12」这类写法有 376 处，是「见/参见」的 4 倍多。但「按」
+     * 后面也可能直接跟数值单位（「按5℃/min的速率」「按2h保持」），所以对弱引导词<b>强制
+     * 要求</b>章/节/条/款等量词后缀，否则会把量值误当成章号。
+     */
     private static final Pattern NUMERIC_REF = Pattern.compile(
-            // Allowed verbs (Chinese): 见/参见/参考/详见/具体见/详细见/详细参见; English: see/refer to
+            // 组 1：强引导词 + 章节号，量词后缀可选
             "(?:见|参见|参考|详见|具体见|详细见|详细参见|see|refer to)\\s*第?\\s*"
-            // Capture the chapter number, e.g. "13", "4.5", "4.5.1"
             + "([0-9]+(?:\\.[0-9]+)*)\\s*"
-            // Optional unit suffix
-            + "(?:章|节|条|款|部分|chapter|section|clause|appendix)?",
+            + "(?:章|节|条|款|部分|chapter|section|clause|appendix)?"
+            // 组 2：弱引导词 + 章节号，量词后缀必须出现
+            + "|(?:按照|按|依据|依照|根据|遵循|执行|符合)\\s*第?\\s*"
+            + "([0-9]+(?:\\.[0-9]+)*)\\s*"
+            + "(?:章节|章|节|条|款|部分|chapter|section|clause)",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -66,7 +79,9 @@ public class ChapterReferenceResolver {
         // Pass 1: numeric references (most common in 工程试验大纲 documents)
         Matcher m = NUMERIC_REF.matcher(chunkContent);
         while (m.find()) {
-            String num = m.group(1);
+            // 强引导词命中落在组 1，弱引导词落在组 2；两组互斥，取非空的那个。
+            String num = m.group(1) != null ? m.group(1) : m.group(2);
+            if (num == null) continue;
             boolean matched = addChaptersStartingWith(num, currentChapterTitle, chapters, hits);
             // Sub-section references like "见5.5节" rarely match a top-level (H1) chapter
             // title directly, since chapters are split by H1 only. Fall back to the containing
